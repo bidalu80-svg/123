@@ -42,11 +42,20 @@ struct SettingsScreen: View {
             }
 
             Section("当前状态") {
-                LabeledContent("状态", value: viewModel.statusMessage)
-                LabeledContent("当前模型", value: viewModel.config.model)
-                LabeledContent("流式模式", value: viewModel.config.streamEnabled ? "开启" : "关闭")
+                statusRow("状态", value: viewModel.statusMessage)
+                statusRow("当前模型", value: viewModel.config.model)
+                statusRow("流式模式", value: viewModel.config.streamEnabled ? "开启" : "关闭")
             }
         }
         .navigationTitle("配置")
+    }
+
+    private func statusRow(_ title: String, value: String) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text(value)
+                .foregroundStyle(.secondary)
+        }
     }
 }
