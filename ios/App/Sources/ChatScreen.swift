@@ -1,8 +1,11 @@
 import SwiftUI
+import PhotosUI
+import UIKit
 
 struct ChatScreen: View {
     @EnvironmentObject private var viewModel: ChatViewModel
     @State private var showErrorAlert = false
+    @State private var selectedPhotoItem: PhotosPickerItem?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -16,6 +19,18 @@ struct ChatScreen: View {
         .navigationBarTitleDisplayMode(.inline)
         .onChange(of: viewModel.errorMessage) { _, newValue in
             showErrorAlert = !newValue.isEmpty
+        }
+        .onChange(of: selectedPhotoItem) { _, newItem in
+            guard let newItem else { return }
+            Task {
+                if let data = try? await newItem.loadTransferable(type: Data.self) {
+                    let mimeType = newItem.supportedContentTypes.first?.preferredMIMEType ?? "image/jpeg"
+                    await MainActor.run {
+                        viewModel.setDraftImage(data: data, mimeType: mimeType)
+                        selectedPhotoItem = nil
+                    }
+                }
+            }
         }
         .alert("错误", isPresented: $showErrorAlert) {
             Button("确定") {
@@ -82,11 +97,21 @@ struct ChatScreen: View {
 
     private var composer: some View {
         VStack(spacing: 8) {
+            if let attachment = viewModel.draftImageAttachment {
+                draftImagePreview(attachment)
+            }
+
             TextField("输入消息内容…", text: $viewModel.draftMessage, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(1...6)
 
             HStack {
+                PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
+                    Label("图片", systemImage: "photo")
+                        .font(.caption)
+                }
+                .buttonStyle(.bordered)
+
                 Text("会话数：\(viewModel.messages.count)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -97,9 +122,30 @@ struct ChatScreen: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(viewModel.isSending)
+                .disabled(viewModel.isSending || (viewModel.draftMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && viewModel.draftImageAttachment == nil))
             }
         }
         .padding()
+    }
+
+    @ViewBuilder
+    private func draftImagePreview(_ attachment: ChatImageAttachment) -> some View {
+        if let data = attachment.decodedImageData, let uiImage = UIImage(data: data) {
+            HStack(spacing: 12) {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 64, height: 64)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                Text("已选择图片")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("移除") {
+                    viewModel.removeDraftImage()
+                }
+                .buttonStyle(.bordered)
+            }
+        }
     }
 }

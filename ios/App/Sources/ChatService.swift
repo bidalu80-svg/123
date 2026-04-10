@@ -1,7 +1,7 @@
 import Foundation
 
 struct ChatRequestBuilder {
-    static func makeRequest(config: ChatConfig, history: [ChatMessage], message: String) throws -> URLRequest {
+    static func makeRequest(config: ChatConfig, history: [ChatMessage], message: ChatMessage) throws -> URLRequest {
         let normalizedURL = ChatConfigStore.normalizedURL(config.apiURL)
         guard let url = URL(string: normalizedURL), !normalizedURL.isEmpty else {
             throw ChatServiceError.invalidURL
@@ -18,7 +18,7 @@ struct ChatRequestBuilder {
 
         let payload: [String: Any] = [
             "model": config.model,
-            "messages": history.map(\.apiPayload) + [["role": "user", "content": message]],
+            "messages": history.map(\.apiPayload) + [message.apiPayload],
             "stream": config.streamEnabled
         ]
 
@@ -54,7 +54,7 @@ final class ChatService {
     func sendMessage(
         config: ChatConfig,
         history: [ChatMessage],
-        message: String,
+        message: ChatMessage,
         onEvent: @escaping @Sendable (String) -> Void
     ) async throws -> String {
         let request = try ChatRequestBuilder.makeRequest(config: config, history: history, message: message)
@@ -101,7 +101,7 @@ final class ChatService {
               let choices = object["choices"] as? [[String: Any]],
               let first = choices.first,
               let messageObject = first["message"] as? [String: Any],
-              let content = messageObject["content"] as? String,
+              let content = extractContent(from: messageObject),
               !content.isEmpty else {
             throw ChatServiceError.noData
         }
@@ -112,7 +112,8 @@ final class ChatService {
 
     func testConnection(config: ChatConfig) async -> String {
         do {
-            let request = try ChatRequestBuilder.makeRequest(config: config, history: [], message: "ping")
+            let ping = ChatMessage(role: .user, content: "ping")
+            let request = try ChatRequestBuilder.makeRequest(config: config, history: [], message: ping)
             let (_, response) = try await URLSession.shared.data(for: request)
             if let httpResponse = response as? HTTPURLResponse {
                 return "接口联通成功，状态码：\(httpResponse.statusCode)"
@@ -121,5 +122,23 @@ final class ChatService {
         } catch {
             return "接口测试失败：\(error.localizedDescription)"
         }
+    }
+
+    private func extractContent(from messageObject: [String: Any]) -> String? {
+        if let content = messageObject["content"] as? String {
+            return content
+        }
+
+        if let contentItems = messageObject["content"] as? [[String: Any]] {
+            let textParts = contentItems.compactMap { item -> String? in
+                guard let type = item["type"] as? String, type == "text" else { return nil }
+                return item["text"] as? String
+            }
+            if !textParts.isEmpty {
+                return textParts.joined()
+            }
+        }
+
+        return nil
     }
 }

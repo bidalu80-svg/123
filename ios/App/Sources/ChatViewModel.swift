@@ -14,6 +14,7 @@ final class ChatViewModel: ObservableObject {
     @Published var errorMessage = ""
     @Published var statusMessage = "准备就绪"
     @Published var testLogs: [String] = []
+    @Published var draftImageAttachment: ChatImageAttachment?
 
     private let service: ChatService
 
@@ -25,16 +26,22 @@ final class ChatViewModel: ObservableObject {
 
     func sendCurrentMessage() async {
         let text = draftMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        let attachment = draftImageAttachment
+        guard !text.isEmpty || attachment != nil else { return }
 
         errorMessage = ""
         statusMessage = "正在发送请求…"
         isSending = true
 
         let historyBeforeSend = messages
-        let userMessage = ChatMessage(role: .user, content: text)
+        let userMessage = ChatMessage(
+            role: .user,
+            content: text,
+            attachments: attachment.map { [$0] } ?? []
+        )
         messages.append(userMessage)
         draftMessage = ""
+        draftImageAttachment = nil
 
         let placeholderID = UUID()
         messages.append(ChatMessage(id: placeholderID, role: .assistant, content: "", isStreaming: config.streamEnabled))
@@ -43,7 +50,7 @@ final class ChatViewModel: ObservableObject {
             let fullReply = try await service.sendMessage(
                 config: config,
                 history: historyBeforeSend,
-                message: text,
+                message: userMessage,
                 onEvent: { [weak self] delta in
                     Task { @MainActor in
                         self?.appendStreamingText(delta, to: placeholderID)
@@ -106,6 +113,14 @@ final class ChatViewModel: ObservableObject {
         draftMessage = "请回复：stream ok"
         appendLog("流式测试：已写入测试消息。")
         await sendCurrentMessage()
+    }
+
+    func setDraftImage(data: Data, mimeType: String) {
+        draftImageAttachment = ChatImageAttachment.fromImageData(data, mimeType: mimeType)
+    }
+
+    func removeDraftImage() {
+        draftImageAttachment = nil
     }
 
     private func appendStreamingText(_ text: String, to id: UUID) {
