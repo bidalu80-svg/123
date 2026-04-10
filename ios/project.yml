@@ -12,7 +12,7 @@ settings:
     CURRENT_PROJECT_VERSION: 1
     MARKETING_VERSION: 1.0.0
     SWIFT_VERSION: 5.0
-    IPHONEOS_DEPLOYMENT_TARGET: 15.0
+    IPHONEOS_DEPLOYMENT_TARGET: 17.0
     CODE_SIGN_STYLE: Manual
     CHAT_API_URL: "https://xxx/v1/chat/completions"
     CHAT_MODEL: "gpt-5.4-pro"
@@ -21,7 +21,7 @@ targets:
   ChatApp:
     type: application
     platform: iOS
-    deploymentTarget: "15.0"
+    deploymentTarget: "17.0"
     sources:
       - path: App/Sources
       - path: App/Resources
@@ -46,7 +46,7 @@ targets:
   ChatAppTests:
     type: bundle.unit-test
     platform: iOS
-    deploymentTarget: "15.0"
+    deploymentTarget: "17.0"
     sources:
       - path: Tests
     dependencies:
@@ -60,7 +60,7 @@ targets:
   ChatAppUITests:
     type: bundle.ui-testing
     platform: iOS
-    deploymentTarget: "15.0"
+    deploymentTarget: "17.0"
     sources:
       - path: UITests
     dependencies:
