@@ -79,7 +79,7 @@ struct ChatScreen: View {
                     }
 
                     ForEach(viewModel.messages) { message in
-                        MessageBubbleView(message: message)
+                        MessageBubbleView(message: message, codeThemeMode: viewModel.config.codeThemeMode)
                             .id(message.id)
                     }
                 }

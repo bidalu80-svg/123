@@ -30,6 +30,11 @@ struct SettingsScreen: View {
                     Text("浅色").tag(AppThemeMode.light)
                     Text("深色").tag(AppThemeMode.dark)
                 }
+                Picker("代码高亮", selection: $viewModel.config.codeThemeMode) {
+                    Text("跟随应用").tag(CodeThemeMode.followApp)
+                    Text("VS Dark").tag(CodeThemeMode.vscodeDark)
+                    Text("GitHub Light").tag(CodeThemeMode.githubLight)
+                }
             }
 
             Section("操作") {

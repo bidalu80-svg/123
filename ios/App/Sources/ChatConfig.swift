@@ -6,6 +6,12 @@ enum AppThemeMode: String, Codable, CaseIterable {
     case dark
 }
 
+enum CodeThemeMode: String, Codable, CaseIterable {
+    case followApp
+    case vscodeDark
+    case githubLight
+}
+
 struct ChatConfig: Codable, Equatable {
     var apiURL: String
     var apiKey: String
@@ -13,6 +19,7 @@ struct ChatConfig: Codable, Equatable {
     var timeout: Double
     var streamEnabled: Bool
     var themeMode: AppThemeMode
+    var codeThemeMode: CodeThemeMode
 
     static let `default` = ChatConfig(
         apiURL: "https://xxx/v1/chat/completions",
@@ -20,7 +27,8 @@ struct ChatConfig: Codable, Equatable {
         model: "gpt-5.4-pro",
         timeout: 30,
         streamEnabled: true,
-        themeMode: .system
+        themeMode: .system,
+        codeThemeMode: .followApp
     )
 
     init(
@@ -29,7 +37,8 @@ struct ChatConfig: Codable, Equatable {
         model: String,
         timeout: Double,
         streamEnabled: Bool,
-        themeMode: AppThemeMode = .system
+        themeMode: AppThemeMode = .system,
+        codeThemeMode: CodeThemeMode = .followApp
     ) {
         self.apiURL = apiURL
         self.apiKey = apiKey
@@ -37,6 +46,7 @@ struct ChatConfig: Codable, Equatable {
         self.timeout = timeout
         self.streamEnabled = streamEnabled
         self.themeMode = themeMode
+        self.codeThemeMode = codeThemeMode
     }
 
     init(from decoder: Decoder) throws {
@@ -47,6 +57,7 @@ struct ChatConfig: Codable, Equatable {
         timeout = try c.decode(Double.self, forKey: .timeout)
         streamEnabled = try c.decode(Bool.self, forKey: .streamEnabled)
         themeMode = try c.decodeIfPresent(AppThemeMode.self, forKey: .themeMode) ?? .system
+        codeThemeMode = try c.decodeIfPresent(CodeThemeMode.self, forKey: .codeThemeMode) ?? .followApp
     }
 }
 
@@ -68,7 +79,8 @@ enum ChatConfigStore {
             model: bundleModel,
             timeout: ChatConfig.default.timeout,
             streamEnabled: ChatConfig.default.streamEnabled,
-            themeMode: ChatConfig.default.themeMode
+            themeMode: ChatConfig.default.themeMode,
+            codeThemeMode: ChatConfig.default.codeThemeMode
         )
     }
 

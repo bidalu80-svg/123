@@ -117,9 +117,20 @@ enum CodeHighlighter {
         let type: Color
     }
 
-    static func highlighted(_ code: String, language: String?, colorScheme: ColorScheme) -> AttributedString {
+    static func highlighted(_ code: String, language: String?, colorScheme: ColorScheme, codeThemeMode: CodeThemeMode) -> AttributedString {
         var result = AttributedString(code)
-        let palette: Palette = colorScheme == .dark
+        let resolvedDarkMode: Bool = {
+            switch codeThemeMode {
+            case .vscodeDark:
+                return true
+            case .githubLight:
+                return false
+            case .followApp:
+                return colorScheme == .dark
+            }
+        }()
+
+        let palette: Palette = resolvedDarkMode
             ? Palette(
                 plain: Color(red: 0.83, green: 0.84, blue: 0.86),
                 keyword: Color(red: 0.77, green: 0.53, blue: 0.75),
