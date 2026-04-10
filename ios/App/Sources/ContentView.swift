@@ -27,5 +27,6 @@ struct ContentView: View {
             }
         }
         .tint(.blue)
+        .preferredColorScheme(viewModel.preferredColorScheme)
     }
 }

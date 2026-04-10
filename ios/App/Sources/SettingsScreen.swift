@@ -25,6 +25,11 @@ struct SettingsScreen: View {
                         .foregroundStyle(.secondary)
                 }
                 Slider(value: $viewModel.config.timeout, in: 5...120, step: 5)
+                Picker("主题", selection: $viewModel.config.themeMode) {
+                    Text("跟随系统").tag(AppThemeMode.system)
+                    Text("浅色").tag(AppThemeMode.light)
+                    Text("深色").tag(AppThemeMode.dark)
+                }
             }
 
             Section("操作") {

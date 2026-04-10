@@ -85,12 +85,14 @@ struct ChatScreen: View {
                 }
                 .padding()
             }
+            .onAppear {
+                scrollToBottom(proxy, animated: false)
+            }
             .onChange(of: viewModel.messages.count) { _, _ in
-                if let lastID = viewModel.messages.last?.id {
-                    withAnimation {
-                        proxy.scrollTo(lastID, anchor: .bottom)
-                    }
-                }
+                scrollToBottom(proxy, animated: true)
+            }
+            .onChange(of: viewModel.streamScrollTrigger) { _, _ in
+                scrollToBottom(proxy, animated: false)
             }
         }
     }
@@ -111,6 +113,14 @@ struct ChatScreen: View {
                         .font(.caption)
                 }
                 .buttonStyle(.bordered)
+
+                if viewModel.draftImageAttachment != nil {
+                    Button("移除") {
+                        viewModel.removeDraftImage()
+                    }
+                    .font(.caption)
+                    .buttonStyle(.bordered)
+                }
 
                 Text("会话数：\(viewModel.messages.count)")
                     .font(.caption)
@@ -140,11 +150,29 @@ struct ChatScreen: View {
                 Text("已选择图片")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Text(attachment.mimeType)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
                 Spacer()
                 Button("移除") {
                     viewModel.removeDraftImage()
                 }
                 .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool) {
+        guard let lastID = viewModel.messages.last?.id else { return }
+        if animated {
+            withAnimation(.easeOut(duration: 0.18)) {
+                proxy.scrollTo(lastID, anchor: .bottom)
+            }
+        } else {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                proxy.scrollTo(lastID, anchor: .bottom)
             }
         }
     }

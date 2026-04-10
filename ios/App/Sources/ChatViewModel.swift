@@ -5,23 +5,32 @@ import SwiftUI
 final class ChatViewModel: ObservableObject {
     @Published var config: ChatConfig
     @Published var draftMessage = ""
-    @Published var messages: [ChatMessage] = [] {
-        didSet {
-            ChatSessionStore.save(messages)
-        }
-    }
+    @Published var messages: [ChatMessage] = []
     @Published var isSending = false
     @Published var errorMessage = ""
     @Published var statusMessage = "准备就绪"
     @Published var testLogs: [String] = []
     @Published var draftImageAttachment: ChatImageAttachment?
+    @Published var streamScrollTrigger: Int = 0
 
     private let service: ChatService
+    private var lastStreamScrollSignal: Date = .distantPast
 
     init(service: ChatService = ChatService()) {
         self.service = service
         self.config = ChatConfigStore.load()
         self.messages = ChatSessionStore.load()
+    }
+
+    var preferredColorScheme: ColorScheme? {
+        switch config.themeMode {
+        case .system:
+            return nil
+        case .light:
+            return .light
+        case .dark:
+            return .dark
+        }
     }
 
     func sendCurrentMessage() async {
@@ -45,6 +54,8 @@ final class ChatViewModel: ObservableObject {
 
         let placeholderID = UUID()
         messages.append(ChatMessage(id: placeholderID, role: .assistant, content: "", isStreaming: config.streamEnabled))
+        persistMessages()
+        signalStreamScroll(force: true)
 
         do {
             let fullReply = try await service.sendMessage(
@@ -87,6 +98,7 @@ final class ChatViewModel: ObservableObject {
 
     func clearMessages() {
         messages.removeAll()
+        persistMessages()
         statusMessage = "会话已清空"
         appendLog("UI 测试：消息列表已清空。")
     }
@@ -127,19 +139,35 @@ final class ChatViewModel: ObservableObject {
         guard let index = messages.firstIndex(where: { $0.id == id }) else { return }
         messages[index].content += text
         messages[index].isStreaming = config.streamEnabled
+        signalStreamScroll()
     }
 
     private func finishStreamingMessage(id: UUID, finalContent: String) {
         guard let index = messages.firstIndex(where: { $0.id == id }) else { return }
         messages[index].content = finalContent
         messages[index].isStreaming = false
+        persistMessages()
+        signalStreamScroll(force: true)
     }
 
     private func removeMessage(id: UUID) {
         messages.removeAll { $0.id == id }
+        persistMessages()
     }
 
     private func appendLog(_ log: String) {
         testLogs.insert("[\(Date().formatted(date: .omitted, time: .standard))] \(log)", at: 0)
+    }
+
+    private func persistMessages() {
+        ChatSessionStore.save(messages)
+    }
+
+    private func signalStreamScroll(force: Bool = false) {
+        let now = Date()
+        if force || now.timeIntervalSince(lastStreamScrollSignal) >= 0.08 {
+            streamScrollTrigger &+= 1
+            lastStreamScrollSignal = now
+        }
     }
 }

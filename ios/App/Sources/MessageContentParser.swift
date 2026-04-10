@@ -107,9 +107,39 @@ enum MessageContentParser {
 }
 
 enum CodeHighlighter {
-    static func highlighted(_ code: String, language: String?) -> AttributedString {
+    struct Palette {
+        let plain: Color
+        let keyword: Color
+        let string: Color
+        let number: Color
+        let comment: Color
+        let function: Color
+        let type: Color
+    }
+
+    static func highlighted(_ code: String, language: String?, colorScheme: ColorScheme) -> AttributedString {
         var result = AttributedString(code)
-        result.foregroundColor = .primary
+        let palette: Palette = colorScheme == .dark
+            ? Palette(
+                plain: Color(red: 0.83, green: 0.84, blue: 0.86),
+                keyword: Color(red: 0.77, green: 0.53, blue: 0.75),
+                string: Color(red: 0.81, green: 0.57, blue: 0.47),
+                number: Color(red: 0.71, green: 0.81, blue: 0.66),
+                comment: Color(red: 0.42, green: 0.60, blue: 0.33),
+                function: Color(red: 0.86, green: 0.86, blue: 0.48),
+                type: Color(red: 0.31, green: 0.79, blue: 0.69)
+            )
+            : Palette(
+                plain: Color(red: 0.14, green: 0.16, blue: 0.18),
+                keyword: Color(red: 0.69, green: 0.00, blue: 0.86),
+                string: Color(red: 0.64, green: 0.08, blue: 0.08),
+                number: Color(red: 0.04, green: 0.53, blue: 0.34),
+                comment: Color(red: 0.42, green: 0.45, blue: 0.49),
+                function: Color(red: 0.47, green: 0.37, blue: 0.15),
+                type: Color(red: 0.15, green: 0.50, blue: 0.60)
+            )
+
+        result.foregroundColor = palette.plain
 
         let normalizedLanguage = (language ?? "").lowercased()
         let keywordSet: [String]
@@ -127,9 +157,13 @@ enum CodeHighlighter {
             keywordSet = ["if", "else", "for", "while", "return", "class", "func", "def", "const", "let", "var", "import"]
         }
 
-        applyColor(.blue, pattern: "\\b(\(keywordSet.joined(separator: "|")))\\b", to: &result)
-        applyColor(.orange, pattern: "\"(\\\\.|[^\"])*\"", to: &result)
-        applyColor(.green, pattern: "\\b\\d+(\\.\\d+)?\\b", to: &result)
+        applyColor(palette.comment, pattern: "(?m)#.*$|//.*$", to: &result)
+        applyColor(palette.comment, pattern: "(?s)/\\*.*?\\*/", to: &result)
+        applyColor(palette.string, pattern: "\"(\\\\.|[^\"])*\"|'(\\\\.|[^'])*'", to: &result)
+        applyColor(palette.number, pattern: "\\b\\d+(\\.\\d+)?\\b", to: &result)
+        applyColor(palette.keyword, pattern: "\\b(\(keywordSet.joined(separator: "|")))\\b", to: &result)
+        applyColor(palette.type, pattern: "\\b([A-Z][A-Za-z0-9_]*)\\b", to: &result)
+        applyColor(palette.function, pattern: "\\b([a-zA-Z_][A-Za-z0-9_]*)\\s*(?=\\()", to: &result)
         return result
     }
 

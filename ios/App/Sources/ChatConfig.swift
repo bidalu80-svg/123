@@ -1,19 +1,53 @@
 import Foundation
 
+enum AppThemeMode: String, Codable, CaseIterable {
+    case system
+    case light
+    case dark
+}
+
 struct ChatConfig: Codable, Equatable {
     var apiURL: String
     var apiKey: String
     var model: String
     var timeout: Double
     var streamEnabled: Bool
+    var themeMode: AppThemeMode
 
     static let `default` = ChatConfig(
         apiURL: "https://xxx/v1/chat/completions",
         apiKey: "",
         model: "gpt-5.4-pro",
         timeout: 30,
-        streamEnabled: true
+        streamEnabled: true,
+        themeMode: .system
     )
+
+    init(
+        apiURL: String,
+        apiKey: String,
+        model: String,
+        timeout: Double,
+        streamEnabled: Bool,
+        themeMode: AppThemeMode = .system
+    ) {
+        self.apiURL = apiURL
+        self.apiKey = apiKey
+        self.model = model
+        self.timeout = timeout
+        self.streamEnabled = streamEnabled
+        self.themeMode = themeMode
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        apiURL = try c.decode(String.self, forKey: .apiURL)
+        apiKey = try c.decode(String.self, forKey: .apiKey)
+        model = try c.decode(String.self, forKey: .model)
+        timeout = try c.decode(Double.self, forKey: .timeout)
+        streamEnabled = try c.decode(Bool.self, forKey: .streamEnabled)
+        themeMode = try c.decodeIfPresent(AppThemeMode.self, forKey: .themeMode) ?? .system
+    }
 }
 
 enum ChatConfigStore {
@@ -33,7 +67,8 @@ enum ChatConfigStore {
             apiKey: "",
             model: bundleModel,
             timeout: ChatConfig.default.timeout,
-            streamEnabled: ChatConfig.default.streamEnabled
+            streamEnabled: ChatConfig.default.streamEnabled,
+            themeMode: ChatConfig.default.themeMode
         )
     }
 

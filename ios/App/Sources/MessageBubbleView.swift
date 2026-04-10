@@ -3,6 +3,7 @@ import UIKit
 
 struct MessageBubbleView: View {
     let message: ChatMessage
+    @Environment(\.colorScheme) private var colorScheme
     @State private var copiedToast = false
 
     var body: some View {
@@ -101,7 +102,7 @@ struct MessageBubbleView: View {
             }
 
             ScrollView(.horizontal, showsIndicators: false) {
-                Text(CodeHighlighter.highlighted(content, language: language))
+                Text(CodeHighlighter.highlighted(content, language: language, colorScheme: colorScheme))
                     .font(.system(.footnote, design: .monospaced))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
@@ -110,7 +111,7 @@ struct MessageBubbleView: View {
         .padding(10)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.black.opacity(0.08))
+                .fill(colorScheme == .dark ? Color(red: 0.12, green: 0.12, blue: 0.12) : Color(red: 0.96, green: 0.97, blue: 0.99))
         )
         .frame(maxWidth: .infinity, alignment: alignment == .leading ? .leading : .trailing)
     }
