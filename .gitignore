@@ -1,0 +1,7 @@
+*.p12
+*.mobileprovision
+*.base64.txt
+*.plist.xml
+
+.DS_Store
+Thumbs.db
