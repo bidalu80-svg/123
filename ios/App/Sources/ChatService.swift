@@ -1,9 +1,14 @@
 import Foundation
 
+struct ChatReply: Equatable {
+    var text: String
+    var imageAttachments: [ChatImageAttachment]
+}
+
 struct ChatRequestBuilder {
     static func makeRequest(config: ChatConfig, history: [ChatMessage], message: ChatMessage) throws -> URLRequest {
-        let normalizedURL = ChatConfigStore.normalizedURL(config.apiURL)
-        guard let url = URL(string: normalizedURL), !normalizedURL.isEmpty else {
+        let completionURL = config.completionURLString
+        guard let url = URL(string: completionURL), !completionURL.isEmpty else {
             throw ChatServiceError.invalidURL
         }
 
@@ -25,6 +30,22 @@ struct ChatRequestBuilder {
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
         return request
     }
+
+    static func makeModelsRequest(config: ChatConfig) throws -> URLRequest {
+        let modelsURL = config.modelsURLString
+        guard let url = URL(string: modelsURL), !modelsURL.isEmpty else {
+            throw ChatServiceError.invalidURL
+        }
+
+        var request = URLRequest(url: url, timeoutInterval: config.timeout)
+        request.httpMethod = "GET"
+
+        let trimmedAPIKey = config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedAPIKey.isEmpty {
+            request.setValue("Bearer \(trimmedAPIKey)", forHTTPHeaderField: "Authorization")
+        }
+        return request
+    }
 }
 
 enum ChatServiceError: LocalizedError, Equatable {
@@ -32,7 +53,6 @@ enum ChatServiceError: LocalizedError, Equatable {
     case invalidResponse
     case httpError(Int)
     case noData
-    case streamFailed
 
     var errorDescription: String? {
         switch self {
@@ -44,8 +64,6 @@ enum ChatServiceError: LocalizedError, Equatable {
             return "请求失败，HTTP 状态码：\(statusCode)。"
         case .noData:
             return "服务器没有返回可用数据。"
-        case .streamFailed:
-            return "流式响应解析失败。"
         }
     }
 }
@@ -55,8 +73,8 @@ final class ChatService {
         config: ChatConfig,
         history: [ChatMessage],
         message: ChatMessage,
-        onEvent: @escaping @Sendable (String) -> Void
-    ) async throws -> String {
+        onEvent: @escaping @Sendable (StreamChunk) -> Void
+    ) async throws -> ChatReply {
         let request = try ChatRequestBuilder.makeRequest(config: config, history: history, message: message)
 
         if config.streamEnabled {
@@ -71,20 +89,31 @@ final class ChatService {
             }
 
             var fullReply = ""
+            var imageURLs = Set<String>()
+
             for try await line in bytes.lines {
+                try Task.checkCancellation()
                 guard let chunk = StreamParser.parse(line: line) else { continue }
                 if chunk.isDone { break }
-                if let delta = chunk.delta, !delta.isEmpty {
-                    fullReply += delta
-                    onEvent(delta)
+
+                if !chunk.deltaText.isEmpty {
+                    fullReply += chunk.deltaText
+                }
+                if !chunk.imageURLs.isEmpty {
+                    chunk.imageURLs.forEach { imageURLs.insert($0) }
+                }
+
+                if !chunk.deltaText.isEmpty || !chunk.imageURLs.isEmpty {
+                    onEvent(chunk)
                 }
             }
 
-            if fullReply.isEmpty {
+            let cleaned = ResponseCleaner.cleanAssistantText(fullReply)
+            let images = imageURLs.map { ChatImageAttachment(dataURL: $0, mimeType: "image/*", remoteURL: $0) }
+            if cleaned.isEmpty && images.isEmpty {
                 throw ChatServiceError.noData
             }
-
-            return fullReply
+            return ChatReply(text: cleaned, imageAttachments: images)
         }
 
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -100,14 +129,18 @@ final class ChatService {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let choices = object["choices"] as? [[String: Any]],
               let first = choices.first,
-              let messageObject = first["message"] as? [String: Any],
-              let content = extractContent(from: messageObject),
-              !content.isEmpty else {
+              let messageObject = first["message"] as? [String: Any] else {
             throw ChatServiceError.noData
         }
 
-        onEvent(content)
-        return content
+        let reply = parseAssistantMessage(messageObject)
+        if reply.text.isEmpty && reply.imageAttachments.isEmpty {
+            throw ChatServiceError.noData
+        }
+
+        let snapshotChunk = StreamChunk(rawLine: "", deltaText: reply.text, imageURLs: reply.imageAttachments.map(\.requestURLString), isDone: false)
+        onEvent(snapshotChunk)
+        return reply
     }
 
     func testConnection(config: ChatConfig) async -> String {
@@ -124,21 +157,113 @@ final class ChatService {
         }
     }
 
-    private func extractContent(from messageObject: [String: Any]) -> String? {
-        if let content = messageObject["content"] as? String {
-            return content
+    func fetchModels(config: ChatConfig) async throws -> [String] {
+        let request = try ChatRequestBuilder.makeModelsRequest(config: config)
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw ChatServiceError.invalidResponse
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw ChatServiceError.httpError(httpResponse.statusCode)
+        }
+
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rows = object["data"] as? [[String: Any]] else {
+            throw ChatServiceError.noData
+        }
+
+        let models = rows.compactMap { $0["id"] as? String }.sorted()
+        if models.isEmpty {
+            throw ChatServiceError.noData
+        }
+        return models
+    }
+
+    private func parseAssistantMessage(_ messageObject: [String: Any]) -> ChatReply {
+        var textParts: [String] = []
+        var imageAttachments: [ChatImageAttachment] = []
+
+        if let content = messageObject["content"] as? String, !content.isEmpty {
+            textParts.append(content)
         }
 
         if let contentItems = messageObject["content"] as? [[String: Any]] {
-            let textParts = contentItems.compactMap { item -> String? in
-                guard let type = item["type"] as? String, type == "text" else { return nil }
-                return item["text"] as? String
-            }
-            if !textParts.isEmpty {
-                return textParts.joined()
+            for item in contentItems {
+                let type = (item["type"] as? String)?.lowercased() ?? ""
+                if (type == "text" || type == "output_text"), let text = item["text"] as? String, !text.isEmpty {
+                    textParts.append(text)
+                }
+
+                if (type == "image_url" || type == "output_image"),
+                   let image = item["image_url"] as? [String: Any],
+                   let url = image["url"] as? String,
+                   !url.isEmpty {
+                    imageAttachments.append(ChatImageAttachment(dataURL: url, mimeType: "image/*", remoteURL: url))
+                }
             }
         }
 
-        return nil
+        if let imageArray = messageObject["images"] as? [[String: Any]] {
+            for image in imageArray {
+                if let url = image["url"] as? String, !url.isEmpty {
+                    imageAttachments.append(ChatImageAttachment(dataURL: url, mimeType: "image/*", remoteURL: url))
+                }
+            }
+        }
+
+        let rawText = textParts.joined()
+        let inlineImages = MessageContentParser.extractInlineImageURLs(from: rawText)
+            .map { ChatImageAttachment(dataURL: $0, mimeType: "image/*", remoteURL: $0) }
+        imageAttachments.append(contentsOf: inlineImages)
+
+        let deduplicatedImages = deduplicateImages(imageAttachments)
+        return ChatReply(
+            text: ResponseCleaner.cleanAssistantText(rawText),
+            imageAttachments: deduplicatedImages
+        )
+    }
+
+    private func deduplicateImages(_ attachments: [ChatImageAttachment]) -> [ChatImageAttachment] {
+        var seen = Set<String>()
+        var result: [ChatImageAttachment] = []
+        for item in attachments {
+            let key = item.requestURLString
+            if key.isEmpty || seen.contains(key) { continue }
+            seen.insert(key)
+            result.append(item)
+        }
+        return result
+    }
+}
+
+enum ResponseCleaner {
+    static func cleanAssistantText(_ raw: String) -> String {
+        var text = raw
+
+        // Remove hidden thinking blocks.
+        text = text.replacingOccurrences(
+            of: "(?is)<think>.*?</think>",
+            with: "",
+            options: .regularExpression
+        )
+
+        // Clean markdown title markers while keeping semantic content.
+        text = text.replacingOccurrences(
+            of: "(?m)^\\s{0,3}#{1,6}\\s*",
+            with: "",
+            options: .regularExpression
+        )
+
+        // Normalize bullet markers.
+        text = text.replacingOccurrences(
+            of: "(?m)^\\s*\\*\\s+",
+            with: "• ",
+            options: .regularExpression
+        )
+
+        text = text.replacingOccurrences(of: "\r\n", with: "\n")
+        text = text.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

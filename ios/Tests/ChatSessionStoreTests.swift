@@ -20,25 +20,30 @@ final class ChatSessionStoreTests: XCTestCase {
         super.tearDown()
     }
 
-    func testSaveAndLoadMessages() throws {
-        let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let source = [
-            ChatMessage(role: .user, content: "hello", createdAt: now),
-            ChatMessage(role: .assistant, content: "world", createdAt: now, isStreaming: false)
-        ]
+    func testSaveAndLoadSessions() {
+        let session = ChatSession(
+            title: "测试",
+            messages: [
+                ChatMessage(role: .user, content: "hello"),
+                ChatMessage(role: .assistant, content: "world")
+            ]
+        )
 
-        ChatSessionStore.save(source, to: defaults)
-        let loaded = ChatSessionStore.load(from: defaults)
+        ChatSessionStore.saveSessions([session], currentSessionID: session.id, to: defaults)
+        let loaded = ChatSessionStore.loadSessions(from: defaults)
+        let currentID = ChatSessionStore.loadCurrentSessionID(from: defaults)
 
-        XCTAssertEqual(loaded.count, 2)
-        XCTAssertEqual(loaded.map(\.role), [.user, .assistant])
-        XCTAssertEqual(loaded.map(\.content), ["hello", "world"])
+        XCTAssertEqual(loaded.count, 1)
+        XCTAssertEqual(loaded.first?.messages.count, 2)
+        XCTAssertEqual(currentID, session.id)
     }
 
-    func testResetClearsMessages() {
-        ChatSessionStore.save([ChatMessage(role: .user, content: "x")], to: defaults)
+    func testResetClearsSessions() {
+        let session = ChatSession(title: "x")
+        ChatSessionStore.saveSessions([session], currentSessionID: session.id, to: defaults)
         ChatSessionStore.reset(from: defaults)
 
-        XCTAssertTrue(ChatSessionStore.load(from: defaults).isEmpty)
+        XCTAssertTrue(ChatSessionStore.loadSessions(from: defaults).isEmpty)
+        XCTAssertNil(ChatSessionStore.loadCurrentSessionID(from: defaults))
     }
 }

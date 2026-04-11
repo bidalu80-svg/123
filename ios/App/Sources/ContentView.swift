@@ -28,5 +28,10 @@ struct ContentView: View {
         }
         .tint(.blue)
         .preferredColorScheme(viewModel.preferredColorScheme)
+        .overlay(alignment: .topTrailing) {
+            CornerClockBadge()
+                .padding(.top, 6)
+                .padding(.trailing, 10)
+        }
     }
 }

@@ -5,13 +5,37 @@ enum MessageSegment: Equatable {
     case text(String)
     case code(language: String?, content: String)
     case image(ChatImageAttachment)
+    case file(name: String, language: String?, content: String)
 }
 
 enum MessageContentParser {
     static func parse(_ message: ChatMessage) -> [MessageSegment] {
-        var segments = message.attachments.map { MessageSegment.image($0) }
+        var segments: [MessageSegment] = []
+
+        for image in message.imageAttachments {
+            segments.append(.image(image))
+        }
+
+        for file in message.fileAttachments {
+            segments.append(.file(name: file.fileName, language: file.codeLanguageHint, content: file.previewText))
+        }
+
         segments.append(contentsOf: parseTextContent(message.content))
-        return segments
+        return mergeAdjacentTextSegments(segments)
+    }
+
+    static func extractInlineImageURLs(from text: String) -> [String] {
+        let pattern = #"!\[[^\]]*\]\(([^)]+)\)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return []
+        }
+
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        let matches = regex.matches(in: text, range: range)
+        return matches.compactMap { match in
+            guard let urlRange = Range(match.range(at: 1), in: text) else { return nil }
+            return String(text[urlRange])
+        }
     }
 
     private static func parseTextContent(_ raw: String) -> [MessageSegment] {
@@ -27,24 +51,28 @@ enum MessageContentParser {
             }
 
             let afterFence = fenceStart.upperBound
-            guard let fenceEnd = raw[afterFence...].range(of: "```") else {
-                let remain = String(raw[fenceStart.lowerBound...])
-                if !remain.isEmpty {
-                    results.append(contentsOf: parseInlineImages(in: remain))
-                }
-                return results
+            if let fenceEnd = raw[afterFence...].range(of: "```") {
+                let block = String(raw[afterFence..<fenceEnd.lowerBound])
+                let (language, code) = parseCodeBlock(block)
+                results.append(.code(language: language, content: code))
+                cursor = fenceEnd.upperBound
+            } else {
+                // Keep unfinished code fence as stream-updating code block.
+                let block = String(raw[afterFence...])
+                let (language, code) = parseCodeBlock(block)
+                results.append(.code(language: language, content: code))
+                cursor = raw.endIndex
+                break
             }
-
-            let block = String(raw[afterFence..<fenceEnd.lowerBound])
-            let (language, code) = parseCodeBlock(block)
-            results.append(.code(language: language, content: code))
-            cursor = fenceEnd.upperBound
         }
 
-        let tail = String(raw[cursor...])
-        if !tail.isEmpty {
-            results.append(contentsOf: parseInlineImages(in: tail))
+        if cursor < raw.endIndex {
+            let tail = String(raw[cursor...])
+            if !tail.isEmpty {
+                results.append(contentsOf: parseInlineImages(in: tail))
+            }
         }
+
         return results
     }
 
@@ -103,6 +131,24 @@ enum MessageContentParser {
             results.append(.text(tail))
         }
         return results
+    }
+
+    private static func mergeAdjacentTextSegments(_ segments: [MessageSegment]) -> [MessageSegment] {
+        var merged: [MessageSegment] = []
+        for segment in segments {
+            switch segment {
+            case .text(let text):
+                if case .text(let previous)? = merged.last {
+                    merged.removeLast()
+                    merged.append(.text(previous + text))
+                } else {
+                    merged.append(.text(text))
+                }
+            default:
+                merged.append(segment)
+            }
+        }
+        return merged
     }
 }
 

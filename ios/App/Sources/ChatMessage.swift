@@ -51,6 +51,74 @@ struct ChatImageAttachment: Identifiable, Codable, Equatable {
     }
 }
 
+struct ChatFileAttachment: Identifiable, Codable, Equatable {
+    let id: UUID
+    var fileName: String
+    var mimeType: String
+    var textContent: String
+
+    init(
+        id: UUID = UUID(),
+        fileName: String,
+        mimeType: String,
+        textContent: String
+    ) {
+        self.id = id
+        self.fileName = fileName
+        self.mimeType = mimeType
+        self.textContent = textContent
+    }
+
+    var codeLanguageHint: String? {
+        let ext = (fileName as NSString).pathExtension.lowercased()
+        switch ext {
+        case "swift":
+            return "swift"
+        case "py":
+            return "python"
+        case "js":
+            return "javascript"
+        case "ts":
+            return "typescript"
+        case "java":
+            return "java"
+        case "kt":
+            return "kotlin"
+        case "json":
+            return "json"
+        case "xml":
+            return "xml"
+        case "md":
+            return "markdown"
+        case "html":
+            return "html"
+        case "css":
+            return "css"
+        case "sh":
+            return "bash"
+        case "yaml", "yml":
+            return "yaml"
+        default:
+            return nil
+        }
+    }
+
+    var previewText: String {
+        textContent.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var promptBlock: String {
+        let safeName = fileName.isEmpty ? "untitled.txt" : fileName
+        let language = codeLanguageHint ?? "text"
+        return """
+        [FILE: \(safeName)]
+        ```\(language)
+        \(previewText)
+        ```
+        """
+    }
+}
+
 struct ChatMessage: Identifiable, Codable, Equatable {
     enum Role: String, Codable, CaseIterable {
         case user
@@ -63,7 +131,8 @@ struct ChatMessage: Identifiable, Codable, Equatable {
     var content: String
     let createdAt: Date
     var isStreaming: Bool
-    var attachments: [ChatImageAttachment]
+    var imageAttachments: [ChatImageAttachment]
+    var fileAttachments: [ChatFileAttachment]
 
     init(
         id: UUID = UUID(),
@@ -71,14 +140,16 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         content: String,
         createdAt: Date = Date(),
         isStreaming: Bool = false,
-        attachments: [ChatImageAttachment] = []
+        imageAttachments: [ChatImageAttachment] = [],
+        fileAttachments: [ChatFileAttachment] = []
     ) {
         self.id = id
         self.role = role
         self.content = content
         self.createdAt = createdAt
         self.isStreaming = isStreaming
-        self.attachments = attachments
+        self.imageAttachments = imageAttachments
+        self.fileAttachments = fileAttachments
     }
 
     init(from decoder: Decoder) throws {
@@ -88,7 +159,27 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         content = try container.decode(String.self, forKey: .content)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         isStreaming = try container.decodeIfPresent(Bool.self, forKey: .isStreaming) ?? false
-        attachments = try container.decodeIfPresent([ChatImageAttachment].self, forKey: .attachments) ?? []
+
+        if let images = try container.decodeIfPresent([ChatImageAttachment].self, forKey: .imageAttachments) {
+            imageAttachments = images
+        } else if let legacy = try container.decodeIfPresent([ChatImageAttachment].self, forKey: .attachments) {
+            imageAttachments = legacy
+        } else {
+            imageAttachments = []
+        }
+
+        fileAttachments = try container.decodeIfPresent([ChatFileAttachment].self, forKey: .fileAttachments) ?? []
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case role
+        case content
+        case createdAt
+        case isStreaming
+        case imageAttachments
+        case fileAttachments
+        case attachments
     }
 
     var apiPayload: [String: Any] {
@@ -105,15 +196,21 @@ struct ChatMessage: Identifiable, Codable, Equatable {
             parts.append(trimmed)
         }
 
-        let urls = attachments.map(\.requestURLString).filter { !$0.isEmpty }
-        if !urls.isEmpty {
-            parts.append(urls.joined(separator: "\n"))
+        let imageURLs = imageAttachments.map(\.requestURLString).filter { !$0.isEmpty }
+        if !imageURLs.isEmpty {
+            parts.append(imageURLs.joined(separator: "\n"))
         }
+
+        if !fileAttachments.isEmpty {
+            let fileBlocks = fileAttachments.map { $0.promptBlock }
+            parts.append(fileBlocks.joined(separator: "\n\n"))
+        }
+
         return parts.joined(separator: "\n")
     }
 
     private var apiContent: Any {
-        if attachments.isEmpty {
+        if imageAttachments.isEmpty && fileAttachments.isEmpty {
             return content
         }
 
@@ -126,7 +223,14 @@ struct ChatMessage: Identifiable, Codable, Equatable {
             ])
         }
 
-        for attachment in attachments {
+        for file in fileAttachments {
+            segments.append([
+                "type": "text",
+                "text": file.promptBlock
+            ])
+        }
+
+        for attachment in imageAttachments {
             segments.append([
                 "type": "image_url",
                 "image_url": [
@@ -134,6 +238,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
                 ]
             ])
         }
+
         return segments
     }
 }

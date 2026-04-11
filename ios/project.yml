@@ -6,7 +6,7 @@ configs:
   Release: release
 settings:
   base:
-    PRODUCT_NAME: ChatApp
+    PRODUCT_NAME: IEXA
     PRODUCT_BUNDLE_IDENTIFIER: com.chatapp.ios
     DEVELOPMENT_TEAM: ""
     CURRENT_PROJECT_VERSION: 1
@@ -14,7 +14,7 @@ settings:
     SWIFT_VERSION: 5.0
     IPHONEOS_DEPLOYMENT_TARGET: 17.0
     CODE_SIGN_STYLE: Manual
-    CHAT_API_URL: "https://xxx/v1/chat/completions"
+    CHAT_API_URL: "https://xxx.com"
     CHAT_MODEL: "gpt-5.4-pro"
     GENERATE_INFOPLIST_FILE: NO
 targets:
@@ -27,7 +27,7 @@ targets:
       - path: App/Resources
     settings:
       base:
-        PRODUCT_NAME: ChatApp
+        PRODUCT_NAME: IEXA
         PRODUCT_MODULE_NAME: ChatApp
         PRODUCT_BUNDLE_IDENTIFIER: com.chatapp.ios
         INFOPLIST_FILE: App/Resources/Info.plist

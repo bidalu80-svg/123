@@ -6,13 +6,13 @@ final class StreamParserTests: XCTestCase {
         let line = "data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}"
         let chunk = StreamParser.parse(line: line)
 
-        XCTAssertEqual(chunk?.delta, "Hi")
+        XCTAssertEqual(chunk?.deltaText, "Hi")
         XCTAssertEqual(chunk?.isDone, false)
     }
 
     func testParseDoneChunk() {
         let chunk = StreamParser.parse(line: "data: [DONE]")
         XCTAssertEqual(chunk?.isDone, true)
-        XCTAssertNil(chunk?.delta)
+        XCTAssertEqual(chunk?.deltaText, "")
     }
 }

@@ -3,7 +3,7 @@ import XCTest
 
 final class ChatServiceTests: XCTestCase {
     func testBuildRequestIncludesModelMessagesAndStreamFlag() throws {
-        let config = ChatConfig(apiURL: "https://example.com/v1/chat/completions", apiKey: "token-123", model: "gpt-test", timeout: 30, streamEnabled: true)
+        let config = ChatConfig(apiURL: "https://example.com", apiKey: "token-123", model: "gpt-test", timeout: 30, streamEnabled: true)
         let history = [ChatMessage(role: .assistant, content: "history")]
         let requestMessage = ChatMessage(role: .user, content: "hello")
 
@@ -13,6 +13,7 @@ final class ChatServiceTests: XCTestCase {
         let messages = try XCTUnwrap(json["messages"] as? [[String: Any]])
         let last = try XCTUnwrap(messages.last)
 
+        XCTAssertEqual(request.url?.absoluteString, "https://example.com/v1/chat/completions")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer token-123")
         XCTAssertEqual(json["model"] as? String, "gpt-test")
         XCTAssertEqual(json["stream"] as? Bool, true)
@@ -21,9 +22,9 @@ final class ChatServiceTests: XCTestCase {
     }
 
     func testBuildRequestSupportsImageAttachment() throws {
-        let config = ChatConfig(apiURL: "https://example.com/v1/chat/completions", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: false)
+        let config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: false)
         let attachment = ChatImageAttachment(dataURL: "data:image/png;base64,abcd", mimeType: "image/png")
-        let requestMessage = ChatMessage(role: .user, content: "describe this", attachments: [attachment])
+        let requestMessage = ChatMessage(role: .user, content: "describe this", imageAttachments: [attachment])
 
         let request = try ChatRequestBuilder.makeRequest(config: config, history: [], message: requestMessage)
         let payload = try XCTUnwrap(request.httpBody)

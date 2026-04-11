@@ -7,31 +7,27 @@ struct TestCenterScreen: View {
         List {
             Section("快速测试") {
                 Button("接口测试") {
-                    Task {
-                        await viewModel.runConnectionTest()
-                    }
+                    Task { await viewModel.runConnectionTest() }
+                }
+                Button("拉取模型测试") {
+                    Task { await viewModel.refreshAvailableModels() }
                 }
                 Button("流式测试") {
-                    Task {
-                        await viewModel.runStreamSmokeTest()
-                    }
-                }
-                Button("配置测试") {
-                    viewModel.saveConfig()
+                    Task { await viewModel.runStreamSmokeTest() }
                 }
                 Button("UI 测试（填充示例）") {
                     viewModel.loadDemoContent()
                 }
-                Button("UI 测试（清空会话）") {
-                    viewModel.clearMessages()
+                Button("UI 测试（清空当前会话）") {
+                    viewModel.clearCurrentSessionMessages()
                 }
             }
 
             Section("测试说明") {
-                Text("接口测试：验证 API 地址、鉴权和服务器响应状态码。")
-                Text("流式测试：发送一条测试消息，验证 data: 分片和 [DONE] 结束处理。")
-                Text("配置测试：确认 API URL、Key、Model 已保存且重启后可恢复。")
-                Text("UI 测试：验证聊天页输入、按钮、滚动、清空等交互。")
+                Text("接口测试：验证站点、鉴权和服务器状态码。")
+                Text("拉取模型测试：从 /v1/models 获取可用模型，并可在配置页选择。")
+                Text("流式测试：验证 data: 分片、停止能力、代码块流式渲染。")
+                Text("UI 测试：验证会话侧栏、附件发送、复制和清空交互。")
             }
 
             Section("测试日志") {
