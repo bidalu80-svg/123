@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UIKit
 
 @MainActor
 final class ChatViewModel: ObservableObject {
@@ -32,6 +33,7 @@ final class ChatViewModel: ObservableObject {
     private var autoSaveEnabled = false
     private var lastStreamScrollSignal: Date = .distantPast
     private var inflightSendTask: Task<ChatReply, Error>?
+    private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
 
     init(service: ChatService = ChatService()) {
         self.service = service
@@ -116,6 +118,7 @@ final class ChatViewModel: ObservableObject {
         appendMessageToCurrentSession(placeholder)
         persistSessions()
         signalStreamScroll(force: true)
+        beginBackgroundSendTask()
 
         let task = Task<ChatReply, Error> { [service, config] in
             try await service.sendMessage(
@@ -130,6 +133,7 @@ final class ChatViewModel: ObservableObject {
             )
         }
         inflightSendTask = task
+        defer { endBackgroundSendTask() }
 
         do {
             let reply = try await task.value
@@ -139,10 +143,14 @@ final class ChatViewModel: ObservableObject {
         } catch is CancellationError {
             finishCancellation(id: placeholderID)
         } catch {
-            removeMessage(id: placeholderID)
-            errorMessage = error.localizedDescription
-            statusMessage = "发送失败"
-            appendLog("聊天测试失败：\(error.localizedDescription)")
+            if hasRenderableContent(for: placeholderID) {
+                finishInterruption(id: placeholderID, error: error)
+            } else {
+                removeMessage(id: placeholderID)
+                errorMessage = error.localizedDescription
+                statusMessage = "发送失败"
+                appendLog("聊天测试失败：\(error.localizedDescription)")
+            }
         }
 
         inflightSendTask = nil
@@ -153,6 +161,7 @@ final class ChatViewModel: ObservableObject {
     func stopGenerating() {
         inflightSendTask?.cancel()
         inflightSendTask = nil
+        endBackgroundSendTask()
     }
 
     func saveConfig() {
@@ -348,6 +357,18 @@ final class ChatViewModel: ObservableObject {
         appendLog("聊天测试：用户已停止本次生成。")
     }
 
+    private func finishInterruption(id: UUID, error: Error) {
+        guard let index = currentSessionIndex,
+              let msgIndex = sessions[index].messages.firstIndex(where: { $0.id == id }) else { return }
+
+        sessions[index].messages[msgIndex].isStreaming = false
+        sessions[index].updatedAt = Date()
+        sessions[index].title = buildSessionTitle(from: sessions[index])
+        messages = sessions[index].messages
+        statusMessage = "连接中断，已保留已生成内容"
+        appendLog("聊天中断：\(error.localizedDescription)")
+    }
+
     private func appendMessageToCurrentSession(_ message: ChatMessage) {
         guard let index = currentSessionIndex else { return }
         sessions[index].messages.append(message)
@@ -413,6 +434,35 @@ final class ChatViewModel: ObservableObject {
             result.append(image)
         }
         return result
+    }
+
+    private func hasRenderableContent(for id: UUID) -> Bool {
+        guard let index = currentSessionIndex,
+              let msgIndex = sessions[index].messages.firstIndex(where: { $0.id == id }) else { return false }
+
+        let message = sessions[index].messages[msgIndex]
+        let text = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !text.isEmpty || !message.imageAttachments.isEmpty
+    }
+
+    private func beginBackgroundSendTask() {
+        guard backgroundTaskID == .invalid else { return }
+        backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "chat-send-stream") { [weak self] in
+            guard let self else { return }
+            Task { @MainActor in
+                self.inflightSendTask?.cancel()
+                self.inflightSendTask = nil
+                self.statusMessage = "后台时间到，已停止生成"
+                self.appendLog("聊天测试：后台可运行时间已耗尽，任务已取消。")
+                self.endBackgroundSendTask()
+            }
+        }
+    }
+
+    private func endBackgroundSendTask() {
+        guard backgroundTaskID != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(backgroundTaskID)
+        backgroundTaskID = .invalid
     }
 
     private func normalizedConfigForSave(_ input: ChatConfig) -> ChatConfig {
