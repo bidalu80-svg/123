@@ -25,6 +25,8 @@ struct SelectableLinkTextView: UIViewRepresentable {
             .foregroundColor: UIColor.systemBlue,
             .underlineStyle: NSUnderlineStyle.single.rawValue
         ]
+        // Let the parent SwiftUI ScrollView own vertical scrolling.
+        view.panGestureRecognizer.isEnabled = false
         return view
     }
 

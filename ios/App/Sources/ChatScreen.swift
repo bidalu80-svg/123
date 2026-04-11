@@ -6,8 +6,14 @@ import UIKit
 struct ChatScreen: View {
     @EnvironmentObject private var viewModel: ChatViewModel
 
-    private let sidebarWidth: CGFloat = 280
+    private let sidebarWidth: CGFloat = 286
     private let edgeDragActivationWidth: CGFloat = 28
+    private let starterPrompts: [(title: String, subtitle: String)] = [
+        ("创作一幅插图", "为烘焙店"),
+        ("告诉我一个冷知识", "关于罗马帝国"),
+        ("提出建议", "根据我的数据"),
+        ("设计一款编程游戏", "以有趣的方式教授基础知识")
+    ]
 
     @State private var showErrorAlert = false
     @State private var selectedPhotoItem: PhotosPickerItem?
@@ -16,31 +22,51 @@ struct ChatScreen: View {
     @State private var isSidebarOpen = false
     @State private var showSettingsSheet = false
     @State private var showTestSheet = false
+    @State private var isPinnedToBottom = true
     @GestureState private var sidebarDragTranslation: CGFloat = 0
 
     var body: some View {
         ZStack(alignment: .leading) {
+            sessionSidebar
+
             mainContent
+                .overlay {
+                    if sidebarRevealWidth > 0.01 {
+                        Color.black.opacity(0.16 * sidebarRevealProgress)
+                            .ignoresSafeArea()
+                            .allowsHitTesting(false)
+                    }
+                }
+                .clipShape(
+                    RoundedRectangle(cornerRadius: 40 * sidebarRevealProgress, style: .continuous)
+                )
+                .shadow(
+                    color: Color.black.opacity(0.18 * sidebarRevealProgress),
+                    radius: 24 * sidebarRevealProgress,
+                    x: 0,
+                    y: 0
+                )
                 .offset(x: sidebarRevealWidth)
-                .disabled(sidebarRevealWidth > 0.01)
                 .animation(.interactiveSpring(response: 0.24, dampingFraction: 0.9), value: isSidebarOpen)
 
             if sidebarRevealWidth > 0.01 {
-                Color.black.opacity(0.22 * (sidebarRevealWidth / sidebarWidth))
-                    .ignoresSafeArea()
-                    .onTapGesture {
-                        withAnimation(.interactiveSpring(response: 0.24, dampingFraction: 0.9)) {
-                            isSidebarOpen = false
+                HStack(spacing: 0) {
+                    Color.clear
+                        .frame(width: sidebarWidth)
+                        .allowsHitTesting(false)
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            withAnimation(.interactiveSpring(response: 0.24, dampingFraction: 0.9)) {
+                                isSidebarOpen = false
+                            }
                         }
-                    }
+                }
+                .ignoresSafeArea()
             }
-
-            sessionSidebar
-                .offset(x: sidebarRevealWidth - sidebarWidth)
-                .animation(.interactiveSpring(response: 0.24, dampingFraction: 0.9), value: isSidebarOpen)
         }
         .navigationBarHidden(true)
-        .highPriorityGesture(sidebarDragGesture)
+        .simultaneousGesture(sidebarDragGesture)
         .onChange(of: viewModel.errorMessage) { _, newValue in
             showErrorAlert = !newValue.isEmpty
         }
@@ -116,34 +142,41 @@ struct ChatScreen: View {
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             Button {
                 isSidebarOpen.toggle()
             } label: {
                 Image(systemName: "line.3.horizontal")
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.system(size: 22, weight: .regular))
                     .foregroundStyle(.primary)
-                    .frame(width: 36, height: 36)
+                    .frame(width: 38, height: 38)
             }
             .buttonStyle(.plain)
 
-            VStack(alignment: .leading, spacing: 1) {
-                Text("IEXA")
-                    .font(.title3.weight(.semibold))
+            Button {
+                // Placeholder for future subscription flow.
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text("升级")
+                        .font(.system(size: 18, weight: .semibold))
+                }
+                .foregroundStyle(Color.blue)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 10)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(Color.blue.opacity(0.08))
+                )
             }
+            .buttonStyle(.plain)
 
             Spacer()
-            Button {
-                viewModel.createNewSession()
-            } label: {
-                Image(systemName: "square.and.pencil")
-                    .font(.system(size: 21, weight: .regular))
-                    .foregroundStyle(.primary)
-                    .frame(width: 36, height: 36)
-            }
-            .buttonStyle(.plain)
-
             Menu {
+                Button("新建会话", systemImage: "square.and.pencil") {
+                    viewModel.createNewSession()
+                }
                 Button("配置", systemImage: "gearshape") {
                     showSettingsSheet = true
                 }
@@ -162,10 +195,10 @@ struct ChatScreen: View {
                 }
                 .disabled(!viewModel.isSending)
             } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 21, weight: .regular))
+                Image(systemName: "circle.dashed")
+                    .font(.system(size: 26, weight: .regular))
                     .foregroundStyle(.primary)
-                    .frame(width: 36, height: 36)
+                    .frame(width: 38, height: 38)
             }
             .buttonStyle(.plain)
         }
@@ -177,20 +210,12 @@ struct ChatScreen: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 16) {
-                    if viewModel.messages.isEmpty {
-                        ContentUnavailableView(
-                            "今天想聊点什么？",
-                            systemImage: "message",
-                            description: Text("你可以发送文本、图片或代码文件。")
-                        )
-                        .padding(.top, 96)
-                    }
-
                     ForEach(viewModel.messages) { message in
                         MessageBubbleView(message: message, codeThemeMode: viewModel.config.codeThemeMode)
                             .id(message.id)
                     }
                 }
+                .scrollTargetLayout()
                 .padding(.horizontal, 12)
                 .padding(.top, 14)
                 .padding(.bottom, 18)
@@ -201,10 +226,15 @@ struct ChatScreen: View {
                 scrollToBottom(proxy, animated: false)
             }
             .onChange(of: viewModel.messages.count) { _, _ in
-                scrollToBottom(proxy, animated: true)
+                guard let lastMessage = viewModel.messages.last else { return }
+                if isPinnedToBottom || lastMessage.role == .user {
+                    scrollToBottom(proxy, animated: true)
+                }
             }
             .onChange(of: viewModel.streamScrollTrigger) { _, _ in
-                scrollToBottom(proxy, animated: false)
+                if isPinnedToBottom {
+                    scrollToBottom(proxy, animated: false)
+                }
             }
         }
     }
@@ -217,6 +247,10 @@ struct ChatScreen: View {
 
             if let file = viewModel.draftFileAttachment {
                 draftFilePreview(file)
+            }
+
+            if viewModel.messages.isEmpty {
+                starterPromptStrip
             }
 
             HStack(alignment: .bottom, spacing: 10) {
@@ -233,9 +267,9 @@ struct ChatScreen: View {
                     }
                 } label: {
                     Image(systemName: "plus")
-                        .font(.system(size: 22, weight: .regular))
+                        .font(.system(size: 24, weight: .regular))
                         .foregroundStyle(.secondary)
-                        .frame(width: 34, height: 34)
+                        .frame(width: 46, height: 46)
                         .background(Circle().fill(Color(.systemGray6)))
                 }
                 .buttonStyle(.plain)
@@ -247,6 +281,17 @@ struct ChatScreen: View {
                         guard viewModel.canSend else { return }
                         Task { await viewModel.sendCurrentMessage() }
                     }
+                    .font(.system(size: 19))
+
+                Button {
+                    // Placeholder for voice input.
+                } label: {
+                    Image(systemName: "mic")
+                        .font(.system(size: 26, weight: .regular))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 36, height: 36)
+                }
+                .buttonStyle(.plain)
 
                 Button {
                     if viewModel.isSending {
@@ -265,13 +310,15 @@ struct ChatScreen: View {
                         }
                     }
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(viewModel.canSend || viewModel.isSending ? Color.white : Color.secondary)
-                    .frame(width: 34, height: 34)
-                    .background(Circle().fill(viewModel.canSend || viewModel.isSending ? Color.black : Color(.systemGray6)))
+                    .foregroundStyle(Color.white)
+                    .frame(width: 46, height: 46)
+                    .background(Circle().fill(Color.black))
                 }
                 .disabled(!viewModel.canSend && !viewModel.isSending)
             }
-            .padding(10)
+            .padding(.vertical, 8)
+            .padding(.leading, 10)
+            .padding(.trailing, 8)
             .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         }
         .padding(.horizontal, 12)
@@ -283,21 +330,61 @@ struct ChatScreen: View {
         }
     }
 
+    private var starterPromptStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 12) {
+                ForEach(Array(starterPrompts.enumerated()), id: \.offset) { _, prompt in
+                    Button {
+                        viewModel.draftMessage = "\(prompt.title)\n\(prompt.subtitle)"
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(prompt.title)
+                                .font(.system(size: 22, weight: .semibold))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                            Text(prompt.subtitle)
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(Color(.systemGray6))
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 2)
+            .padding(.bottom, 2)
+        }
+    }
+
     private var sessionSidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text("聊天记录")
-                    .font(.headline)
+                    .font(.system(size: 40, weight: .bold))
                 Spacer()
                 Button {
                     viewModel.createNewSession()
                     isSidebarOpen = false
                 } label: {
                     Image(systemName: "square.and.pencil")
+                        .font(.system(size: 24, weight: .regular))
+                        .frame(width: 72, height: 72)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(Color(.systemGray5))
+                        )
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.plain)
             }
-            .padding()
+            .padding(.horizontal, 20)
+            .padding(.top, 12)
+            .padding(.bottom, 16)
 
             ScrollView {
                 LazyVStack(spacing: 8) {
@@ -319,7 +406,7 @@ struct ChatScreen: View {
             }
             .padding()
         }
-        .frame(width: 250)
+        .frame(width: sidebarWidth)
         .frame(maxHeight: .infinity)
         .background(Color(.systemBackground))
         .overlay(
@@ -335,9 +422,18 @@ struct ChatScreen: View {
         return min(max(base + sidebarDragTranslation, 0), sidebarWidth)
     }
 
+    private var sidebarRevealProgress: CGFloat {
+        guard sidebarWidth > 0 else { return 0 }
+        return min(max(sidebarRevealWidth / sidebarWidth, 0), 1)
+    }
+
     private var sidebarDragGesture: some Gesture {
         DragGesture(minimumDistance: 8, coordinateSpace: .local)
             .updating($sidebarDragTranslation) { value, state, _ in
+                guard abs(value.translation.width) > abs(value.translation.height) * 1.35 else {
+                    return
+                }
+
                 if !isSidebarOpen && value.startLocation.x > edgeDragActivationWidth {
                     return
                 }
@@ -349,6 +445,10 @@ struct ChatScreen: View {
                 }
             }
             .onEnded { value in
+                guard abs(value.translation.width) > abs(value.translation.height) * 1.35 else {
+                    return
+                }
+
                 if !isSidebarOpen && value.startLocation.x > edgeDragActivationWidth {
                     return
                 }
