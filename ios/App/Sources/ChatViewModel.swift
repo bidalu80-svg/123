@@ -87,6 +87,12 @@ final class ChatViewModel: ObservableObject {
         errorMessage = ""
         statusMessage = "正在发送请求…"
         isSending = true
+        defer {
+            inflightSendTask = nil
+            isSending = false
+            persistSessions()
+            endBackgroundSendTask()
+        }
 
         let userMessage = ChatMessage(
             role: .user,
@@ -133,7 +139,6 @@ final class ChatViewModel: ObservableObject {
             )
         }
         inflightSendTask = task
-        defer { endBackgroundSendTask() }
 
         do {
             let reply = try await task.value
@@ -147,15 +152,12 @@ final class ChatViewModel: ObservableObject {
                 finishInterruption(id: placeholderID, error: error)
             } else {
                 removeMessage(id: placeholderID)
+                removeMessage(id: userMessage.id)
                 errorMessage = error.localizedDescription
                 statusMessage = "发送失败"
                 appendLog("聊天测试失败：\(error.localizedDescription)")
             }
         }
-
-        inflightSendTask = nil
-        isSending = false
-        persistSessions()
     }
 
     func stopGenerating() {

@@ -8,7 +8,7 @@ struct MessageBubbleView: View {
     @State private var copiedToast = false
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: 9) {
             if message.role == .assistant {
                 avatar
             } else {
@@ -26,11 +26,14 @@ struct MessageBubbleView: View {
     }
 
     private var avatar: some View {
-        Image(systemName: "sparkle")
-            .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(Color.white)
-            .frame(width: 30, height: 30)
-            .background(Circle().fill(Color.accentColor))
+        ZStack {
+            Circle()
+                .fill(Color.black)
+            Image(systemName: "sparkles")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.white)
+        }
+        .frame(width: 28, height: 28)
     }
 
     private var bubbleBody: some View {
@@ -72,11 +75,11 @@ struct MessageBubbleView: View {
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(message.role == .assistant ? Color(.secondarySystemBackground) : userBubbleColor)
+                .fill(message.role == .assistant ? assistantBubbleColor : userBubbleColor)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.black.opacity(colorScheme == .dark ? 0.25 : 0.08), lineWidth: 1)
+                .stroke(Color.black.opacity(colorScheme == .dark ? 0.28 : 0.07), lineWidth: 0.8)
         )
         .frame(maxWidth: 560, alignment: message.role == .assistant ? .leading : .trailing)
     }
@@ -212,6 +215,10 @@ struct MessageBubbleView: View {
     }
 
     private var userBubbleColor: Color {
-        colorScheme == .dark ? Color(red: 0.15, green: 0.25, blue: 0.18) : Color(red: 0.86, green: 0.96, blue: 0.88)
+        colorScheme == .dark ? Color(red: 0.16, green: 0.17, blue: 0.19) : Color(red: 0.94, green: 0.95, blue: 0.97)
+    }
+
+    private var assistantBubbleColor: Color {
+        colorScheme == .dark ? Color(red: 0.10, green: 0.11, blue: 0.12) : Color(.systemBackground)
     }
 }

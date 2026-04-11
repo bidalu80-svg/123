@@ -79,17 +79,31 @@ struct ChatScreen: View {
     }
 
     private var mainContent: some View {
-        ZStack(alignment: .top) {
-            messageList
-                .safeAreaInset(edge: .bottom) {
-                    composer
-                }
-
-            header
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
-        }
-        .background(Color(.systemGroupedBackground))
+        messageList
+            .safeAreaInset(edge: .top, spacing: 0) {
+                header
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
+                    .padding(.bottom, 6)
+                    .background(.ultraThinMaterial)
+                    .overlay(alignment: .bottom) {
+                        Divider().opacity(0.15)
+                    }
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                composer
+            }
+            .background(
+                LinearGradient(
+                    colors: [
+                        Color(.systemBackground),
+                        Color(.secondarySystemBackground).opacity(0.7)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+            )
         .gesture(
             DragGesture(minimumDistance: 20)
                 .onEnded { value in
@@ -110,8 +124,8 @@ struct ChatScreen: View {
                 Image(systemName: "line.3.horizontal")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.primary)
-                    .frame(width: 32, height: 32)
-                    .background(Circle().fill(Color(.tertiarySystemBackground)))
+                    .frame(width: 34, height: 34)
+                    .background(Circle().fill(Color(.secondarySystemBackground)))
             }
 
             VStack(alignment: .leading, spacing: 1) {
@@ -142,16 +156,16 @@ struct ChatScreen: View {
                     .rotationEffect(.degrees(90))
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(.primary)
-                    .frame(width: 32, height: 32)
-                    .background(Circle().fill(Color(.tertiarySystemBackground)))
+                    .frame(width: 34, height: 34)
+                    .background(Circle().fill(Color(.secondarySystemBackground)))
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .padding(.vertical, 8)
+        .background(Color(.systemBackground).opacity(0.92), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.black.opacity(0.05), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(Color.black.opacity(0.06), lineWidth: 1)
         )
     }
 
@@ -165,7 +179,7 @@ struct ChatScreen: View {
                             systemImage: "bubble.left.and.bubble.right",
                             description: Text("右滑可查看历史会话，点击 + 可发送图片或文本/代码文件。")
                         )
-                        .padding(.top, 120)
+                        .padding(.top, 64)
                     }
 
                     ForEach(viewModel.messages) { message in
@@ -174,9 +188,10 @@ struct ChatScreen: View {
                     }
                 }
                 .padding(.horizontal, 12)
-                .padding(.top, 74)
+                .padding(.top, 12)
                 .padding(.bottom, 14)
             }
+            .scrollIndicators(.hidden)
             .scrollDismissesKeyboard(.interactively)
             .onAppear {
                 scrollToBottom(proxy, animated: false)
@@ -217,7 +232,7 @@ struct ChatScreen: View {
                         .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(.secondary)
                         .frame(width: 32, height: 32)
-                        .background(Circle().fill(Color(.tertiarySystemBackground)))
+                        .background(Circle().fill(Color(.quaternarySystemFill)))
                 }
 
                 TextField("给 IEXA 发送消息", text: $viewModel.draftMessage, axis: .vertical)
@@ -241,13 +256,13 @@ struct ChatScreen: View {
                         .frame(width: 32, height: 32)
                         .background(
                             Circle()
-                                .fill(viewModel.canSend || viewModel.isSending ? Color.accentColor : Color(.quaternarySystemFill))
+                                .fill(viewModel.canSend || viewModel.isSending ? Color.black : Color(.quaternarySystemFill))
                         )
                 }
                 .disabled(!viewModel.canSend && !viewModel.isSending)
             }
             .padding(10)
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
 
             HStack {
                 Text(viewModel.statusMessage)
@@ -263,6 +278,9 @@ struct ChatScreen: View {
         .padding(.top, 8)
         .padding(.bottom, 10)
         .background(.ultraThinMaterial)
+        .overlay(alignment: .top) {
+            Divider().opacity(0.15)
+        }
     }
 
     private var sessionSidebar: some View {
