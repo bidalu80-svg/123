@@ -79,14 +79,17 @@ struct ChatScreen: View {
     }
 
     private var mainContent: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
+        ZStack(alignment: .top) {
             messageList
-            Divider()
-            composer
+                .safeAreaInset(edge: .bottom) {
+                    composer
+                }
+
+            header
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
         }
-        .background(Color(.systemBackground))
+        .background(Color(.systemGroupedBackground))
         .gesture(
             DragGesture(minimumDistance: 20)
                 .onEnded { value in
@@ -107,18 +110,14 @@ struct ChatScreen: View {
                 Image(systemName: "line.3.horizontal")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.primary)
-                    .frame(width: 28, height: 28)
-                    .background(Circle().fill(Color(.secondarySystemBackground)))
+                    .frame(width: 32, height: 32)
+                    .background(Circle().fill(Color(.tertiarySystemBackground)))
             }
 
             VStack(alignment: .leading, spacing: 1) {
                 Text("IEXA")
-                    .font(.headline.weight(.semibold))
+                    .font(.subheadline.weight(.semibold))
                 Text(viewModel.config.model)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Text(viewModel.config.siteDisplayName)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -143,12 +142,17 @@ struct ChatScreen: View {
                     .rotationEffect(.degrees(90))
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(.primary)
-                    .frame(width: 28, height: 28)
-                    .background(Circle().fill(Color(.secondarySystemBackground)))
+                    .frame(width: 32, height: 32)
+                    .background(Circle().fill(Color(.tertiarySystemBackground)))
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.black.opacity(0.05), lineWidth: 1)
+        )
     }
 
     private var messageList: some View {
@@ -161,7 +165,7 @@ struct ChatScreen: View {
                             systemImage: "bubble.left.and.bubble.right",
                             description: Text("右滑可查看历史会话，点击 + 可发送图片或文本/代码文件。")
                         )
-                        .padding(.top, 90)
+                        .padding(.top, 120)
                     }
 
                     ForEach(viewModel.messages) { message in
@@ -169,8 +173,11 @@ struct ChatScreen: View {
                             .id(message.id)
                     }
                 }
-                .padding(12)
+                .padding(.horizontal, 12)
+                .padding(.top, 74)
+                .padding(.bottom, 14)
             }
+            .scrollDismissesKeyboard(.interactively)
             .onAppear {
                 scrollToBottom(proxy, animated: false)
             }
@@ -208,20 +215,39 @@ struct ChatScreen: View {
                 } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 16, weight: .bold))
-                        .frame(width: 34, height: 34)
-                        .background(Circle().fill(Color(.secondarySystemBackground)))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 32, height: 32)
+                        .background(Circle().fill(Color(.tertiarySystemBackground)))
                 }
 
                 TextField("给 IEXA 发送消息", text: $viewModel.draftMessage, axis: .vertical)
-                    .lineLimit(1...8)
-                    .textFieldStyle(.roundedBorder)
+                    .lineLimit(1...6)
+                    .submitLabel(.send)
+                    .onSubmit {
+                        guard viewModel.canSend else { return }
+                        Task { await viewModel.sendCurrentMessage() }
+                    }
 
-                Button(viewModel.isSending ? "发送中" : "发送") {
-                    Task { await viewModel.sendCurrentMessage() }
+                Button {
+                    if viewModel.isSending {
+                        viewModel.stopGenerating()
+                    } else {
+                        Task { await viewModel.sendCurrentMessage() }
+                    }
+                } label: {
+                    Image(systemName: viewModel.isSending ? "stop.fill" : "arrow.up")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(viewModel.canSend || viewModel.isSending ? Color.white : Color.secondary)
+                        .frame(width: 32, height: 32)
+                        .background(
+                            Circle()
+                                .fill(viewModel.canSend || viewModel.isSending ? Color.accentColor : Color(.quaternarySystemFill))
+                        )
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(!viewModel.canSend)
+                .disabled(!viewModel.canSend && !viewModel.isSending)
             }
+            .padding(10)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
 
             HStack {
                 Text(viewModel.statusMessage)
@@ -233,7 +259,10 @@ struct ChatScreen: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(10)
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 10)
+        .background(.ultraThinMaterial)
     }
 
     private var sessionSidebar: some View {
@@ -344,9 +373,11 @@ struct ChatScreen: View {
                 Button("移除") {
                     viewModel.removeDraftImage()
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.borderedProminent)
                 .font(.caption2)
             }
+            .padding(10)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
     }
 
@@ -370,9 +401,11 @@ struct ChatScreen: View {
             Button("移除") {
                 viewModel.removeDraftFile()
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.borderedProminent)
             .font(.caption2)
         }
+        .padding(10)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     private func handleFileImport(_ result: Result<[URL], Error>) {

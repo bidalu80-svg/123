@@ -8,35 +8,41 @@ struct MessageBubbleView: View {
     @State private var copiedToast = false
 
     var body: some View {
-        VStack(alignment: message.role == .assistant ? .leading : .trailing, spacing: 6) {
-            roleTag
+        HStack(alignment: .top, spacing: 10) {
+            if message.role == .assistant {
+                avatar
+            } else {
+                Spacer(minLength: 34)
+            }
 
-            HStack {
-                if message.role == .assistant {
-                    bubbleBody
-                    Spacer(minLength: 34)
-                } else {
-                    Spacer(minLength: 34)
-                    bubbleBody
-                }
+            if message.role == .assistant {
+                bubbleBody
+                Spacer(minLength: 22)
+            } else {
+                Spacer(minLength: 22)
+                bubbleBody
             }
         }
     }
 
-    private var roleTag: some View {
-        Text(roleTitle)
-            .font(.caption2.weight(.semibold))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(roleTitle == "IEXA" ? Color.blue.opacity(0.12) : Color.green.opacity(0.16))
-            )
-            .foregroundStyle(.secondary)
+    private var avatar: some View {
+        Image(systemName: "sparkle")
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(Color.white)
+            .frame(width: 30, height: 30)
+            .background(Circle().fill(Color.accentColor))
     }
 
     private var bubbleBody: some View {
         VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Text(roleTitle)
+                    .font(.caption.weight(.semibold))
+                Text(message.createdAt.formatted(date: .omitted, time: .shortened))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
             content
 
             if message.isStreaming {
@@ -50,7 +56,8 @@ struct MessageBubbleView: View {
                     showCopyToast()
                 }
                 .font(.caption2)
-                .buttonStyle(.bordered)
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
 
                 if copiedToast {
                     Text("复制完成")
@@ -65,12 +72,13 @@ struct MessageBubbleView: View {
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(message.role == .assistant ? Color(.secondarySystemBackground) : Color.blue.opacity(0.1))
+                .fill(message.role == .assistant ? Color(.secondarySystemBackground) : userBubbleColor)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(Color.black.opacity(colorScheme == .dark ? 0.25 : 0.08), lineWidth: 1)
         )
+        .frame(maxWidth: 560, alignment: message.role == .assistant ? .leading : .trailing)
     }
 
     @ViewBuilder
@@ -184,7 +192,7 @@ struct MessageBubbleView: View {
     private var roleTitle: String {
         switch message.role {
         case .user:
-            return "USER"
+            return "你"
         case .assistant:
             return "IEXA"
         case .system:
@@ -201,5 +209,9 @@ struct MessageBubbleView: View {
         case .followApp:
             return colorScheme == .dark ? Color(red: 0.12, green: 0.12, blue: 0.12) : Color(red: 0.96, green: 0.97, blue: 0.99)
         }
+    }
+
+    private var userBubbleColor: Color {
+        colorScheme == .dark ? Color(red: 0.15, green: 0.25, blue: 0.18) : Color(red: 0.86, green: 0.96, blue: 0.88)
     }
 }
