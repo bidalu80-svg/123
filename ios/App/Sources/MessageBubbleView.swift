@@ -126,7 +126,6 @@ struct MessageBubbleView: View {
                 .contextMenu {
                     Button("复制图片链接") {
                         UIPasteboard.general.string = attachment.requestURLString
-                        showCopyToast()
                     }
                 }
         } else if let urlString = attachment.renderURLString, let url = URL(string: urlString) {
