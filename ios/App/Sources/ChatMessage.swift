@@ -171,6 +171,17 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         fileAttachments = try container.decodeIfPresent([ChatFileAttachment].self, forKey: .fileAttachments) ?? []
     }
 
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(role, forKey: .role)
+        try container.encode(content, forKey: .content)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(isStreaming, forKey: .isStreaming)
+        try container.encode(imageAttachments, forKey: .imageAttachments)
+        try container.encode(fileAttachments, forKey: .fileAttachments)
+    }
+
     enum CodingKeys: String, CodingKey {
         case id
         case role
