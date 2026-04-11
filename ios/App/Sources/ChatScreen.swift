@@ -6,6 +6,9 @@ import UIKit
 struct ChatScreen: View {
     @EnvironmentObject private var viewModel: ChatViewModel
 
+    private let sidebarWidth: CGFloat = 280
+    private let edgeDragActivationWidth: CGFloat = 28
+
     @State private var showErrorAlert = false
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var showPhotoPicker = false
@@ -13,29 +16,31 @@ struct ChatScreen: View {
     @State private var isSidebarOpen = false
     @State private var showSettingsSheet = false
     @State private var showTestSheet = false
+    @GestureState private var sidebarDragTranslation: CGFloat = 0
 
     var body: some View {
         ZStack(alignment: .leading) {
             mainContent
-                .offset(x: isSidebarOpen ? 250 : 0)
-                .disabled(isSidebarOpen)
-                .animation(.spring(response: 0.22, dampingFraction: 0.9), value: isSidebarOpen)
+                .offset(x: sidebarRevealWidth)
+                .disabled(sidebarRevealWidth > 0.01)
+                .animation(.interactiveSpring(response: 0.24, dampingFraction: 0.9), value: isSidebarOpen)
 
-            if isSidebarOpen {
-                Color.black.opacity(0.2)
+            if sidebarRevealWidth > 0.01 {
+                Color.black.opacity(0.22 * (sidebarRevealWidth / sidebarWidth))
                     .ignoresSafeArea()
                     .onTapGesture {
-                        isSidebarOpen = false
+                        withAnimation(.interactiveSpring(response: 0.24, dampingFraction: 0.9)) {
+                            isSidebarOpen = false
+                        }
                     }
-                    .transition(.opacity)
             }
 
-            if isSidebarOpen {
-                sessionSidebar
-                    .transition(.move(edge: .leading))
-            }
+            sessionSidebar
+                .offset(x: sidebarRevealWidth - sidebarWidth)
+                .animation(.interactiveSpring(response: 0.24, dampingFraction: 0.9), value: isSidebarOpen)
         }
         .navigationBarHidden(true)
+        .highPriorityGesture(sidebarDragGesture)
         .onChange(of: viewModel.errorMessage) { _, newValue in
             showErrorAlert = !newValue.isEmpty
         }
@@ -108,16 +113,6 @@ struct ChatScreen: View {
                 composer
             }
             .background(Color(.systemBackground).ignoresSafeArea())
-        .gesture(
-            DragGesture(minimumDistance: 20)
-                .onEnded { value in
-                    if value.translation.width > 70 {
-                        isSidebarOpen = true
-                    } else if value.translation.width < -70 {
-                        isSidebarOpen = false
-                    }
-                }
-        )
     }
 
     private var header: some View {
@@ -333,6 +328,41 @@ struct ChatScreen: View {
                 .foregroundStyle(Color.black.opacity(0.08)),
             alignment: .trailing
         )
+    }
+
+    private var sidebarRevealWidth: CGFloat {
+        let base = isSidebarOpen ? sidebarWidth : 0
+        return min(max(base + sidebarDragTranslation, 0), sidebarWidth)
+    }
+
+    private var sidebarDragGesture: some Gesture {
+        DragGesture(minimumDistance: 8, coordinateSpace: .local)
+            .updating($sidebarDragTranslation) { value, state, _ in
+                if !isSidebarOpen && value.startLocation.x > edgeDragActivationWidth {
+                    return
+                }
+
+                if isSidebarOpen {
+                    state = min(0, value.translation.width)
+                } else {
+                    state = max(0, value.translation.width)
+                }
+            }
+            .onEnded { value in
+                if !isSidebarOpen && value.startLocation.x > edgeDragActivationWidth {
+                    return
+                }
+
+                let projected = value.translation.width + (value.predictedEndTranslation.width - value.translation.width) * 0.25
+                let finalReveal = min(
+                    max((isSidebarOpen ? sidebarWidth : 0) + projected, 0),
+                    sidebarWidth
+                )
+
+                withAnimation(.interactiveSpring(response: 0.24, dampingFraction: 0.9)) {
+                    isSidebarOpen = finalReveal > sidebarWidth * 0.5
+                }
+            }
     }
 
     private func sessionRow(_ session: ChatSession) -> some View {
