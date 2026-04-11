@@ -101,6 +101,7 @@ struct ChatScreen: View {
             attachmentSheet
                 .presentationDetents([.fraction(0.52), .large])
                 .presentationDragIndicator(.visible)
+                .presentationCornerRadius(30)
         }
         .fullScreenCover(isPresented: $showCameraPicker) {
             CameraImagePicker { image in
@@ -441,84 +442,91 @@ struct ChatScreen: View {
     }
 
     private var attachmentSheet: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text("IEXA")
-                    .font(.system(size: 32, weight: .bold))
-                Spacer()
-                Button("全部照片") {
-                    showAttachmentSheet = false
-                    showPhotoPicker = true
-                }
-                .font(.system(size: 18, weight: .semibold))
-                .buttonStyle(.plain)
-                .foregroundStyle(Color.blue)
-            }
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
-                    Button {
-                        startCameraFromAttachmentSheet()
-                    } label: {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .fill(Color(.secondarySystemBackground))
-                                .frame(width: 96, height: 96)
-                            Image(systemName: "camera")
-                                .font(.system(size: 30, weight: .regular))
-                                .foregroundStyle(.secondary)
-                        }
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack {
+                    Text("IEXA")
+                        .font(.system(size: 21, weight: .bold))
+                    Spacer()
+                    Button("全部照片") {
+                        showAttachmentSheet = false
+                        showPhotoPicker = true
                     }
+                    .font(.system(size: 17, weight: .semibold))
                     .buttonStyle(.plain)
+                    .foregroundStyle(Color.blue)
+                }
 
-                    ForEach(recentAssets, id: \.localIdentifier) { asset in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
                         Button {
-                            Task { await pickRecentAsset(asset) }
+                            startCameraFromAttachmentSheet()
                         } label: {
-                            if let image = recentThumbnails[asset.localIdentifier] {
-                                Image(uiImage: image)
-                                    .resizable()
-                                    .scaledToFill()
-                                    .frame(width: 96, height: 96)
-                                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                            } else {
+                            ZStack {
                                 RoundedRectangle(cornerRadius: 18, style: .continuous)
                                     .fill(Color(.secondarySystemBackground))
-                                    .frame(width: 96, height: 96)
-                                    .overlay {
-                                        ProgressView()
-                                    }
+                                    .frame(width: 92, height: 92)
+                                Image(systemName: "camera")
+                                    .font(.system(size: 30, weight: .regular))
+                                    .foregroundStyle(.secondary)
                             }
                         }
                         .buttonStyle(.plain)
+
+                        ForEach(recentAssets, id: \.localIdentifier) { asset in
+                            Button {
+                                Task { await pickRecentAsset(asset) }
+                            } label: {
+                                if let image = recentThumbnails[asset.localIdentifier] {
+                                    Image(uiImage: image)
+                                        .resizable()
+                                        .scaledToFill()
+                                        .frame(width: 92, height: 92)
+                                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                                } else {
+                                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                        .fill(Color(.secondarySystemBackground))
+                                        .frame(width: 92, height: 92)
+                                        .overlay {
+                                            ProgressView()
+                                        }
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+
+                Divider()
+                    .opacity(0.5)
+
+                VStack(alignment: .leading, spacing: 14) {
+                    quickToolRow(icon: "photo.on.rectangle.angled", title: "发送图片", subtitle: "从相册选择照片") {
+                        showAttachmentSheet = false
+                        showPhotoPicker = true
+                    }
+                    quickToolRow(icon: "camera", title: "拍照发送", subtitle: "打开相机立即拍摄") {
+                        startCameraFromAttachmentSheet()
+                    }
+                    quickToolRow(icon: "doc.text", title: "发送文件", subtitle: "上传文本和代码文件") {
+                        showAttachmentSheet = false
+                        showFileImporter = true
+                    }
+                    quickToolRow(icon: "paperplane", title: "粘贴并发送", subtitle: "快速发送剪贴板文本") {
+                        showAttachmentSheet = false
+                        pasteClipboardIntoDraft(sendAfterPaste: true)
                     }
                 }
-                .padding(.vertical, 2)
+
+                Spacer(minLength: 0)
             }
-
-            Divider()
-                .opacity(0.5)
-
-            VStack(alignment: .leading, spacing: 18) {
-                quickToolRow(icon: "photo.on.rectangle.angled", title: "发送图片", subtitle: "从相册选择") {
-                    showAttachmentSheet = false
-                    showPhotoPicker = true
-                }
-                quickToolRow(icon: "camera", title: "拍照发送", subtitle: "立即拍摄后发送") {
-                    startCameraFromAttachmentSheet()
-                }
-                quickToolRow(icon: "doc.text", title: "发送文件", subtitle: "文本/代码文件") {
-                    showAttachmentSheet = false
-                    showFileImporter = true
-                }
+            .padding(.horizontal, 20)
+            .padding(.top, 8)
+            .padding(.bottom, 12)
+            .onAppear {
+                ensureRecentPhotoAssets()
             }
-
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 20)
-        .padding(.top, 8)
-        .onAppear {
-            ensureRecentPhotoAssets()
         }
     }
 
@@ -526,15 +534,15 @@ struct ChatScreen: View {
         Button(action: action) {
             HStack(spacing: 12) {
                 Image(systemName: icon)
-                    .font(.system(size: 24, weight: .regular))
+                    .font(.system(size: 23, weight: .regular))
                     .foregroundStyle(.primary)
                     .frame(width: 34, height: 34)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.system(size: 21, weight: .bold))
+                        .font(.system(size: 17, weight: .bold))
                         .foregroundStyle(.primary)
                     Text(subtitle)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
