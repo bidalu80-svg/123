@@ -9,8 +9,16 @@ struct StreamChunk: Equatable {
 
 enum StreamParser {
     static func parse(line: String) -> StreamChunk? {
-        guard line.hasPrefix("data: ") else { return nil }
-        let payload = String(line.dropFirst(6)).trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return nil }
+
+        let payload: String
+        if trimmed.hasPrefix("data: ") {
+            payload = String(trimmed.dropFirst(6)).trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            // Some providers ignore stream mode and return regular JSON lines directly.
+            payload = trimmed
+        }
 
         if payload == "[DONE]" {
             return StreamChunk(rawLine: line, deltaText: "", imageURLs: [], isDone: true)

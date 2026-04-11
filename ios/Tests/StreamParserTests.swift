@@ -16,6 +16,14 @@ final class StreamParserTests: XCTestCase {
         XCTAssertEqual(chunk?.deltaText, "")
     }
 
+    func testParseNonSSEJsonLine() {
+        let line = "{\"choices\":[{\"message\":{\"content\":[{\"type\":\"image_url\",\"image_url\":{\"url\":\"https://cdn.example.com/pic.png\"}}]}}]}"
+        let chunk = StreamParser.parse(line: line)
+
+        XCTAssertEqual(chunk?.isDone, false)
+        XCTAssertEqual(chunk?.imageURLs, ["https://cdn.example.com/pic.png"])
+    }
+
     func testExtractPayloadSupportsImageDataArray() {
         let payload: [String: Any] = [
             "data": [
