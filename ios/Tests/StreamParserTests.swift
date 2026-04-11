@@ -15,4 +15,16 @@ final class StreamParserTests: XCTestCase {
         XCTAssertEqual(chunk?.isDone, true)
         XCTAssertEqual(chunk?.deltaText, "")
     }
+
+    func testExtractPayloadSupportsImageDataArray() {
+        let payload: [String: Any] = [
+            "data": [
+                ["url": "https://cdn.example.com/gen-image"]
+            ]
+        ]
+
+        let extracted = StreamParser.extractPayload(from: payload)
+        XCTAssertEqual(extracted.text, "")
+        XCTAssertEqual(extracted.imageURLs, ["https://cdn.example.com/gen-image"])
+    }
 }

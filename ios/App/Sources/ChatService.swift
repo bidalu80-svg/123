@@ -126,14 +126,17 @@ final class ChatService {
             throw ChatServiceError.httpError(httpResponse.statusCode)
         }
 
-        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let choices = object["choices"] as? [[String: Any]],
-              let first = choices.first,
-              let messageObject = first["message"] as? [String: Any] else {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ChatServiceError.noData
         }
 
-        let reply = parseAssistantMessage(messageObject)
+        let parsed = StreamParser.extractPayload(from: object)
+        let reply = ChatReply(
+            text: ResponseCleaner.cleanAssistantText(parsed.text),
+            imageAttachments: deduplicateImages(
+                parsed.imageURLs.map { ChatImageAttachment(dataURL: $0, mimeType: "image/*", remoteURL: $0) }
+            )
+        )
         if reply.text.isEmpty && reply.imageAttachments.isEmpty {
             throw ChatServiceError.noData
         }
@@ -178,50 +181,6 @@ final class ChatService {
             throw ChatServiceError.noData
         }
         return models
-    }
-
-    private func parseAssistantMessage(_ messageObject: [String: Any]) -> ChatReply {
-        var textParts: [String] = []
-        var imageAttachments: [ChatImageAttachment] = []
-
-        if let content = messageObject["content"] as? String, !content.isEmpty {
-            textParts.append(content)
-        }
-
-        if let contentItems = messageObject["content"] as? [[String: Any]] {
-            for item in contentItems {
-                let type = (item["type"] as? String)?.lowercased() ?? ""
-                if (type == "text" || type == "output_text"), let text = item["text"] as? String, !text.isEmpty {
-                    textParts.append(text)
-                }
-
-                if (type == "image_url" || type == "output_image"),
-                   let image = item["image_url"] as? [String: Any],
-                   let url = image["url"] as? String,
-                   !url.isEmpty {
-                    imageAttachments.append(ChatImageAttachment(dataURL: url, mimeType: "image/*", remoteURL: url))
-                }
-            }
-        }
-
-        if let imageArray = messageObject["images"] as? [[String: Any]] {
-            for image in imageArray {
-                if let url = image["url"] as? String, !url.isEmpty {
-                    imageAttachments.append(ChatImageAttachment(dataURL: url, mimeType: "image/*", remoteURL: url))
-                }
-            }
-        }
-
-        let rawText = textParts.joined()
-        let inlineImages = MessageContentParser.extractInlineImageURLs(from: rawText)
-            .map { ChatImageAttachment(dataURL: $0, mimeType: "image/*", remoteURL: $0) }
-        imageAttachments.append(contentsOf: inlineImages)
-
-        let deduplicatedImages = deduplicateImages(imageAttachments)
-        return ChatReply(
-            text: ResponseCleaner.cleanAssistantText(rawText),
-            imageAttachments: deduplicatedImages
-        )
     }
 
     private func deduplicateImages(_ attachments: [ChatImageAttachment]) -> [ChatImageAttachment] {
