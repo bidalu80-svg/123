@@ -298,6 +298,20 @@ final class ChatViewModel: ObservableObject {
         )
     }
 
+    func appDidEnterBackground() {
+        guard isSending else { return }
+        beginBackgroundSendTask()
+        statusMessage = "已切到后台，正在尽力保持连接…"
+        appendLog("应用进入后台：已申请后台任务，尽力维持本次请求。")
+    }
+
+    func appDidBecomeActive() {
+        if isSending {
+            statusMessage = "已回到前台，继续接收中…"
+            appendLog("应用回到前台：继续处理本次请求。")
+        }
+    }
+
     func removeDraftFile() {
         draftFileAttachment = nil
     }
@@ -452,10 +466,8 @@ final class ChatViewModel: ObservableObject {
         backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "chat-send-stream") { [weak self] in
             guard let self else { return }
             Task { @MainActor in
-                self.inflightSendTask?.cancel()
-                self.inflightSendTask = nil
-                self.statusMessage = "后台时间到，已停止生成"
-                self.appendLog("聊天测试：后台可运行时间已耗尽，任务已取消。")
+                self.statusMessage = "后台时间即将结束，系统可能暂停当前连接"
+                self.appendLog("后台任务到期：不再主动取消，是否持续由系统调度决定。")
                 self.endBackgroundSendTask()
             }
         }

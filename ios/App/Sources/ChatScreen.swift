@@ -23,6 +23,7 @@ struct ChatScreen: View {
     @State private var showSettingsSheet = false
     @State private var showTestSheet = false
     @State private var isPinnedToBottom = true
+    @State private var starterPromptDeck: [(title: String, subtitle: String)] = []
     @GestureState private var sidebarDragTranslation: CGFloat = 0
 
     var body: some View {
@@ -69,6 +70,9 @@ struct ChatScreen: View {
         .simultaneousGesture(sidebarDragGesture)
         .onChange(of: viewModel.errorMessage) { _, newValue in
             showErrorAlert = !newValue.isEmpty
+        }
+        .onAppear {
+            refreshStarterPromptsIfNeeded()
         }
         .onChange(of: selectedPhotoItem) { _, newItem in
             guard let newItem else { return }
@@ -168,6 +172,43 @@ struct ChatScreen: View {
                 .background(
                     Capsule(style: .continuous)
                         .fill(Color.blue.opacity(0.08))
+                )
+            }
+            .buttonStyle(.plain)
+
+            Menu {
+                Button(viewModel.isLoadingModels ? "拉取中…" : "拉取模型列表") {
+                    Task { await viewModel.refreshAvailableModels() }
+                }
+                .disabled(viewModel.isLoadingModels)
+
+                Divider()
+
+                ForEach(modelMenuOptions, id: \.self) { model in
+                    Button {
+                        viewModel.applySelectedModel(model)
+                    } label: {
+                        if model == viewModel.config.model {
+                            Label(model, systemImage: "checkmark")
+                        } else {
+                            Text(model)
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Text(shortModelName(viewModel.config.model))
+                        .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(Color(.systemGray6))
                 )
             }
             .buttonStyle(.plain)
@@ -331,35 +372,90 @@ struct ChatScreen: View {
     }
 
     private var starterPromptStrip: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 12) {
-                ForEach(Array(starterPrompts.enumerated()), id: \.offset) { _, prompt in
-                    Button {
-                        viewModel.draftMessage = "\(prompt.title)\n\(prompt.subtitle)"
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(prompt.title)
-                                .font(.system(size: 22, weight: .semibold))
-                                .foregroundStyle(.primary)
-                                .lineLimit(1)
-                            Text(prompt.subtitle)
-                                .font(.system(size: 15, weight: .medium))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                        .background(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(Color(.systemGray6))
-                        )
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("提示词")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("换一批") {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        refreshStarterPrompts(force: true)
                     }
-                    .buttonStyle(.plain)
                 }
+                .font(.system(size: 13, weight: .semibold))
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 2)
-            .padding(.bottom, 2)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(Array(activeStarterPrompts.enumerated()), id: \.offset) { _, prompt in
+                        Button {
+                            viewModel.draftMessage = "\(prompt.title)\n\(prompt.subtitle)"
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(prompt.title)
+                                    .font(.system(size: 22, weight: .semibold))
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(1)
+                                Text(prompt.subtitle)
+                                    .font(.system(size: 15, weight: .medium))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 12)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .fill(Color(.systemGray6))
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 2)
+                .padding(.bottom, 2)
+            }
         }
+    }
+
+    private var activeStarterPrompts: [(title: String, subtitle: String)] {
+        if starterPromptDeck.isEmpty {
+            return Array(starterPrompts.prefix(4))
+        }
+        return starterPromptDeck
+    }
+
+    private var modelMenuOptions: [String] {
+        let fromAPI = viewModel.availableModels
+        if !fromAPI.isEmpty {
+            return fromAPI
+        }
+        let fallback = ["gpt-5.4-pro", "gpt-5.4", "gpt-5.2", "gpt-4.1"]
+        var merged: [String] = [viewModel.config.model]
+        for model in fallback where !merged.contains(model) {
+            merged.append(model)
+        }
+        return merged
+    }
+
+    private func shortModelName(_ name: String) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "模型" }
+        if trimmed.count <= 16 { return trimmed }
+        return "\(trimmed.prefix(16))…"
+    }
+
+    private func refreshStarterPromptsIfNeeded() {
+        if starterPromptDeck.isEmpty {
+            refreshStarterPrompts(force: true)
+        }
+    }
+
+    private func refreshStarterPrompts(force: Bool = false) {
+        guard force || starterPromptDeck.isEmpty else { return }
+        starterPromptDeck = Array(starterPrompts.shuffled().prefix(4))
     }
 
     private var sessionSidebar: some View {
