@@ -81,6 +81,8 @@ struct SettingsScreen: View {
                             Task { await viewModel.refreshAvailableModels() }
                         }
                         .buttonStyle(.borderedProminent)
+                        .tint(.blue)
+                        .foregroundStyle(.white)
                         .disabled(viewModel.isLoadingModels)
 
                         Spacer()

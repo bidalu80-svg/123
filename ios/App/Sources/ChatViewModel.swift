@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import UIKit
+import Network
 
 @MainActor
 final class ChatViewModel: ObservableObject {
@@ -28,12 +29,15 @@ final class ChatViewModel: ObservableObject {
     @Published var availableModels: [String] = []
     @Published var selectedModelFromList: String = ""
     @Published var isLoadingModels = false
+    @Published var isNetworkReachable = true
 
     private let service: ChatService
     private var autoSaveEnabled = false
     private var lastStreamScrollSignal: Date = .distantPast
     private var inflightSendTask: Task<ChatReply, Error>?
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
+    private var pathMonitor: NWPathMonitor?
+    private let pathMonitorQueue = DispatchQueue(label: "chatapp.network.monitor")
 
     init(service: ChatService = ChatService()) {
         self.service = service
@@ -55,6 +59,12 @@ final class ChatViewModel: ObservableObject {
         syncMessagesFromCurrentSession()
         selectedModelFromList = config.model
         autoSaveEnabled = true
+        startNetworkMonitor()
+    }
+
+    deinit {
+        pathMonitor?.cancel()
+        pathMonitor = nil
     }
 
     var preferredColorScheme: ColorScheme? {
@@ -77,12 +87,22 @@ final class ChatViewModel: ObservableObject {
         return !isSending && (!text.isEmpty || draftImageAttachment != nil || draftFileAttachment != nil)
     }
 
+    var networkStatusText: String {
+        isNetworkReachable ? "在线" : "离线"
+    }
+
     func sendCurrentMessage() async {
         let text = draftMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         let image = draftImageAttachment
         let file = draftFileAttachment
         guard !text.isEmpty || image != nil || file != nil else { return }
         guard !isSending else { return }
+        guard isNetworkReachable else {
+            errorMessage = "当前网络不可用，请检查网络后重试。"
+            statusMessage = "网络离线"
+            appendLog("聊天发送失败：设备当前离线。")
+            return
+        }
 
         errorMessage = ""
         statusMessage = "正在发送请求…"
@@ -489,5 +509,27 @@ final class ChatViewModel: ObservableObject {
             themeMode: input.themeMode,
             codeThemeMode: input.codeThemeMode
         )
+    }
+
+    private func startNetworkMonitor() {
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            Task { @MainActor in
+                guard let self else { return }
+                let reachable = path.status == .satisfied
+                if self.isNetworkReachable == reachable { return }
+
+                self.isNetworkReachable = reachable
+                if reachable {
+                    self.statusMessage = self.isSending ? "网络恢复，继续接收中…" : "网络已恢复"
+                    self.appendLog("网络状态：已恢复连接。")
+                } else {
+                    self.statusMessage = self.isSending ? "网络中断，正在等待恢复…" : "网络离线"
+                    self.appendLog("网络状态：连接中断。")
+                }
+            }
+        }
+        monitor.start(queue: pathMonitorQueue)
+        pathMonitor = monitor
     }
 }

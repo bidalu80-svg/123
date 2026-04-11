@@ -69,6 +69,24 @@ enum ChatServiceError: LocalizedError, Equatable {
 }
 
 final class ChatService {
+    private let session: URLSession
+
+    init(session: URLSession? = nil) {
+        if let session {
+            self.session = session
+            return
+        }
+
+        let config = URLSessionConfiguration.default
+        config.waitsForConnectivity = true
+        config.allowsConstrainedNetworkAccess = true
+        config.allowsExpensiveNetworkAccess = true
+        config.timeoutIntervalForRequest = 60
+        config.timeoutIntervalForResource = 300
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        self.session = URLSession(configuration: config)
+    }
+
     func sendMessage(
         config: ChatConfig,
         history: [ChatMessage],
@@ -78,45 +96,49 @@ final class ChatService {
         let request = try ChatRequestBuilder.makeRequest(config: config, history: history, message: message)
 
         if config.streamEnabled {
-            let (bytes, response) = try await URLSession.shared.bytes(for: request)
+            return try await withRetry { [self] in
+                let (bytes, response) = try await session.bytes(for: request)
 
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw ChatServiceError.invalidResponse
-            }
-
-            guard (200...299).contains(httpResponse.statusCode) else {
-                throw ChatServiceError.httpError(httpResponse.statusCode)
-            }
-
-            var fullReply = ""
-            var imageURLs = Set<String>()
-
-            for try await line in bytes.lines {
-                try Task.checkCancellation()
-                guard let chunk = StreamParser.parse(line: line) else { continue }
-                if chunk.isDone { break }
-
-                if !chunk.deltaText.isEmpty {
-                    fullReply += chunk.deltaText
-                }
-                if !chunk.imageURLs.isEmpty {
-                    chunk.imageURLs.forEach { imageURLs.insert($0) }
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    throw ChatServiceError.invalidResponse
                 }
 
-                if !chunk.deltaText.isEmpty || !chunk.imageURLs.isEmpty {
-                    onEvent(chunk)
+                guard (200...299).contains(httpResponse.statusCode) else {
+                    throw ChatServiceError.httpError(httpResponse.statusCode)
                 }
-            }
 
-            let cleaned = ResponseCleaner.cleanAssistantText(fullReply)
-            let images = imageURLs.map { ChatImageAttachment(dataURL: $0, mimeType: "image/*", remoteURL: $0) }
-            if cleaned.isEmpty && images.isEmpty {
-                throw ChatServiceError.noData
+                var fullReply = ""
+                var imageURLs = Set<String>()
+
+                for try await line in bytes.lines {
+                    try Task.checkCancellation()
+                    guard let chunk = StreamParser.parse(line: line) else { continue }
+                    if chunk.isDone { break }
+
+                    if !chunk.deltaText.isEmpty {
+                        fullReply += chunk.deltaText
+                    }
+                    if !chunk.imageURLs.isEmpty {
+                        chunk.imageURLs.forEach { imageURLs.insert($0) }
+                    }
+
+                    if !chunk.deltaText.isEmpty || !chunk.imageURLs.isEmpty {
+                        onEvent(chunk)
+                    }
+                }
+
+                let cleaned = ResponseCleaner.cleanAssistantText(fullReply)
+                let images = imageURLs.map { ChatImageAttachment(dataURL: $0, mimeType: "image/*", remoteURL: $0) }
+                if cleaned.isEmpty && images.isEmpty {
+                    throw ChatServiceError.noData
+                }
+                return ChatReply(text: cleaned, imageAttachments: images)
             }
-            return ChatReply(text: cleaned, imageAttachments: images)
         }
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await withRetry { [self] in
+            try await session.data(for: request)
+        }
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw ChatServiceError.invalidResponse
@@ -162,7 +184,9 @@ final class ChatService {
 
     func fetchModels(config: ChatConfig) async throws -> [String] {
         let request = try ChatRequestBuilder.makeModelsRequest(config: config)
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await withRetry { [self] in
+            try await session.data(for: request)
+        }
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw ChatServiceError.invalidResponse
@@ -193,6 +217,52 @@ final class ChatService {
             result.append(item)
         }
         return result
+    }
+
+    private func withRetry<T>(maxRetries: Int = 2, operation: @escaping () async throws -> T) async throws -> T {
+        var attempt = 0
+
+        while true {
+            do {
+                return try await operation()
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                if !shouldRetry(error: error) || attempt >= maxRetries {
+                    throw error
+                }
+                attempt += 1
+                let delayNanoseconds = UInt64(350_000_000 * attempt)
+                try await Task.sleep(nanoseconds: delayNanoseconds)
+            }
+        }
+    }
+
+    private func shouldRetry(error: Error) -> Bool {
+        if let serviceError = error as? ChatServiceError {
+            if case .httpError(let code) = serviceError {
+                return [408, 409, 425, 429, 500, 502, 503, 504].contains(code)
+            }
+            return false
+        }
+
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .timedOut,
+                 .networkConnectionLost,
+                 .notConnectedToInternet,
+                 .cannotFindHost,
+                 .cannotConnectToHost,
+                 .dnsLookupFailed,
+                 .resourceUnavailable,
+                 .internationalRoamingOff:
+                return true
+            default:
+                return false
+            }
+        }
+
+        return false
     }
 }
 

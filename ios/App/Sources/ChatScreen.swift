@@ -132,11 +132,11 @@ struct ChatScreen: View {
             .safeAreaInset(edge: .top, spacing: 0) {
                 header
                     .padding(.horizontal, 12)
-                    .padding(.top, 8)
-                    .padding(.bottom, 6)
-                    .background(.ultraThinMaterial)
+                    .padding(.top, 6)
+                    .padding(.bottom, 8)
+                    .background(Color(.systemBackground))
                     .overlay(alignment: .bottom) {
-                        Divider().opacity(0.15)
+                        Divider().opacity(0.2)
                     }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -146,35 +146,20 @@ struct ChatScreen: View {
     }
 
     private var header: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             Button {
                 isSidebarOpen.toggle()
             } label: {
                 Image(systemName: "line.3.horizontal")
-                    .font(.system(size: 22, weight: .regular))
+                    .font(.system(size: 21, weight: .regular))
                     .foregroundStyle(.primary)
-                    .frame(width: 38, height: 38)
+                    .frame(width: 36, height: 36)
             }
             .buttonStyle(.plain)
 
-            Button {
-                // Placeholder for future subscription flow.
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "sparkles")
-                        .font(.system(size: 14, weight: .semibold))
-                    Text("IEXA")
-                        .font(.system(size: 18, weight: .semibold))
-                }
-                .foregroundStyle(Color.blue)
-                .padding(.horizontal, 18)
-                .padding(.vertical, 10)
-                .background(
-                    Capsule(style: .continuous)
-                        .fill(Color.blue.opacity(0.08))
-                )
-            }
-            .buttonStyle(.plain)
+            Text("IEXA")
+                .font(.system(size: 36, weight: .bold))
+                .kerning(0.2)
 
             Menu {
                 Button(viewModel.isLoadingModels ? "拉取中…" : "拉取模型列表") {
@@ -204,16 +189,27 @@ struct ChatScreen: View {
                         .font(.system(size: 11, weight: .semibold))
                 }
                 .foregroundStyle(.primary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
                 .background(
                     Capsule(style: .continuous)
-                        .fill(Color(.systemGray6))
+                        .fill(Color(.secondarySystemBackground))
                 )
             }
             .buttonStyle(.plain)
 
             Spacer()
+            if !viewModel.isNetworkReachable {
+                Text("离线")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.red)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(Color.red.opacity(0.1))
+                    )
+            }
             Menu {
                 Button("新建会话", systemImage: "square.and.pencil") {
                     viewModel.createNewSession()
@@ -236,15 +232,15 @@ struct ChatScreen: View {
                 }
                 .disabled(!viewModel.isSending)
             } label: {
-                Image(systemName: "circle.dashed")
-                    .font(.system(size: 26, weight: .regular))
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 22, weight: .semibold))
                     .foregroundStyle(.primary)
-                    .frame(width: 38, height: 38)
+                    .frame(width: 36, height: 36)
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
     }
 
     private var messageList: some View {
@@ -258,7 +254,7 @@ struct ChatScreen: View {
                 }
                 .scrollTargetLayout()
                 .padding(.horizontal, 12)
-                .padding(.top, 14)
+                .padding(.top, 16)
                 .padding(.bottom, 18)
             }
             .scrollIndicators(.hidden)
@@ -308,9 +304,9 @@ struct ChatScreen: View {
                     }
                 } label: {
                     Image(systemName: "plus")
-                        .font(.system(size: 24, weight: .regular))
+                        .font(.system(size: 23, weight: .regular))
                         .foregroundStyle(.secondary)
-                        .frame(width: 46, height: 46)
+                        .frame(width: 44, height: 44)
                         .background(Circle().fill(Color(.systemGray6)))
                 }
                 .buttonStyle(.plain)
@@ -322,16 +318,16 @@ struct ChatScreen: View {
                         guard viewModel.canSend else { return }
                         Task { await viewModel.sendCurrentMessage() }
                     }
-                    .font(.system(size: 18))
-                    .frame(height: 46, alignment: .center)
+                    .font(.system(size: 19))
+                    .frame(height: 44, alignment: .center)
 
                 Button {
                     // Placeholder for voice input.
                 } label: {
                     Image(systemName: "mic")
-                        .font(.system(size: 26, weight: .regular))
+                        .font(.system(size: 24, weight: .regular))
                         .foregroundStyle(.secondary)
-                        .frame(width: 36, height: 36)
+                        .frame(width: 34, height: 34)
                 }
                 .buttonStyle(.plain)
 
@@ -353,7 +349,7 @@ struct ChatScreen: View {
                     }
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Color.white)
-                    .frame(width: 46, height: 46)
+                    .frame(width: 44, height: 44)
                     .background(Circle().fill(Color.black))
                 }
                 .disabled(!viewModel.canSend && !viewModel.isSending)
@@ -361,7 +357,7 @@ struct ChatScreen: View {
             .padding(.vertical, 8)
             .padding(.leading, 10)
             .padding(.trailing, 8)
-            .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         }
         .padding(.horizontal, 12)
         .padding(.top, 6)
@@ -463,15 +459,15 @@ struct ChatScreen: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text("聊天记录")
-                    .font(.system(size: 40, weight: .bold))
+                    .font(.system(size: 30, weight: .bold))
                 Spacer()
                 Button {
                     viewModel.createNewSession()
                     isSidebarOpen = false
                 } label: {
                     Image(systemName: "square.and.pencil")
-                        .font(.system(size: 24, weight: .regular))
-                        .frame(width: 72, height: 72)
+                        .font(.system(size: 20, weight: .regular))
+                        .frame(width: 44, height: 44)
                         .background(
                             RoundedRectangle(cornerRadius: 16, style: .continuous)
                                 .fill(Color(.systemGray5))

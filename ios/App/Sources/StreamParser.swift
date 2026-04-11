@@ -13,8 +13,11 @@ enum StreamParser {
         if trimmed.isEmpty { return nil }
 
         let payload: String
-        if trimmed.hasPrefix("data: ") {
-            payload = String(trimmed.dropFirst(6)).trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("data:") {
+            payload = String(trimmed.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines)
+        } else if trimmed.hasPrefix("event:") || trimmed.hasPrefix(":") {
+            // Ignore SSE event/meta/comment lines.
+            return nil
         } else {
             // Some providers ignore stream mode and return regular JSON lines directly.
             payload = trimmed

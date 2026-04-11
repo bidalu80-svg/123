@@ -4,7 +4,7 @@ import UIKit
 struct SelectableLinkTextView: UIViewRepresentable {
     let text: String
     var textColor: UIColor = .label
-    var font: UIFont = .preferredFont(forTextStyle: .body)
+    var font: UIFont = .systemFont(ofSize: 17, weight: .regular)
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -32,7 +32,7 @@ struct SelectableLinkTextView: UIViewRepresentable {
 
     func updateUIView(_ uiView: UITextView, context: Context) {
         let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = 2
+        paragraph.lineSpacing = 5
 
         let attrs: [NSAttributedString.Key: Any] = [
             .font: font,

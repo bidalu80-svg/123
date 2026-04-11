@@ -28,14 +28,11 @@ struct MessageBubbleView: View {
             if message.isStreaming {
                 ProgressView()
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.top, 6)
+                    .padding(.top, 8)
             }
-
-            Divider()
-                .opacity(0.26)
-                .padding(.top, 14)
         }
-        .padding(.horizontal, 4)
+        .padding(.horizontal, 2)
+        .padding(.vertical, 2)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -43,17 +40,17 @@ struct MessageBubbleView: View {
         HStack {
             Spacer(minLength: 38)
             content
-                .padding(.vertical, 12)
+                .padding(.vertical, 13)
                 .padding(.horizontal, 16)
                 .background(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
                         .fill(userBubbleColor)
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
                         .stroke(Color.black.opacity(colorScheme == .dark ? 0.2 : 0.05), lineWidth: 0.8)
                 )
-                .frame(maxWidth: 280, alignment: .trailing)
+                .frame(maxWidth: 292, alignment: .trailing)
         }
     }
 
@@ -76,7 +73,10 @@ struct MessageBubbleView: View {
     private func segmentView(_ segment: MessageSegment) -> some View {
         switch segment {
         case .text(let text):
-            SelectableLinkTextView(text: text)
+            SelectableLinkTextView(
+                text: text,
+                font: .systemFont(ofSize: 18, weight: .regular)
+            )
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .code(let language, let content):
             codeBlock(title: (language ?? "code").uppercased(), content: content)
