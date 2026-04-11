@@ -163,7 +163,7 @@ struct ChatScreen: View {
                 HStack(spacing: 8) {
                     Image(systemName: "sparkles")
                         .font(.system(size: 14, weight: .semibold))
-                    Text("升级")
+                    Text("IEXA")
                         .font(.system(size: 18, weight: .semibold))
                 }
                 .foregroundStyle(Color.blue)
@@ -294,7 +294,7 @@ struct ChatScreen: View {
                 starterPromptStrip
             }
 
-            HStack(alignment: .bottom, spacing: 10) {
+            HStack(alignment: .center, spacing: 10) {
                 Menu {
                     Button {
                         showPhotoPicker = true
@@ -315,14 +315,15 @@ struct ChatScreen: View {
                 }
                 .buttonStyle(.plain)
 
-                TextField("有问题，尽管问", text: $viewModel.draftMessage, axis: .vertical)
-                    .lineLimit(1...6)
+                TextField("有问题，尽管问", text: $viewModel.draftMessage)
+                    .lineLimit(1)
                     .submitLabel(.send)
                     .onSubmit {
                         guard viewModel.canSend else { return }
                         Task { await viewModel.sendCurrentMessage() }
                     }
-                    .font(.system(size: 19))
+                    .font(.system(size: 18))
+                    .frame(height: 46, alignment: .center)
 
                 Button {
                     // Placeholder for voice input.
@@ -396,16 +397,16 @@ struct ChatScreen: View {
                         } label: {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(prompt.title)
-                                    .font(.system(size: 22, weight: .semibold))
+                                    .font(.system(size: 18, weight: .semibold))
                                     .foregroundStyle(.primary)
                                     .lineLimit(1)
                                 Text(prompt.subtitle)
-                                    .font(.system(size: 15, weight: .medium))
+                                    .font(.system(size: 13, weight: .medium))
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
                             }
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 12)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
                             .background(
                                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                                     .fill(Color(.systemGray6))
