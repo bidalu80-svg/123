@@ -8,6 +8,7 @@ struct ChatScreen: View {
 
     @State private var showErrorAlert = false
     @State private var selectedPhotoItem: PhotosPickerItem?
+    @State private var showPhotoPicker = false
     @State private var showFileImporter = false
     @State private var isSidebarOpen = false
 
@@ -48,6 +49,11 @@ struct ChatScreen: View {
                 }
             }
         }
+        .photosPicker(
+            isPresented: $showPhotoPicker,
+            selection: $selectedPhotoItem,
+            matching: .images
+        )
         .fileImporter(
             isPresented: $showFileImporter,
             allowedContentTypes: [
@@ -189,7 +195,9 @@ struct ChatScreen: View {
 
             HStack(alignment: .bottom, spacing: 10) {
                 Menu {
-                    PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
+                    Button {
+                        showPhotoPicker = true
+                    } label: {
                         Label("发送图片", systemImage: "photo")
                     }
                     Button {

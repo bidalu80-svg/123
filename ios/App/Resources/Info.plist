@@ -24,6 +24,8 @@
     <string>$(CHAT_API_URL)</string>
     <key>CHAT_MODEL</key>
     <string>$(CHAT_MODEL)</string>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>用于从相册选择图片并发送给 IEXA。</string>
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsArbitraryLoads</key>
