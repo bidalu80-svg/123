@@ -92,9 +92,8 @@ struct MessageBubbleView: View {
     private func segmentView(_ segment: MessageSegment) -> some View {
         switch segment {
         case .text(let text):
-            Text(text)
+            SelectableLinkTextView(text: text)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .textSelection(.enabled)
         case .code(let language, let content):
             codeBlock(title: (language ?? "code").uppercased(), content: content)
         case .file(let name, let language, let content):

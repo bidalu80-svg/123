@@ -44,5 +44,10 @@ struct TestCenterScreen: View {
             }
         }
         .navigationTitle("测试中心")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                CornerClockBadge()
+            }
+        }
     }
 }

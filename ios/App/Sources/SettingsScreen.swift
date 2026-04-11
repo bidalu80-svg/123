@@ -133,6 +133,11 @@ struct SettingsScreen: View {
             }
         }
         .navigationTitle("配置")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                CornerClockBadge()
+            }
+        }
     }
 
     private func statusRow(_ title: String, value: String) -> some View {

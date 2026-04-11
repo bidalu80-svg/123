@@ -119,6 +119,7 @@ struct ChatScreen: View {
             }
 
             Spacer()
+            CornerClockBadge()
 
             Menu {
                 Button("示例", systemImage: "wand.and.stars") {
