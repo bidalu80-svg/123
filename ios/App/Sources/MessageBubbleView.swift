@@ -5,83 +5,56 @@ struct MessageBubbleView: View {
     let message: ChatMessage
     let codeThemeMode: CodeThemeMode
     @Environment(\.colorScheme) private var colorScheme
-    @State private var copiedToast = false
 
     var body: some View {
-        HStack(alignment: .top, spacing: 9) {
-            if message.role == .assistant {
-                avatar
+        Group {
+            if message.role == .user {
+                userMessageView
             } else {
-                Spacer(minLength: 34)
+                assistantMessageView
             }
-
-            if message.role == .assistant {
-                bubbleBody
-                Spacer(minLength: 22)
-            } else {
-                Spacer(minLength: 22)
-                bubbleBody
+        }
+        .contextMenu {
+            Button("复制全部") {
+                UIPasteboard.general.string = message.copyableText
             }
         }
     }
 
-    private var avatar: some View {
-        ZStack {
-            Circle()
-                .fill(Color.black)
-            Image(systemName: "sparkles")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Color.white)
-        }
-        .frame(width: 28, height: 28)
-    }
-
-    private var bubbleBody: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
-                Text(roleTitle)
-                    .font(.caption.weight(.semibold))
-                Text(message.createdAt.formatted(date: .omitted, time: .shortened))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-
+    private var assistantMessageView: some View {
+        VStack(alignment: .leading, spacing: 0) {
             content
 
             if message.isStreaming {
                 ProgressView()
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 6)
             }
 
-            HStack(spacing: 8) {
-                Button("复制全部") {
-                    UIPasteboard.general.string = message.copyableText
-                    showCopyToast()
-                }
-                .font(.caption2)
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-
-                if copiedToast {
-                    Text("复制完成")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .transition(.opacity)
-                }
-
-                Spacer()
-            }
+            Divider()
+                .opacity(0.26)
+                .padding(.top, 14)
         }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(message.role == .assistant ? assistantBubbleColor : userBubbleColor)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.black.opacity(colorScheme == .dark ? 0.28 : 0.07), lineWidth: 0.8)
-        )
-        .frame(maxWidth: 560, alignment: message.role == .assistant ? .leading : .trailing)
+        .padding(.horizontal, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var userMessageView: some View {
+        HStack {
+            Spacer(minLength: 38)
+            content
+                .padding(.vertical, 12)
+                .padding(.horizontal, 16)
+                .background(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(userBubbleColor)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(Color.black.opacity(colorScheme == .dark ? 0.2 : 0.05), lineWidth: 0.8)
+                )
+                .frame(maxWidth: 280, alignment: .trailing)
+        }
     }
 
     @ViewBuilder
@@ -123,7 +96,6 @@ struct MessageBubbleView: View {
                 Spacer()
                 Button("复制代码") {
                     UIPasteboard.general.string = content
-                    showCopyToast()
                 }
                 .font(.caption2)
                 .buttonStyle(.bordered)
@@ -179,27 +151,8 @@ struct MessageBubbleView: View {
             .contextMenu {
                 Button("复制图片链接") {
                     UIPasteboard.general.string = attachment.requestURLString
-                    showCopyToast()
                 }
             }
-        }
-    }
-
-    private func showCopyToast() {
-        copiedToast = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            copiedToast = false
-        }
-    }
-
-    private var roleTitle: String {
-        switch message.role {
-        case .user:
-            return "你"
-        case .assistant:
-            return "IEXA"
-        case .system:
-            return "SYSTEM"
         }
     }
 
@@ -215,10 +168,6 @@ struct MessageBubbleView: View {
     }
 
     private var userBubbleColor: Color {
-        colorScheme == .dark ? Color(red: 0.16, green: 0.17, blue: 0.19) : Color(red: 0.94, green: 0.95, blue: 0.97)
-    }
-
-    private var assistantBubbleColor: Color {
-        colorScheme == .dark ? Color(red: 0.10, green: 0.11, blue: 0.12) : Color(.systemBackground)
+        colorScheme == .dark ? Color(red: 0.2, green: 0.2, blue: 0.22) : Color(red: 0.94, green: 0.94, blue: 0.95)
     }
 }

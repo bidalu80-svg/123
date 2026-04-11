@@ -11,6 +11,8 @@ struct ChatScreen: View {
     @State private var showPhotoPicker = false
     @State private var showFileImporter = false
     @State private var isSidebarOpen = false
+    @State private var showSettingsSheet = false
+    @State private var showTestSheet = false
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -76,6 +78,18 @@ struct ChatScreen: View {
         } message: {
             Text(viewModel.errorMessage)
         }
+        .sheet(isPresented: $showSettingsSheet) {
+            NavigationStack {
+                SettingsScreen()
+            }
+            .environmentObject(viewModel)
+        }
+        .sheet(isPresented: $showTestSheet) {
+            NavigationStack {
+                TestCenterScreen()
+            }
+            .environmentObject(viewModel)
+        }
     }
 
     private var mainContent: some View {
@@ -93,17 +107,7 @@ struct ChatScreen: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 composer
             }
-            .background(
-                LinearGradient(
-                    colors: [
-                        Color(.systemBackground),
-                        Color(.secondarySystemBackground).opacity(0.7)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .ignoresSafeArea()
-            )
+            .background(Color(.systemBackground).ignoresSafeArea())
         .gesture(
             DragGesture(minimumDistance: 20)
                 .onEnded { value in
@@ -122,25 +126,36 @@ struct ChatScreen: View {
                 isSidebarOpen.toggle()
             } label: {
                 Image(systemName: "line.3.horizontal")
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(.primary)
-                    .frame(width: 34, height: 34)
-                    .background(Circle().fill(Color(.secondarySystemBackground)))
+                    .frame(width: 36, height: 36)
             }
+            .buttonStyle(.plain)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text("IEXA")
-                    .font(.subheadline.weight(.semibold))
-                Text(viewModel.config.model)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .font(.title3.weight(.semibold))
             }
 
             Spacer()
-            CornerClockBadge()
+            Button {
+                viewModel.createNewSession()
+            } label: {
+                Image(systemName: "square.and.pencil")
+                    .font(.system(size: 21, weight: .regular))
+                    .foregroundStyle(.primary)
+                    .frame(width: 36, height: 36)
+            }
+            .buttonStyle(.plain)
 
             Menu {
+                Button("配置", systemImage: "gearshape") {
+                    showSettingsSheet = true
+                }
+                Button("测试中心", systemImage: "checkmark.circle") {
+                    showTestSheet = true
+                }
+                Divider()
                 Button("示例", systemImage: "wand.and.stars") {
                     viewModel.loadDemoContent()
                 }
@@ -153,33 +168,27 @@ struct ChatScreen: View {
                 .disabled(!viewModel.isSending)
             } label: {
                 Image(systemName: "ellipsis")
-                    .rotationEffect(.degrees(90))
-                    .font(.system(size: 15, weight: .bold))
+                    .font(.system(size: 21, weight: .regular))
                     .foregroundStyle(.primary)
-                    .frame(width: 34, height: 34)
-                    .background(Circle().fill(Color(.secondarySystemBackground)))
+                    .frame(width: 36, height: 36)
             }
+            .buttonStyle(.plain)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color(.systemBackground).opacity(0.92), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(Color.black.opacity(0.06), lineWidth: 1)
-        )
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
     }
 
     private var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 12) {
+                LazyVStack(spacing: 16) {
                     if viewModel.messages.isEmpty {
                         ContentUnavailableView(
-                            "开始新对话",
-                            systemImage: "bubble.left.and.bubble.right",
-                            description: Text("右滑可查看历史会话，点击 + 可发送图片或文本/代码文件。")
+                            "今天想聊点什么？",
+                            systemImage: "message",
+                            description: Text("你可以发送文本、图片或代码文件。")
                         )
-                        .padding(.top, 64)
+                        .padding(.top, 96)
                     }
 
                     ForEach(viewModel.messages) { message in
@@ -188,8 +197,8 @@ struct ChatScreen: View {
                     }
                 }
                 .padding(.horizontal, 12)
-                .padding(.top, 12)
-                .padding(.bottom, 14)
+                .padding(.top, 14)
+                .padding(.bottom, 18)
             }
             .scrollIndicators(.hidden)
             .scrollDismissesKeyboard(.interactively)
@@ -229,13 +238,14 @@ struct ChatScreen: View {
                     }
                 } label: {
                     Image(systemName: "plus")
-                        .font(.system(size: 16, weight: .bold))
+                        .font(.system(size: 22, weight: .regular))
                         .foregroundStyle(.secondary)
-                        .frame(width: 32, height: 32)
-                        .background(Circle().fill(Color(.quaternarySystemFill)))
+                        .frame(width: 34, height: 34)
+                        .background(Circle().fill(Color(.systemGray6)))
                 }
+                .buttonStyle(.plain)
 
-                TextField("给 IEXA 发送消息", text: $viewModel.draftMessage, axis: .vertical)
+                TextField("有问题，尽管问", text: $viewModel.draftMessage, axis: .vertical)
                     .lineLimit(1...6)
                     .submitLabel(.send)
                     .onSubmit {
@@ -250,36 +260,31 @@ struct ChatScreen: View {
                         Task { await viewModel.sendCurrentMessage() }
                     }
                 } label: {
-                    Image(systemName: viewModel.isSending ? "stop.fill" : "arrow.up")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(viewModel.canSend || viewModel.isSending ? Color.white : Color.secondary)
-                        .frame(width: 32, height: 32)
-                        .background(
-                            Circle()
-                                .fill(viewModel.canSend || viewModel.isSending ? Color.black : Color(.quaternarySystemFill))
-                        )
+                    Group {
+                        if viewModel.isSending {
+                            Image(systemName: "stop.fill")
+                        } else if viewModel.canSend {
+                            Image(systemName: "arrow.up")
+                        } else {
+                            Image(systemName: "waveform")
+                        }
+                    }
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(viewModel.canSend || viewModel.isSending ? Color.white : Color.secondary)
+                    .frame(width: 34, height: 34)
+                    .background(Circle().fill(viewModel.canSend || viewModel.isSending ? Color.black : Color(.systemGray6)))
                 }
                 .disabled(!viewModel.canSend && !viewModel.isSending)
             }
             .padding(10)
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-
-            HStack {
-                Text(viewModel.statusMessage)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text(viewModel.sessionCountText)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
+            .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         }
         .padding(.horizontal, 12)
-        .padding(.top, 8)
+        .padding(.top, 6)
         .padding(.bottom, 10)
-        .background(.ultraThinMaterial)
+        .background(Color(.systemBackground))
         .overlay(alignment: .top) {
-            Divider().opacity(0.15)
+            Divider().opacity(0.18)
         }
     }
 

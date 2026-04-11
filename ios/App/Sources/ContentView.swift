@@ -4,29 +4,10 @@ struct ContentView: View {
     @EnvironmentObject private var viewModel: ChatViewModel
 
     var body: some View {
-        TabView {
-            NavigationStack {
-                ChatScreen()
-            }
-            .tabItem {
-                Label("聊天", systemImage: "message.fill")
-            }
-
-            NavigationStack {
-                SettingsScreen()
-            }
-            .tabItem {
-                Label("配置", systemImage: "gearshape.fill")
-            }
-
-            NavigationStack {
-                TestCenterScreen()
-            }
-            .tabItem {
-                Label("测试", systemImage: "checkmark.circle.fill")
-            }
+        NavigationStack {
+            ChatScreen()
         }
-        .tint(.blue)
+        .tint(.primary)
         .preferredColorScheme(viewModel.preferredColorScheme)
     }
 }
