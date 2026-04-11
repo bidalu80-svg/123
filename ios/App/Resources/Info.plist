@@ -26,6 +26,8 @@
     <string>$(CHAT_MODEL)</string>
     <key>NSPhotoLibraryUsageDescription</key>
     <string>用于从相册选择图片并发送给 IEXA。</string>
+    <key>NSCameraUsageDescription</key>
+    <string>用于拍照并发送图片给 IEXA。</string>
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsArbitraryLoads</key>

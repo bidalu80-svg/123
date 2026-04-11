@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import Photos
 import UniformTypeIdentifiers
 import UIKit
 
@@ -18,13 +19,17 @@ struct ChatScreen: View {
     @State private var showErrorAlert = false
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var showPhotoPicker = false
+    @State private var showAttachmentSheet = false
     @State private var showFileImporter = false
+    @State private var showCameraPicker = false
     @State private var isSidebarOpen = false
     @State private var showSettingsSheet = false
     @State private var showTestSheet = false
     @State private var isPinnedToBottom = true
     @State private var starterPromptDeck: [(title: String, subtitle: String)] = []
     @GestureState private var sidebarDragTranslation: CGFloat = 0
+    @State private var recentAssets: [PHAsset] = []
+    @State private var recentThumbnails: [String: UIImage] = [:]
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -73,6 +78,7 @@ struct ChatScreen: View {
         }
         .onAppear {
             refreshStarterPromptsIfNeeded()
+            ensureRecentPhotoAssets()
         }
         .onChange(of: selectedPhotoItem) { _, newItem in
             guard let newItem else { return }
@@ -91,6 +97,19 @@ struct ChatScreen: View {
             selection: $selectedPhotoItem,
             matching: .images
         )
+        .sheet(isPresented: $showAttachmentSheet) {
+            attachmentSheet
+                .presentationDetents([.fraction(0.52), .large])
+                .presentationDragIndicator(.visible)
+        }
+        .fullScreenCover(isPresented: $showCameraPicker) {
+            CameraImagePicker { image in
+                if let data = image.jpegData(compressionQuality: 0.9) {
+                    viewModel.setDraftImage(data: data, mimeType: "image/jpeg")
+                }
+            }
+            .ignoresSafeArea()
+        }
         .fileImporter(
             isPresented: $showFileImporter,
             allowedContentTypes: [
@@ -291,17 +310,8 @@ struct ChatScreen: View {
             }
 
             HStack(alignment: .center, spacing: 10) {
-                Menu {
-                    Button {
-                        showPhotoPicker = true
-                    } label: {
-                        Label("发送图片", systemImage: "photo")
-                    }
-                    Button {
-                        showFileImporter = true
-                    } label: {
-                        Label("发送文件", systemImage: "doc.text")
-                    }
+                Button {
+                    showAttachmentSheet = true
                 } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 23, weight: .regular))
@@ -322,14 +332,27 @@ struct ChatScreen: View {
                     .frame(height: 44, alignment: .center)
 
                 Button {
-                    // Placeholder for voice input.
+                    pasteClipboardIntoDraft(sendAfterPaste: false)
                 } label: {
-                    Image(systemName: "mic")
+                    Image(systemName: "doc.on.clipboard")
                         .font(.system(size: 24, weight: .regular))
                         .foregroundStyle(.secondary)
                         .frame(width: 34, height: 34)
                 }
                 .buttonStyle(.plain)
+                .contextMenu {
+                    Button("粘贴到输入框", systemImage: "doc.on.clipboard") {
+                        pasteClipboardIntoDraft(sendAfterPaste: false)
+                    }
+                    Button("粘贴并发送", systemImage: "paperplane") {
+                        pasteClipboardIntoDraft(sendAfterPaste: true)
+                    }
+                    if viewModel.isSending {
+                        Button("停止生成", systemImage: "stop.circle") {
+                            viewModel.stopGenerating()
+                        }
+                    }
+                }
 
                 Button {
                     if viewModel.isSending {
@@ -415,6 +438,109 @@ struct ChatScreen: View {
                 .padding(.bottom, 2)
             }
         }
+    }
+
+    private var attachmentSheet: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("IEXA")
+                    .font(.system(size: 32, weight: .bold))
+                Spacer()
+                Button("全部照片") {
+                    showAttachmentSheet = false
+                    showPhotoPicker = true
+                }
+                .font(.system(size: 18, weight: .semibold))
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.blue)
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    Button {
+                        startCameraFromAttachmentSheet()
+                    } label: {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .fill(Color(.secondarySystemBackground))
+                                .frame(width: 96, height: 96)
+                            Image(systemName: "camera")
+                                .font(.system(size: 30, weight: .regular))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+
+                    ForEach(recentAssets, id: \.localIdentifier) { asset in
+                        Button {
+                            Task { await pickRecentAsset(asset) }
+                        } label: {
+                            if let image = recentThumbnails[asset.localIdentifier] {
+                                Image(uiImage: image)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(width: 96, height: 96)
+                                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            } else {
+                                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                    .fill(Color(.secondarySystemBackground))
+                                    .frame(width: 96, height: 96)
+                                    .overlay {
+                                        ProgressView()
+                                    }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+
+            Divider()
+                .opacity(0.5)
+
+            VStack(alignment: .leading, spacing: 18) {
+                quickToolRow(icon: "photo.on.rectangle.angled", title: "发送图片", subtitle: "从相册选择") {
+                    showAttachmentSheet = false
+                    showPhotoPicker = true
+                }
+                quickToolRow(icon: "camera", title: "拍照发送", subtitle: "立即拍摄后发送") {
+                    startCameraFromAttachmentSheet()
+                }
+                quickToolRow(icon: "doc.text", title: "发送文件", subtitle: "文本/代码文件") {
+                    showAttachmentSheet = false
+                    showFileImporter = true
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 8)
+        .onAppear {
+            ensureRecentPhotoAssets()
+        }
+    }
+
+    private func quickToolRow(icon: String, title: String, subtitle: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 24, weight: .regular))
+                    .foregroundStyle(.primary)
+                    .frame(width: 34, height: 34)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 21, weight: .bold))
+                        .foregroundStyle(.primary)
+                    Text(subtitle)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+        }
+        .buttonStyle(.plain)
     }
 
     private var activeStarterPrompts: [(title: String, subtitle: String)] {
@@ -654,6 +780,110 @@ struct ChatScreen: View {
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
+    private func startCameraFromAttachmentSheet() {
+        guard UIImagePickerController.isSourceTypeAvailable(.camera) else {
+            viewModel.errorMessage = "当前设备不支持拍照。"
+            return
+        }
+        showAttachmentSheet = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            showCameraPicker = true
+        }
+    }
+
+    private func pasteClipboardIntoDraft(sendAfterPaste: Bool) {
+        let pasted = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !pasted.isEmpty else {
+            viewModel.statusMessage = "剪贴板没有可用文本"
+            return
+        }
+        viewModel.draftMessage = pasted
+        viewModel.statusMessage = "已粘贴剪贴板文本"
+        if sendAfterPaste {
+            Task { await viewModel.sendCurrentMessage() }
+        }
+    }
+
+    private func ensureRecentPhotoAssets() {
+        let current = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        switch current {
+        case .authorized, .limited:
+            loadRecentAssets()
+        case .notDetermined:
+            PHPhotoLibrary.requestAuthorization(for: .readWrite) { status in
+                guard status == .authorized || status == .limited else { return }
+                DispatchQueue.main.async {
+                    loadRecentAssets()
+                }
+            }
+        default:
+            break
+        }
+    }
+
+    private func loadRecentAssets() {
+        let options = PHFetchOptions()
+        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        options.fetchLimit = 14
+        let result = PHAsset.fetchAssets(with: .image, options: options)
+        var assets: [PHAsset] = []
+        result.enumerateObjects { asset, _, _ in
+            assets.append(asset)
+        }
+        recentAssets = assets
+        loadThumbnails(for: assets)
+    }
+
+    private func loadThumbnails(for assets: [PHAsset]) {
+        let manager = PHCachingImageManager()
+        let target = CGSize(width: 240, height: 240)
+        for asset in assets {
+            manager.requestImage(
+                for: asset,
+                targetSize: target,
+                contentMode: .aspectFill,
+                options: nil
+            ) { image, _ in
+                guard let image else { return }
+                DispatchQueue.main.async {
+                    recentThumbnails[asset.localIdentifier] = image
+                }
+            }
+        }
+    }
+
+    private func pickRecentAsset(_ asset: PHAsset) async {
+        if let image = await requestImage(for: asset),
+           let data = image.jpegData(compressionQuality: 0.9) {
+            await MainActor.run {
+                viewModel.setDraftImage(data: data, mimeType: "image/jpeg")
+                showAttachmentSheet = false
+            }
+        } else {
+            await MainActor.run {
+                viewModel.errorMessage = "读取照片失败，请从“全部照片”重试。"
+            }
+        }
+    }
+
+    private func requestImage(for asset: PHAsset) async -> UIImage? {
+        await withCheckedContinuation { continuation in
+            let options = PHImageRequestOptions()
+            options.deliveryMode = .highQualityFormat
+            options.resizeMode = .none
+            options.isNetworkAccessAllowed = true
+            options.isSynchronous = false
+
+            PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { data, _, _, _ in
+                guard let data, let image = UIImage(data: data) else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                continuation.resume(returning: image)
+            }
+        }
+    }
+
     private func handleFileImport(_ result: Result<[URL], Error>) {
         switch result {
         case .failure(let error):
@@ -699,6 +929,45 @@ struct ChatScreen: View {
             withTransaction(transaction) {
                 proxy.scrollTo(lastID, anchor: .bottom)
             }
+        }
+    }
+}
+
+private struct CameraImagePicker: UIViewControllerRepresentable {
+    let onImagePicked: (UIImage) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.cameraCaptureMode = .photo
+        picker.delegate = context.coordinator
+        picker.allowsEditing = false
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+
+    final class Coordinator: NSObject, UINavigationControllerDelegate, UIImagePickerControllerDelegate {
+        private let parent: CameraImagePicker
+
+        init(_ parent: CameraImagePicker) {
+            self.parent = parent
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.dismiss()
+        }
+
+        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey : Any]) {
+            if let image = info[.originalImage] as? UIImage {
+                parent.onImagePicked(image)
+            }
+            parent.dismiss()
         }
     }
 }
