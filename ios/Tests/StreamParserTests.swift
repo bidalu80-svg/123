@@ -40,6 +40,22 @@ final class StreamParserTests: XCTestCase {
         XCTAssertEqual(chunk?.imageURLs, ["https://cdn.example.com/generate/abc123?token=1"])
     }
 
+    func testParseStandaloneBareURLWithoutImageSuffix() {
+        let line = #"{"choices":[{"message":{"content":"https://cdn.example.com/generated/abc123?token=1"}}]}"#
+        let chunk = StreamParser.parse(line: line)
+
+        XCTAssertEqual(chunk?.isDone, false)
+        XCTAssertEqual(chunk?.imageURLs, ["https://cdn.example.com/generated/abc123?token=1"])
+    }
+
+    func testParseDataImageURL() {
+        let line = #"{"choices":[{"message":{"content":"data:image/png;base64,abc123=="}}]}"#
+        let chunk = StreamParser.parse(line: line)
+
+        XCTAssertEqual(chunk?.isDone, false)
+        XCTAssertEqual(chunk?.imageURLs, ["data:image/png;base64,abc123=="])
+    }
+
     func testExtractPayloadSupportsImageDataArray() {
         let payload: [String: Any] = [
             "data": [

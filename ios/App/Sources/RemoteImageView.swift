@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import WebKit
 
 struct RemoteImageView: View {
     let urlString: String
@@ -14,6 +15,9 @@ struct RemoteImageView: View {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFit()
+            } else if let svgText = loader.svgText {
+                SVGWebView(svgText: svgText)
+                    .frame(minWidth: 120, minHeight: 120)
             } else if loader.failed {
                 Text("图片加载失败")
                     .font(.caption)
@@ -35,10 +39,12 @@ struct RemoteImageView: View {
 @MainActor
 final class RemoteImageLoader: ObservableObject {
     @Published var image: UIImage?
+    @Published var svgText: String?
     @Published var failed = false
 
     func load(urlString rawURL: String, apiKey rawAPIKey: String, baseURL: String) async {
         image = nil
+        svgText = nil
         failed = false
 
         let normalizedURL = Self.normalizeURL(rawURL, baseURL: baseURL)
@@ -47,11 +53,18 @@ final class RemoteImageLoader: ObservableObject {
             return
         }
 
-        if normalizedURL.hasPrefix("data:image"),
-           let data = Self.decodeDataURL(normalizedURL),
-           let uiImage = UIImage(data: data) {
-            image = uiImage
-            return
+        if normalizedURL.hasPrefix("data:"),
+           let decoded = Self.decodeDataURL(normalizedURL) {
+            if decoded.mimeType.contains("svg"),
+               let text = String(data: decoded.data, encoding: .utf8),
+               text.contains("<svg") {
+                svgText = text
+                return
+            }
+            if let uiImage = UIImage(data: decoded.data) {
+                image = uiImage
+                return
+            }
         }
 
         guard let url = URL(string: normalizedURL) else {
@@ -60,11 +73,19 @@ final class RemoteImageLoader: ObservableObject {
         }
 
         do {
-            let plainRequest = URLRequest(url: url, timeoutInterval: 60)
+            var plainRequest = URLRequest(url: url, timeoutInterval: 60)
+            plainRequest.setValue("image/*,*/*;q=0.8", forHTTPHeaderField: "Accept")
             let (plainData, plainResponse) = try await URLSession.shared.data(for: plainRequest)
-            if Self.isSuccessResponse(plainResponse), let uiImage = UIImage(data: plainData) {
-                image = uiImage
-                return
+            if Self.isSuccessResponse(plainResponse) {
+                if let resolved = Self.resolveDisplayContent(data: plainData, response: plainResponse) {
+                    switch resolved {
+                    case .raster(let uiImage):
+                        image = uiImage
+                    case .svg(let text):
+                        svgText = text
+                    }
+                    return
+                }
             }
         } catch {
             // Fall through to auth retry if API key exists.
@@ -78,10 +99,17 @@ final class RemoteImageLoader: ObservableObject {
 
         do {
             var authRequest = URLRequest(url: url, timeoutInterval: 60)
+            authRequest.setValue("image/*,*/*;q=0.8", forHTTPHeaderField: "Accept")
             authRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
             let (authData, authResponse) = try await URLSession.shared.data(for: authRequest)
-            if Self.isSuccessResponse(authResponse), let uiImage = UIImage(data: authData) {
-                image = uiImage
+            if Self.isSuccessResponse(authResponse),
+               let resolved = Self.resolveDisplayContent(data: authData, response: authResponse) {
+                switch resolved {
+                case .raster(let uiImage):
+                    image = uiImage
+                case .svg(let text):
+                    svgText = text
+                }
             } else {
                 failed = true
             }
@@ -95,10 +123,55 @@ final class RemoteImageLoader: ObservableObject {
         return (200...299).contains(http.statusCode)
     }
 
-    private static func decodeDataURL(_ dataURL: String) -> Data? {
+    private enum DisplayContent {
+        case raster(UIImage)
+        case svg(String)
+    }
+
+    private static func resolveDisplayContent(data: Data, response: URLResponse) -> DisplayContent? {
+        let mimeType = (response as? HTTPURLResponse)?
+            .value(forHTTPHeaderField: "Content-Type")?
+            .lowercased() ?? ""
+
+        if mimeType.contains("svg"),
+           let text = String(data: data, encoding: .utf8),
+           text.contains("<svg") {
+            return .svg(text)
+        }
+
+        if let uiImage = UIImage(data: data) {
+            return .raster(uiImage)
+        }
+
+        if let text = String(data: data, encoding: .utf8),
+           text.contains("<svg") {
+            return .svg(text)
+        }
+
+        return nil
+    }
+
+    private static func decodeDataURL(_ dataURL: String) -> (mimeType: String, data: Data)? {
         let parts = dataURL.split(separator: ",", maxSplits: 1).map(String.init)
         guard parts.count == 2 else { return nil }
-        return Data(base64Encoded: parts[1])
+
+        let header = parts[0].lowercased()
+        let payload = parts[1]
+
+        let mimeType = header
+            .replacingOccurrences(of: "data:", with: "")
+            .components(separatedBy: ";")
+            .first ?? "application/octet-stream"
+
+        if header.contains(";base64"), let data = Data(base64Encoded: payload) {
+            return (mimeType: mimeType, data: data)
+        }
+
+        if let decoded = payload.removingPercentEncoding?.data(using: .utf8) {
+            return (mimeType: mimeType, data: decoded)
+        }
+
+        return nil
     }
 
     private static func normalizeURL(_ raw: String, baseURL: String) -> String? {
@@ -118,9 +191,31 @@ final class RemoteImageLoader: ObservableObject {
             }
         }
 
-        if cleaned.hasPrefix("http://") || cleaned.hasPrefix("https://") || cleaned.hasPrefix("data:image") {
+        if cleaned.hasPrefix("http://") || cleaned.hasPrefix("https://") || cleaned.hasPrefix("data:") {
             return cleaned
         }
         return nil
+    }
+}
+
+private struct SVGWebView: UIViewRepresentable {
+    let svgText: String
+
+    func makeUIView(context: Context) -> WKWebView {
+        let webView = WKWebView(frame: .zero)
+        webView.isOpaque = false
+        webView.backgroundColor = .clear
+        webView.scrollView.isScrollEnabled = false
+        return webView
+    }
+
+    func updateUIView(_ webView: WKWebView, context: Context) {
+        let html = """
+        <html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+        <body style="margin:0;padding:0;display:flex;justify-content:center;align-items:center;background:transparent;">
+        \(svgText)
+        </body></html>
+        """
+        webView.loadHTMLString(html, baseURL: nil)
     }
 }

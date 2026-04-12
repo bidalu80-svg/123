@@ -10,7 +10,8 @@ enum MessageSegment: Equatable {
 
 enum MessageContentParser {
     private static let markdownImagePattern = #"!\[[^\]]*\]\(([^)]+)\)"#
-    private static let bareURLPattern = #"https?://[^\s\"<>)\]]+"#
+    private static let bareURLPattern = #"(?<!\]\()https?://[^\s\"<>)\]]+"#
+    private static let dataImagePattern = #"data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+"#
     private static let codeFencePattern = #"(?s)```(.*?)```"#
 
     static func parse(_ message: ChatMessage) -> [MessageSegment] {
@@ -33,9 +34,12 @@ enum MessageContentParser {
         let markdownMatches = findMatches(in: text, pattern: markdownImagePattern)
         results.append(contentsOf: markdownMatches.map(\.value))
 
+        let inlineDataImages = findMatches(in: text, pattern: dataImagePattern).map(\.value)
+        results.append(contentsOf: inlineDataImages)
+
         let bareMatches = findMatches(in: text, pattern: bareURLPattern)
             .map(\.value)
-            .filter { isLikelyImageURL($0) }
+            .filter { isLikelyImageURL($0) || isStandaloneURLLine(in: text, url: $0) }
         results.append(contentsOf: bareMatches)
 
         return dedupe(results)
@@ -101,7 +105,7 @@ enum MessageContentParser {
     }
 
     private static func parseInlineImages(in text: String) -> [MessageSegment] {
-        let tokenPattern = "\(markdownImagePattern)|(\(bareURLPattern))"
+        let tokenPattern = "\(markdownImagePattern)|(\(bareURLPattern))|(\(dataImagePattern))"
         guard let regex = try? NSRegularExpression(pattern: tokenPattern) else {
             return [.text(text)]
         }
@@ -126,7 +130,10 @@ enum MessageContentParser {
                 url = String(text[markdownURLRange]).trimmingCharacters(in: .whitespacesAndNewlines)
             } else if let bareURLRange = Range(match.range(at: 2), in: text) {
                 let candidate = String(text[bareURLRange]).trimmingCharacters(in: .whitespacesAndNewlines)
-                url = isLikelyImageURL(candidate) ? candidate : nil
+                url = (isLikelyImageURL(candidate) || isStandaloneURLLine(in: text, url: candidate)) ? candidate : nil
+            } else if let dataRange = Range(match.range(at: 3), in: text) {
+                let candidate = String(text[dataRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+                url = candidate.hasPrefix("data:image") ? candidate : nil
             } else {
                 url = nil
             }
@@ -167,6 +174,14 @@ enum MessageContentParser {
 
         let indicators = ["/images/", "/image/", "/img/", "/v1/images", "image=", "format=png", "format=jpg", "b64_json", "generated-image", "/files/"]
         return indicators.contains(where: { cleaned.contains($0) })
+    }
+
+    private static func isStandaloneURLLine(in text: String, url: String) -> Bool {
+        guard let range = text.range(of: url) else { return false }
+        let lineStart = text[..<range.lowerBound].lastIndex(of: "\n").map { text.index(after: $0) } ?? text.startIndex
+        let lineEnd = text[range.upperBound...].firstIndex(of: "\n") ?? text.endIndex
+        let line = text[lineStart..<lineEnd].trimmingCharacters(in: .whitespacesAndNewlines)
+        return line == url
     }
 
     private static func dedupe(_ values: [String]) -> [String] {
