@@ -31,6 +31,7 @@ struct ChatScreen: View {
     @GestureState private var sidebarDragTranslation: CGFloat = 0
     @State private var recentAssets: [PHAsset] = []
     @State private var recentThumbnails: [String: UIImage] = [:]
+    @State private var sidebarAnimationLock = false
     @FocusState private var isComposerFocused: Bool
 
     var body: some View {
@@ -65,9 +66,7 @@ struct ChatScreen: View {
                     Color.clear
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            withAnimation(.interactiveSpring(response: 0.24, dampingFraction: 0.9)) {
-                                isSidebarOpen = false
-                            }
+                            setSidebarOpen(false)
                         }
                 }
                 .ignoresSafeArea()
@@ -175,7 +174,7 @@ struct ChatScreen: View {
     private var header: some View {
         HStack(spacing: 10) {
             Button {
-                isSidebarOpen.toggle()
+                setSidebarOpen(!isSidebarOpen)
             } label: {
                 UnevenHamburgerIcon()
                     .foregroundStyle(.primary)
@@ -184,7 +183,7 @@ struct ChatScreen: View {
             .buttonStyle(.plain)
 
             Text("IEXA")
-                .font(.custom("SnellRoundhand", size: 34))
+                .font(.system(size: 18, weight: .bold, design: .serif))
                 .kerning(0.2)
                 .foregroundStyle(.primary)
 
@@ -675,7 +674,7 @@ struct ChatScreen: View {
                 Spacer()
                 Button {
                     viewModel.createNewSession()
-                    isSidebarOpen = false
+                    setSidebarOpen(false)
                 } label: {
                     Image(systemName: "square.and.pencil")
                         .font(.system(size: 20, weight: .regular))
@@ -704,7 +703,7 @@ struct ChatScreen: View {
             Divider()
             Button(role: .destructive) {
                 viewModel.clearAllSessions()
-                isSidebarOpen = false
+                setSidebarOpen(false)
             } label: {
                 Label("一键清空全部会话", systemImage: "trash")
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -764,9 +763,7 @@ struct ChatScreen: View {
                     sidebarWidth
                 )
 
-                withAnimation(.interactiveSpring(response: 0.24, dampingFraction: 0.9)) {
-                    isSidebarOpen = finalReveal > sidebarWidth * 0.5
-                }
+                setSidebarOpen(finalReveal > sidebarWidth * 0.5, force: true)
             }
     }
 
@@ -774,7 +771,7 @@ struct ChatScreen: View {
         VStack(alignment: .leading, spacing: 6) {
             Button {
                 viewModel.selectSession(session.id)
-                isSidebarOpen = false
+                setSidebarOpen(false)
             } label: {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(session.title)
@@ -1025,6 +1022,18 @@ struct ChatScreen: View {
             withTransaction(transaction) {
                 proxy.scrollTo(lastID, anchor: .bottom)
             }
+        }
+    }
+
+    private func setSidebarOpen(_ open: Bool, force: Bool = false) {
+        if !force && sidebarAnimationLock { return }
+        guard isSidebarOpen != open else { return }
+        sidebarAnimationLock = true
+        withAnimation(.interactiveSpring(response: 0.24, dampingFraction: 0.9)) {
+            isSidebarOpen = open
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
+            sidebarAnimationLock = false
         }
     }
 }

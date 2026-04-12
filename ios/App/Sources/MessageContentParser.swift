@@ -12,7 +12,6 @@ enum MessageContentParser {
     private static let markdownImagePattern = #"!\[[^\]]*\]\(([^)]+)\)"#
     private static let bareURLPattern = #"(?<!\]\()https?://[^\s\"<>)\]]+"#
     private static let dataImagePattern = #"data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+"#
-    private static let codeFencePattern = #"(?s)```(.*?)```"#
 
     static func parse(_ message: ChatMessage) -> [MessageSegment] {
         var segments: [MessageSegment] = []
@@ -30,55 +29,50 @@ enum MessageContentParser {
     }
 
     static func extractInlineImageURLs(from text: String) -> [String] {
-        var results: [String] = []
-        let markdownMatches = findMatches(in: text, pattern: markdownImagePattern)
-        results.append(contentsOf: markdownMatches.map(\.value))
-
-        let inlineDataImages = findMatches(in: text, pattern: dataImagePattern).map(\.value)
-        results.append(contentsOf: inlineDataImages)
-
-        let bareMatches = findMatches(in: text, pattern: bareURLPattern)
-            .map(\.value)
-            .filter { isLikelyImageURL($0) || isStandaloneURLLine(in: text, url: $0) }
-        results.append(contentsOf: bareMatches)
-
-        return dedupe(results)
+        var collected: [String] = []
+        collected.append(contentsOf: findMatches(in: text, pattern: markdownImagePattern))
+        collected.append(contentsOf: findMatches(in: text, pattern: dataImagePattern))
+        collected.append(contentsOf: findMatches(in: text, pattern: bareURLPattern).filter {
+            isLikelyImageURL($0) || isStandaloneURLLine(in: text, url: $0)
+        })
+        return dedupe(collected)
     }
 
     private static func parseTextContent(_ raw: String) -> [MessageSegment] {
         guard !raw.isEmpty else { return [] }
-        guard let regex = try? NSRegularExpression(pattern: codeFencePattern) else {
-            return parseInlineImages(in: raw)
-        }
-
-        let range = NSRange(raw.startIndex..<raw.endIndex, in: raw)
-        let matches = regex.matches(in: raw, range: range)
-        guard !matches.isEmpty else { return parseInlineImages(in: raw) }
-
         var segments: [MessageSegment] = []
         var cursor = raw.startIndex
+        while cursor < raw.endIndex {
+            guard let fenceStart = raw[cursor...].range(of: "```") else {
+                let trailingText = String(raw[cursor...])
+                if !trailingText.isEmpty {
+                    segments.append(contentsOf: parseInlineImages(in: trailingText))
+                }
+                break
+            }
 
-        for match in matches {
-            guard let wholeRange = Range(match.range, in: raw) else { continue }
-
-            let leadingText = String(raw[cursor..<wholeRange.lowerBound])
-            if !leadingText.isEmpty {
+            if fenceStart.lowerBound > cursor {
+                let leadingText = String(raw[cursor..<fenceStart.lowerBound])
                 segments.append(contentsOf: parseInlineImages(in: leadingText))
             }
 
-            if let codeRange = Range(match.range(at: 1), in: raw) {
-                let parsed = parseCodeBlock(String(raw[codeRange]))
+            let codeStart = fenceStart.upperBound
+            if let fenceEnd = raw[codeStart...].range(of: "```") {
+                let block = String(raw[codeStart..<fenceEnd.lowerBound])
+                let parsed = parseCodeBlock(block)
                 if !parsed.1.isEmpty {
                     segments.append(.code(language: parsed.0, content: parsed.1))
                 }
+                cursor = fenceEnd.upperBound
+            } else {
+                // Streaming unfinished fence: enter code module immediately.
+                let block = String(raw[codeStart...])
+                let parsed = parseCodeBlock(block)
+                if !parsed.1.isEmpty {
+                    segments.append(.code(language: parsed.0, content: parsed.1))
+                }
+                break
             }
-
-            cursor = wholeRange.upperBound
-        }
-
-        let trailingText = String(raw[cursor...])
-        if !trailingText.isEmpty {
-            segments.append(contentsOf: parseInlineImages(in: trailingText))
         }
         return segments
     }
@@ -107,12 +101,12 @@ enum MessageContentParser {
     private static func parseInlineImages(in text: String) -> [MessageSegment] {
         let tokenPattern = "\(markdownImagePattern)|(\(bareURLPattern))|(\(dataImagePattern))"
         guard let regex = try? NSRegularExpression(pattern: tokenPattern) else {
-            return [.text(text)]
+            return [.text(cleanMarkdownForDisplay(text))]
         }
 
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
         let matches = regex.matches(in: text, range: range)
-        guard !matches.isEmpty else { return [.text(text)] }
+        guard !matches.isEmpty else { return [.text(cleanMarkdownForDisplay(text))] }
 
         var results: [MessageSegment] = []
         var cursor = text.startIndex
@@ -122,7 +116,10 @@ enum MessageContentParser {
 
             let plain = String(text[cursor..<wholeRange.lowerBound])
             if !plain.isEmpty {
-                results.append(.text(plain))
+                let normalizedPlain = cleanMarkdownForDisplay(plain)
+                if !normalizedPlain.isEmpty {
+                    results.append(.text(normalizedPlain))
+                }
             }
 
             let url: String?
@@ -146,20 +143,23 @@ enum MessageContentParser {
 
         let tail = String(text[cursor...])
         if !tail.isEmpty {
-            results.append(.text(tail))
+            let normalizedTail = cleanMarkdownForDisplay(tail)
+            if !normalizedTail.isEmpty {
+                results.append(.text(normalizedTail))
+            }
         }
         return results
     }
 
-    private static func findMatches(in text: String, pattern: String) -> [(range: NSRange, value: String)] {
+    private static func findMatches(in text: String, pattern: String) -> [String] {
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
         let nsRange = NSRange(text.startIndex..<text.endIndex, in: text)
         return regex.matches(in: text, range: nsRange).compactMap { match in
             if match.numberOfRanges >= 2, let range = Range(match.range(at: 1), in: text) {
-                return (match.range, String(text[range]).trimmingCharacters(in: .whitespacesAndNewlines))
+                return String(text[range]).trimmingCharacters(in: .whitespacesAndNewlines)
             }
             if let range = Range(match.range, in: text) {
-                return (match.range, String(text[range]).trimmingCharacters(in: .whitespacesAndNewlines))
+                return String(text[range]).trimmingCharacters(in: .whitespacesAndNewlines)
             }
             return nil
         }
@@ -167,11 +167,9 @@ enum MessageContentParser {
 
     private static func isLikelyImageURL(_ rawURL: String) -> Bool {
         let cleaned = rawURL.lowercased()
-        if cleaned.contains("data:image") { return true }
-
+        if cleaned.hasPrefix("data:image") { return true }
         let imageSuffixes = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".heic", ".heif", ".svg"]
         if imageSuffixes.contains(where: { cleaned.contains($0) }) { return true }
-
         let indicators = ["/images/", "/image/", "/img/", "/v1/images", "image=", "format=png", "format=jpg", "b64_json", "generated-image", "/files/"]
         return indicators.contains(where: { cleaned.contains($0) })
     }
@@ -195,6 +193,19 @@ enum MessageContentParser {
         return result
     }
 
+    private static func cleanMarkdownForDisplay(_ raw: String) -> String {
+        var text = raw
+        text = text.replacingOccurrences(of: "(?m)^\\s{0,3}#{1,6}\\s*", with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?m)^\\s*[-*•]\\s+", with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?m)^\\s*>\\s?", with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?m)^\\s*([-*_])\\1{2,}\\s*$", with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: "**", with: "")
+        text = text.replacingOccurrences(of: "__", with: "")
+        text = text.replacingOccurrences(of: "`", with: "")
+        text = text.replacingOccurrences(of: "\r\n", with: "\n")
+        text = text.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
+        return text
+    }
     private static func mergeAdjacentTextSegments(_ segments: [MessageSegment]) -> [MessageSegment] {
         var merged: [MessageSegment] = []
         for segment in segments {

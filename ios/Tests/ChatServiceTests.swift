@@ -124,6 +124,41 @@ final class ChatServiceTests: XCTestCase {
         XCTAssertEqual(segments[0], .text("示例\n\n"))
         XCTAssertEqual(segments[1], .code(language: "swift", content: "let total = 3"))
     }
+
+    func testMessageContentParserShowsUnclosedCodeFenceAsCodeImmediately() {
+        let message = ChatMessage(
+            role: .assistant,
+            content: "先看代码\n```swift\nprint(\"streaming\")"
+        )
+
+        let segments = MessageContentParser.parse(message)
+
+        XCTAssertEqual(segments.count, 2)
+        XCTAssertEqual(segments[0], .text("先看代码\n"))
+        XCTAssertEqual(segments[1], .code(language: "swift", content: "print(\"streaming\")"))
+    }
+
+    func testMessageContentParserStripsMarkdownSymbolsInDisplayText() {
+        let message = ChatMessage(
+            role: .assistant,
+            content: "# 标题\n**加粗**\n- 列表项\n> 引用"
+        )
+
+        let segments = MessageContentParser.parse(message)
+        let text = segments.compactMap { segment -> String? in
+            if case .text(let value) = segment { return value }
+            return nil
+        }.joined()
+
+        XCTAssertFalse(text.contains("#"))
+        XCTAssertFalse(text.contains("**"))
+        XCTAssertFalse(text.contains("- "))
+        XCTAssertFalse(text.contains("> "))
+        XCTAssertTrue(text.contains("标题"))
+        XCTAssertTrue(text.contains("加粗"))
+        XCTAssertTrue(text.contains("列表项"))
+        XCTAssertTrue(text.contains("引用"))
+    }
 }
 
 final class ChatViewModelTests: XCTestCase {

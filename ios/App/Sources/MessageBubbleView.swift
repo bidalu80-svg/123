@@ -156,6 +156,22 @@ struct MessageBubbleView: View {
             }
     }
 
+    private func renderedRemoteImage(_ urlString: String, attachment: ChatImageAttachment) -> some View {
+        RemoteImageView(urlString: urlString)
+            .frame(maxWidth: 260, maxHeight: 260)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .contextMenu {
+                if !attachment.requestURLString.isEmpty {
+                    Button("复制图片链接") {
+                        UIPasteboard.general.string = attachment.requestURLString
+                    }
+                }
+                Button("保存到相册") {
+                    saveImageAttachment(attachment)
+                }
+            }
+    }
+
     private var codeBackgroundColor: Color {
         switch codeThemeMode {
         case .vscodeDark:
@@ -240,6 +256,9 @@ struct MessageBubbleView: View {
 
     private func normalizedRemoteURLString(_ raw: String) -> String? {
         var cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        cleaned = cleaned.trimmingCharacters(in: CharacterSet(charactersIn: "<>\"'"))
+        cleaned = cleaned.replacingOccurrences(of: "\\/", with: "/")
+        cleaned = cleaned.replacingOccurrences(of: "&amp;", with: "&")
         if cleaned.hasPrefix("//") {
             cleaned = "https:\(cleaned)"
         }
