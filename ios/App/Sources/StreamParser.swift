@@ -179,6 +179,11 @@ enum StreamParser {
                !url.isEmpty {
                 imageURLs.append(url)
             }
+            if let imageURLObj = row["image_url"] as? [String: Any],
+               let b64 = imageURLObj["b64_json"] as? String,
+               !b64.isEmpty {
+                imageURLs.append("data:image/png;base64,\(b64)")
+            }
             if let b64 = row["b64_json"] as? String, !b64.isEmpty {
                 imageURLs.append("data:image/png;base64,\(b64)")
             }

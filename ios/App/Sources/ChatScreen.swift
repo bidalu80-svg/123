@@ -184,9 +184,8 @@ struct ChatScreen: View {
             .buttonStyle(.plain)
 
             Text("IEXA")
-                .font(.custom("Didot", size: 22))
-                .italic()
-                .kerning(0.9)
+                .font(.custom("SnellRoundhand", size: 34))
+                .kerning(0.2)
                 .foregroundStyle(.primary)
 
             Menu {
@@ -284,7 +283,12 @@ struct ChatScreen: View {
                             .id(scrollTopAnchor)
 
                         ForEach(viewModel.messages) { message in
-                            MessageBubbleView(message: message, codeThemeMode: viewModel.config.codeThemeMode)
+                            MessageBubbleView(
+                                message: message,
+                                codeThemeMode: viewModel.config.codeThemeMode,
+                                apiKey: viewModel.config.apiKey,
+                                apiBaseURL: viewModel.config.normalizedBaseURL
+                            )
                                 .id(message.id)
                         }
                     }
@@ -310,7 +314,7 @@ struct ChatScreen: View {
                     }
                 }
 
-                if !viewModel.messages.isEmpty {
+                if shouldShowScrollJumpButtons {
                     scrollJumpButtons(proxy: proxy)
                         .padding(.trailing, 16)
                         .padding(.bottom, 14)
@@ -636,6 +640,13 @@ struct ChatScreen: View {
             merged.append(model)
         }
         return merged
+    }
+
+    private var shouldShowScrollJumpButtons: Bool {
+        let assistantMessages = viewModel.messages.filter { $0.role == .assistant }
+        let maxLength = assistantMessages.map { $0.content.count }.max() ?? 0
+        let totalLength = assistantMessages.reduce(0) { $0 + $1.content.count }
+        return maxLength >= 380 || totalLength >= 1200
     }
 
     private func shortModelName(_ name: String) -> String {

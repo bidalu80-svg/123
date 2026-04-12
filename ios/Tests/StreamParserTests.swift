@@ -32,6 +32,30 @@ final class StreamParserTests: XCTestCase {
         XCTAssertEqual(chunk?.imageURLs, ["https://cdn.example.com/pic.webp"])
     }
 
+    func testParseMarkdownImageWithoutExtension() {
+        let line = #"{"choices":[{"message":{"content":"![img](https://cdn.example.com/generate/abc123?token=1)"}}]}"#
+        let chunk = StreamParser.parse(line: line)
+
+        XCTAssertEqual(chunk?.isDone, false)
+        XCTAssertEqual(chunk?.imageURLs, ["https://cdn.example.com/generate/abc123?token=1"])
+    }
+
+    func testParseStandaloneBareURLWithoutImageSuffix() {
+        let line = #"{"choices":[{"message":{"content":"https://cdn.example.com/generated/abc123?token=1"}}]}"#
+        let chunk = StreamParser.parse(line: line)
+
+        XCTAssertEqual(chunk?.isDone, false)
+        XCTAssertEqual(chunk?.imageURLs, ["https://cdn.example.com/generated/abc123?token=1"])
+    }
+
+    func testParseDataImageURL() {
+        let line = #"{"choices":[{"message":{"content":"data:image/png;base64,abc123=="}}]}"#
+        let chunk = StreamParser.parse(line: line)
+
+        XCTAssertEqual(chunk?.isDone, false)
+        XCTAssertEqual(chunk?.imageURLs, ["data:image/png;base64,abc123=="])
+    }
+
     func testExtractPayloadSupportsImageDataArray() {
         let payload: [String: Any] = [
             "data": [
@@ -42,5 +66,17 @@ final class StreamParserTests: XCTestCase {
         let extracted = StreamParser.extractPayload(from: payload)
         XCTAssertEqual(extracted.text, "")
         XCTAssertEqual(extracted.imageURLs, ["https://cdn.example.com/gen-image"])
+    }
+
+    func testExtractPayloadSupportsNestedImageURLB64() {
+        let payload: [String: Any] = [
+            "data": [
+                ["image_url": ["b64_json": "abc123"]]
+            ]
+        ]
+
+        let extracted = StreamParser.extractPayload(from: payload)
+        XCTAssertEqual(extracted.text, "")
+        XCTAssertEqual(extracted.imageURLs, ["data:image/png;base64,abc123"])
     }
 }
