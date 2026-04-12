@@ -5,6 +5,8 @@ import Photos
 struct MessageBubbleView: View {
     let message: ChatMessage
     let codeThemeMode: CodeThemeMode
+    let apiKey: String
+    let apiBaseURL: String
     @Environment(\.colorScheme) private var colorScheme
     @State private var saveFeedback: String?
 
@@ -130,28 +132,16 @@ struct MessageBubbleView: View {
     private func messageImage(_ attachment: ChatImageAttachment) -> some View {
         if let data = attachment.decodedImageData, let uiImage = UIImage(data: data) {
             renderedMessageImage(Image(uiImage: uiImage), attachment: attachment)
-        } else if let urlString = attachment.renderURLString, let url = URL(string: urlString) {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let image):
-                    renderedMessageImage(image, attachment: attachment)
-                case .failure:
-                    Text("图片加载失败")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                case .empty:
-                    ProgressView()
-                @unknown default:
-                    EmptyView()
-                }
-            }
+        } else if let urlString = attachment.renderURLString {
+            renderedMessageImage(
+                RemoteImageView(urlString: urlString, apiKey: apiKey, baseURL: apiBaseURL),
+                attachment: attachment
+            )
         }
     }
 
-    private func renderedMessageImage(_ image: Image, attachment: ChatImageAttachment) -> some View {
-        image
-            .resizable()
-            .scaledToFit()
+    private func renderedMessageImage<V: View>(_ imageView: V, attachment: ChatImageAttachment) -> some View {
+        imageView
             .frame(maxWidth: 260, maxHeight: 260)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .contextMenu {
@@ -198,7 +188,9 @@ struct MessageBubbleView: View {
             return
         }
 
-        guard let urlString = attachment.renderURLString, let url = URL(string: urlString) else {
+        guard let urlString = attachment.renderURLString,
+              let resolved = normalizedRemoteURLString(urlString),
+              let url = URL(string: resolved) else {
             saveFeedback = "当前图片无法保存。"
             return
         }
@@ -244,6 +236,23 @@ struct MessageBubbleView: View {
         default:
             saveFeedback = "没有相册写入权限。"
         }
+    }
+
+    private func normalizedRemoteURLString(_ raw: String) -> String? {
+        var cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.hasPrefix("//") {
+            cleaned = "https:\(cleaned)"
+        }
+        if cleaned.hasPrefix("/") {
+            let base = apiBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            if !base.isEmpty {
+                cleaned = "\(base)\(cleaned)"
+            }
+        }
+        if cleaned.hasPrefix("http://") || cleaned.hasPrefix("https://") {
+            return cleaned
+        }
+        return nil
     }
 }
 

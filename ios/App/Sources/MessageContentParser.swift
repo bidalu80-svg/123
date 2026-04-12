@@ -9,7 +9,8 @@ enum MessageSegment: Equatable {
 }
 
 enum MessageContentParser {
-    private static let imageTokenPattern = #"!\[[^\]]*\]\(([^)]+)\)|(https?://[^\s\"]+?(?:\.png|\.jpe?g|\.gif|\.webp|\.bmp|\.heic|\.heif|\.svg)(?:\?[^\s\"]*)?(?:#[^\s\"]*)?)"#
+    private static let markdownImagePattern = #"!\[[^\]]*\]\(([^)]+)\)"#
+    private static let bareURLPattern = #"https?://[^\s\"<>)\]]+"#
     private static let codeFencePattern = #"(?s)```(.*?)```"#
 
     static func parse(_ message: ChatMessage) -> [MessageSegment] {
@@ -28,21 +29,16 @@ enum MessageContentParser {
     }
 
     static func extractInlineImageURLs(from text: String) -> [String] {
-        guard let regex = try? NSRegularExpression(pattern: imageTokenPattern) else {
-            return []
-        }
+        var results: [String] = []
+        let markdownMatches = findMatches(in: text, pattern: markdownImagePattern)
+        results.append(contentsOf: markdownMatches.map(\.value))
 
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        let matches = regex.matches(in: text, range: range)
-        return matches.compactMap { match in
-            if let markdownURLRange = Range(match.range(at: 1), in: text) {
-                return String(text[markdownURLRange])
-            }
-            if let bareURLRange = Range(match.range(at: 2), in: text) {
-                return String(text[bareURLRange])
-            }
-            return nil
-        }
+        let bareMatches = findMatches(in: text, pattern: bareURLPattern)
+            .map(\.value)
+            .filter { isLikelyImageURL($0) }
+        results.append(contentsOf: bareMatches)
+
+        return dedupe(results)
     }
 
     private static func parseTextContent(_ raw: String) -> [MessageSegment] {
@@ -105,7 +101,8 @@ enum MessageContentParser {
     }
 
     private static func parseInlineImages(in text: String) -> [MessageSegment] {
-        guard let regex = try? NSRegularExpression(pattern: imageTokenPattern) else {
+        let tokenPattern = "\(markdownImagePattern)|(\(bareURLPattern))"
+        guard let regex = try? NSRegularExpression(pattern: tokenPattern) else {
             return [.text(text)]
         }
 
@@ -126,9 +123,10 @@ enum MessageContentParser {
 
             let url: String?
             if let markdownURLRange = Range(match.range(at: 1), in: text) {
-                url = String(text[markdownURLRange])
+                url = String(text[markdownURLRange]).trimmingCharacters(in: .whitespacesAndNewlines)
             } else if let bareURLRange = Range(match.range(at: 2), in: text) {
-                url = String(text[bareURLRange])
+                let candidate = String(text[bareURLRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+                url = isLikelyImageURL(candidate) ? candidate : nil
             } else {
                 url = nil
             }
@@ -144,6 +142,42 @@ enum MessageContentParser {
             results.append(.text(tail))
         }
         return results
+    }
+
+    private static func findMatches(in text: String, pattern: String) -> [(range: NSRange, value: String)] {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let nsRange = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.matches(in: text, range: nsRange).compactMap { match in
+            if match.numberOfRanges >= 2, let range = Range(match.range(at: 1), in: text) {
+                return (match.range, String(text[range]).trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+            if let range = Range(match.range, in: text) {
+                return (match.range, String(text[range]).trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+            return nil
+        }
+    }
+
+    private static func isLikelyImageURL(_ rawURL: String) -> Bool {
+        let cleaned = rawURL.lowercased()
+        if cleaned.contains("data:image") { return true }
+
+        let imageSuffixes = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".heic", ".heif", ".svg"]
+        if imageSuffixes.contains(where: { cleaned.contains($0) }) { return true }
+
+        let indicators = ["/images/", "/image/", "/img/", "/v1/images", "image=", "format=png", "format=jpg", "b64_json", "generated-image", "/files/"]
+        return indicators.contains(where: { cleaned.contains($0) })
+    }
+
+    private static func dedupe(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for value in values {
+            if value.isEmpty || seen.contains(value) { continue }
+            seen.insert(value)
+            result.append(value)
+        }
+        return result
     }
 
     private static func mergeAdjacentTextSegments(_ segments: [MessageSegment]) -> [MessageSegment] {
