@@ -93,7 +93,7 @@ jobs:
             -project ChatAppiOS.xcodeproj \
             -scheme ChatApp \
             -configuration Debug \
-            -destination 'platform=iOS Simulator,OS=latest,name=iPhone 15' \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
             test
 
       - name: Override bundle identifier if provided
