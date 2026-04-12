@@ -269,6 +269,7 @@ final class ChatService {
 enum ResponseCleaner {
     static func cleanAssistantText(_ raw: String) -> String {
         var text = raw
+        let preservedCodeBlocks = preserveCodeBlocks(in: &text)
 
         text = text.replacingOccurrences(
             of: "(?is)<think>.*?</think>",
@@ -306,7 +307,6 @@ enum ResponseCleaner {
             options: .regularExpression
         )
 
-        text = text.replacingOccurrences(of: "```", with: "")
         text = text.replacingOccurrences(of: "**", with: "")
         text = text.replacingOccurrences(of: "__", with: "")
         text = text.replacingOccurrences(of: "`", with: "")
@@ -325,7 +325,36 @@ enum ResponseCleaner {
 
         text = text.replacingOccurrences(of: "\r\n", with: "\n")
         text = text.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
+        text = restoreCodeBlocks(in: text, preserved: preservedCodeBlocks)
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func preserveCodeBlocks(in text: inout String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: #"(?s)```.*?```"#) else {
+            return []
+        }
+
+        let nsRange = NSRange(text.startIndex..<text.endIndex, in: text)
+        let matches = regex.matches(in: text, range: nsRange)
+        guard !matches.isEmpty else { return [] }
+
+        var preserved: [String] = []
+        for (index, match) in matches.enumerated().reversed() {
+            guard let range = Range(match.range, in: text) else { continue }
+            preserved.insert(String(text[range]), at: 0)
+            text.replaceSubrange(range, with: "CODEBLOCKTOKEN\(index)")
+        }
+        return preserved
+    }
+
+    private static func restoreCodeBlocks(in text: String, preserved: [String]) -> String {
+        guard !preserved.isEmpty else { return text }
+
+        var restored = text
+        for (index, block) in preserved.enumerated() {
+            restored = restored.replacingOccurrences(of: "CODEBLOCKTOKEN\(index)", with: block)
+        }
+        return restored
     }
 }
 

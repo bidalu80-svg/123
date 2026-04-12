@@ -32,6 +32,7 @@ final class ChatViewModel: ObservableObject {
     @Published var isLoadingModels = false
     @Published var isNetworkReachable = true
     @Published var isCurrentModelAvailable = false
+    @Published private(set) var hasValidatedModelList = false
 
     private let service: ChatService
     private var autoSaveEnabled = false
@@ -201,6 +202,9 @@ final class ChatViewModel: ObservableObject {
         config = ChatConfigStore.load()
         selectedModelFromList = config.model
         autoSaveEnabled = true
+        hasValidatedModelList = false
+        availableModels = []
+        updateCurrentModelAvailability()
         statusMessage = "配置已重置"
         appendLog("配置测试：配置已重置为默认值。")
     }
@@ -285,6 +289,7 @@ final class ChatViewModel: ObservableObject {
         do {
             let models = try await service.fetchModels(config: normalizedConfigForSave(config))
             availableModels = models
+            hasValidatedModelList = true
             if !models.contains(config.model), let first = models.first {
                 config.model = first
             }
@@ -294,6 +299,7 @@ final class ChatViewModel: ObservableObject {
             appendLog("模型测试：已获取 \(models.count) 个模型。")
         } catch {
             availableModels = []
+            hasValidatedModelList = false
             updateCurrentModelAvailability()
             appendLog("模型测试失败：\(error.localizedDescription)")
             statusMessage = "模型列表获取失败"
@@ -350,13 +356,8 @@ final class ChatViewModel: ObservableObject {
 
     private func updateCurrentModelAvailability() {
         let trimmed = config.model.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard isNetworkReachable, !trimmed.isEmpty else {
+        guard isNetworkReachable, !trimmed.isEmpty, hasValidatedModelList else {
             isCurrentModelAvailable = false
-            return
-        }
-
-        if availableModels.isEmpty {
-            isCurrentModelAvailable = true
             return
         }
 

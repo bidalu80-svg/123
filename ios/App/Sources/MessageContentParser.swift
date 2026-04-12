@@ -10,6 +10,7 @@ enum MessageSegment: Equatable {
 
 enum MessageContentParser {
     private static let imageTokenPattern = #"!\[[^\]]*\]\(([^)]+)\)|(https?://[^\s\"]+?(?:\.png|\.jpe?g|\.gif|\.webp|\.bmp|\.heic|\.heif|\.svg)(?:\?[^\s\"]*)?(?:#[^\s\"]*)?)"#
+    private static let codeFencePattern = #"(?s)```(.*?)```"#
 
     static func parse(_ message: ChatMessage) -> [MessageSegment] {
         var segments: [MessageSegment] = []
@@ -46,7 +47,40 @@ enum MessageContentParser {
 
     private static func parseTextContent(_ raw: String) -> [MessageSegment] {
         guard !raw.isEmpty else { return [] }
-        return parseInlineImages(in: raw)
+        guard let regex = try? NSRegularExpression(pattern: codeFencePattern) else {
+            return parseInlineImages(in: raw)
+        }
+
+        let range = NSRange(raw.startIndex..<raw.endIndex, in: raw)
+        let matches = regex.matches(in: raw, range: range)
+        guard !matches.isEmpty else { return parseInlineImages(in: raw) }
+
+        var segments: [MessageSegment] = []
+        var cursor = raw.startIndex
+
+        for match in matches {
+            guard let wholeRange = Range(match.range, in: raw) else { continue }
+
+            let leadingText = String(raw[cursor..<wholeRange.lowerBound])
+            if !leadingText.isEmpty {
+                segments.append(contentsOf: parseInlineImages(in: leadingText))
+            }
+
+            if let codeRange = Range(match.range(at: 1), in: raw) {
+                let parsed = parseCodeBlock(String(raw[codeRange]))
+                if !parsed.1.isEmpty {
+                    segments.append(.code(language: parsed.0, content: parsed.1))
+                }
+            }
+
+            cursor = wholeRange.upperBound
+        }
+
+        let trailingText = String(raw[cursor...])
+        if !trailingText.isEmpty {
+            segments.append(contentsOf: parseInlineImages(in: trailingText))
+        }
+        return segments
     }
 
     private static func parseCodeBlock(_ block: String) -> (String?, String) {

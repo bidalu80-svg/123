@@ -9,6 +9,7 @@ struct ChatScreen: View {
 
     private let sidebarWidth: CGFloat = 286
     private let edgeDragActivationWidth: CGFloat = 28
+    private let scrollTopAnchor = "scroll-top-anchor"
     private let starterPrompts: [(title: String, subtitle: String)] = [
         ("创作一幅插图", "为烘焙店"),
         ("告诉我一个冷知识", "关于罗马帝国"),
@@ -30,6 +31,7 @@ struct ChatScreen: View {
     @GestureState private var sidebarDragTranslation: CGFloat = 0
     @State private var recentAssets: [PHAsset] = []
     @State private var recentThumbnails: [String: UIImage] = [:]
+    @FocusState private var isComposerFocused: Bool
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -175,17 +177,16 @@ struct ChatScreen: View {
             Button {
                 isSidebarOpen.toggle()
             } label: {
-                Image(systemName: "line.3.horizontal")
-                    .font(.system(size: 21, weight: .regular))
+                UnevenHamburgerIcon()
                     .foregroundStyle(.primary)
-                    .frame(width: 36, height: 36)
+                    .frame(width: 34, height: 34)
             }
             .buttonStyle(.plain)
 
             Text("IEXA")
-                .font(.custom("Didot", size: 28))
+                .font(.custom("Didot", size: 22))
                 .italic()
-                .kerning(1.2)
+                .kerning(0.9)
                 .foregroundStyle(.primary)
 
             Menu {
@@ -275,32 +276,44 @@ struct ChatScreen: View {
 
     private var messageList: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 16) {
-                    ForEach(viewModel.messages) { message in
-                        MessageBubbleView(message: message, codeThemeMode: viewModel.config.codeThemeMode)
-                            .id(message.id)
+            ZStack(alignment: .bottomTrailing) {
+                ScrollView {
+                    LazyVStack(spacing: 16) {
+                        Color.clear
+                            .frame(height: 1)
+                            .id(scrollTopAnchor)
+
+                        ForEach(viewModel.messages) { message in
+                            MessageBubbleView(message: message, codeThemeMode: viewModel.config.codeThemeMode)
+                                .id(message.id)
+                        }
+                    }
+                    .scrollTargetLayout()
+                    .padding(.horizontal, 12)
+                    .padding(.top, 16)
+                    .padding(.bottom, 18)
+                }
+                .scrollIndicators(.hidden)
+                .scrollDismissesKeyboard(.interactively)
+                .onAppear {
+                    scrollToBottom(proxy, animated: false)
+                }
+                .onChange(of: viewModel.messages.count) { _, _ in
+                    guard let lastMessage = viewModel.messages.last else { return }
+                    if isPinnedToBottom || lastMessage.role == .user {
+                        scrollToBottom(proxy, animated: true)
                     }
                 }
-                .scrollTargetLayout()
-                .padding(.horizontal, 12)
-                .padding(.top, 16)
-                .padding(.bottom, 18)
-            }
-            .scrollIndicators(.hidden)
-            .scrollDismissesKeyboard(.interactively)
-            .onAppear {
-                scrollToBottom(proxy, animated: false)
-            }
-            .onChange(of: viewModel.messages.count) { _, _ in
-                guard let lastMessage = viewModel.messages.last else { return }
-                if isPinnedToBottom || lastMessage.role == .user {
-                    scrollToBottom(proxy, animated: true)
+                .onChange(of: viewModel.streamScrollTrigger) { _, _ in
+                    if isPinnedToBottom {
+                        scrollToBottom(proxy, animated: false)
+                    }
                 }
-            }
-            .onChange(of: viewModel.streamScrollTrigger) { _, _ in
-                if isPinnedToBottom {
-                    scrollToBottom(proxy, animated: false)
+
+                if !viewModel.messages.isEmpty {
+                    scrollJumpButtons(proxy: proxy)
+                        .padding(.trailing, 16)
+                        .padding(.bottom, 14)
                 }
             }
         }
@@ -325,30 +338,22 @@ struct ChatScreen: View {
                     showAttachmentSheet = true
                 } label: {
                     Image(systemName: "plus")
-                        .font(.system(size: 23, weight: .regular))
+                        .font(.system(size: 21, weight: .regular))
                         .foregroundStyle(.secondary)
-                        .frame(width: 44, height: 44)
+                        .frame(width: 40, height: 40)
                         .background(Circle().fill(Color(.systemGray6)))
                 }
                 .buttonStyle(.plain)
 
-                TextField("有问题，尽管问", text: $viewModel.draftMessage)
-                    .lineLimit(1)
-                    .submitLabel(.send)
-                    .onSubmit {
-                        guard viewModel.canSend else { return }
-                        Task { await viewModel.sendCurrentMessage() }
-                    }
-                    .font(.system(size: 17))
-                    .frame(height: 38, alignment: .center)
+                textInputArea
 
                 Button {
                     pasteClipboardIntoDraft(sendAfterPaste: false)
                 } label: {
                     Image(systemName: "doc.on.clipboard")
-                        .font(.system(size: 24, weight: .regular))
+                        .font(.system(size: 22, weight: .regular))
                         .foregroundStyle(.secondary)
-                        .frame(width: 34, height: 34)
+                        .frame(width: 32, height: 32)
                 }
                 .buttonStyle(.plain)
                 .contextMenu {
@@ -383,15 +388,15 @@ struct ChatScreen: View {
                     }
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Color.white)
-                    .frame(width: 44, height: 44)
+                    .frame(width: 40, height: 40)
                     .background(Circle().fill(Color.black))
                 }
                 .disabled(!viewModel.canSend && !viewModel.isSending)
             }
-            .padding(.vertical, 6)
-            .padding(.leading, 10)
+            .padding(.vertical, 5)
+            .padding(.leading, 9)
             .padding(.trailing, 8)
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         }
         .padding(.horizontal, 12)
         .padding(.top, 6)
@@ -400,6 +405,57 @@ struct ChatScreen: View {
         .overlay(alignment: .top) {
             Divider().opacity(0.18)
         }
+    }
+
+    private var textInputArea: some View {
+        HStack {
+            TextField("有问题，尽管问", text: $viewModel.draftMessage)
+                .lineLimit(1)
+                .submitLabel(.send)
+                .focused($isComposerFocused)
+                .onSubmit {
+                    guard viewModel.canSend else { return }
+                    Task { await viewModel.sendCurrentMessage() }
+                }
+                .font(.system(size: 16))
+        }
+        .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+        .padding(.horizontal, 12)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            isComposerFocused = true
+        }
+    }
+
+    private func scrollJumpButtons(proxy: ScrollViewProxy) -> some View {
+        VStack(spacing: 10) {
+            Button {
+                isPinnedToBottom = false
+                withAnimation(.easeOut(duration: 0.18)) {
+                    proxy.scrollTo(scrollTopAnchor, anchor: .top)
+                }
+            } label: {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 38, height: 38)
+                    .background(.ultraThinMaterial, in: Circle())
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                isPinnedToBottom = true
+                scrollToBottom(proxy, animated: true)
+            } label: {
+                Image(systemName: "arrow.down")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 38, height: 38)
+                    .background(.ultraThinMaterial, in: Circle())
+            }
+            .buttonStyle(.plain)
+        }
+        .opacity(0.82)
     }
 
     private var starterPromptStrip: some View {
@@ -424,6 +480,7 @@ struct ChatScreen: View {
                     ForEach(Array(activeStarterPrompts.enumerated()), id: \.offset) { _, prompt in
                         Button {
                             viewModel.draftMessage = "\(prompt.title)\n\(prompt.subtitle)"
+                            isComposerFocused = true
                         } label: {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(prompt.title)
@@ -826,6 +883,7 @@ struct ChatScreen: View {
         }
         viewModel.draftMessage = pasted
         viewModel.statusMessage = "已粘贴剪贴板文本"
+        isComposerFocused = true
         if sendAfterPaste {
             Task { await viewModel.sendCurrentMessage() }
         }
@@ -956,6 +1014,19 @@ struct ChatScreen: View {
             withTransaction(transaction) {
                 proxy.scrollTo(lastID, anchor: .bottom)
             }
+        }
+    }
+}
+
+private struct UnevenHamburgerIcon: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Capsule(style: .continuous)
+                .frame(width: 18, height: 2.4)
+            Capsule(style: .continuous)
+                .frame(width: 13, height: 2.4)
+            Capsule(style: .continuous)
+                .frame(width: 9, height: 2.4)
         }
     }
 }
