@@ -9,6 +9,8 @@ enum MessageSegment: Equatable {
 }
 
 enum MessageContentParser {
+    private static let imageTokenPattern = #"!\[[^\]]*\]\(([^)]+)\)|(https?://[^\s\"]+?(?:\.png|\.jpe?g|\.gif|\.webp|\.bmp|\.heic|\.heif|\.svg)(?:\?[^\s\"]*)?(?:#[^\s\"]*)?)"#
+
     static func parse(_ message: ChatMessage) -> [MessageSegment] {
         var segments: [MessageSegment] = []
 
@@ -25,55 +27,26 @@ enum MessageContentParser {
     }
 
     static func extractInlineImageURLs(from text: String) -> [String] {
-        let pattern = #"!\[[^\]]*\]\(([^)]+)\)"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+        guard let regex = try? NSRegularExpression(pattern: imageTokenPattern) else {
             return []
         }
 
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
         let matches = regex.matches(in: text, range: range)
         return matches.compactMap { match in
-            guard let urlRange = Range(match.range(at: 1), in: text) else { return nil }
-            return String(text[urlRange])
+            if let markdownURLRange = Range(match.range(at: 1), in: text) {
+                return String(text[markdownURLRange])
+            }
+            if let bareURLRange = Range(match.range(at: 2), in: text) {
+                return String(text[bareURLRange])
+            }
+            return nil
         }
     }
 
     private static func parseTextContent(_ raw: String) -> [MessageSegment] {
         guard !raw.isEmpty else { return [] }
-
-        var results: [MessageSegment] = []
-        var cursor = raw.startIndex
-
-        while let fenceStart = raw[cursor...].range(of: "```") {
-            let plainPrefix = String(raw[cursor..<fenceStart.lowerBound])
-            if !plainPrefix.isEmpty {
-                results.append(contentsOf: parseInlineImages(in: plainPrefix))
-            }
-
-            let afterFence = fenceStart.upperBound
-            if let fenceEnd = raw[afterFence...].range(of: "```") {
-                let block = String(raw[afterFence..<fenceEnd.lowerBound])
-                let (language, code) = parseCodeBlock(block)
-                results.append(.code(language: language, content: code))
-                cursor = fenceEnd.upperBound
-            } else {
-                // Keep unfinished code fence as stream-updating code block.
-                let block = String(raw[afterFence...])
-                let (language, code) = parseCodeBlock(block)
-                results.append(.code(language: language, content: code))
-                cursor = raw.endIndex
-                break
-            }
-        }
-
-        if cursor < raw.endIndex {
-            let tail = String(raw[cursor...])
-            if !tail.isEmpty {
-                results.append(contentsOf: parseInlineImages(in: tail))
-            }
-        }
-
-        return results
+        return parseInlineImages(in: raw)
     }
 
     private static func parseCodeBlock(_ block: String) -> (String?, String) {
@@ -98,8 +71,7 @@ enum MessageContentParser {
     }
 
     private static func parseInlineImages(in text: String) -> [MessageSegment] {
-        let pattern = #"!\[[^\]]*\]\(([^)]+)\)"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+        guard let regex = try? NSRegularExpression(pattern: imageTokenPattern) else {
             return [.text(text)]
         }
 
@@ -111,18 +83,25 @@ enum MessageContentParser {
         var cursor = text.startIndex
 
         for match in matches {
-            guard
-                let wholeRange = Range(match.range, in: text),
-                let urlRange = Range(match.range(at: 1), in: text)
-            else { continue }
+            guard let wholeRange = Range(match.range, in: text) else { continue }
 
             let plain = String(text[cursor..<wholeRange.lowerBound])
             if !plain.isEmpty {
                 results.append(.text(plain))
             }
 
-            let url = String(text[urlRange])
-            results.append(.image(ChatImageAttachment(dataURL: url, mimeType: "image/*", remoteURL: url)))
+            let url: String?
+            if let markdownURLRange = Range(match.range(at: 1), in: text) {
+                url = String(text[markdownURLRange])
+            } else if let bareURLRange = Range(match.range(at: 2), in: text) {
+                url = String(text[bareURLRange])
+            } else {
+                url = nil
+            }
+
+            if let url, !url.isEmpty {
+                results.append(.image(ChatImageAttachment(dataURL: url, mimeType: "image/*", remoteURL: url)))
+            }
             cursor = wholeRange.upperBound
         }
 

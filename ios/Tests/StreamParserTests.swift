@@ -24,6 +24,14 @@ final class StreamParserTests: XCTestCase {
         XCTAssertEqual(chunk?.imageURLs, ["https://cdn.example.com/pic.png"])
     }
 
+    func testParseTextContentExtractsBareImageURL() {
+        let line = #"{"choices":[{"message":{"content":"这是图片\nhttps://cdn.example.com/pic.webp"}}]}"#
+        let chunk = StreamParser.parse(line: line)
+
+        XCTAssertEqual(chunk?.isDone, false)
+        XCTAssertEqual(chunk?.imageURLs, ["https://cdn.example.com/pic.webp"])
+    }
+
     func testExtractPayloadSupportsImageDataArray() {
         let payload: [String: Any] = [
             "data": [

@@ -1,10 +1,12 @@
 import SwiftUI
 import UIKit
+import Photos
 
 struct MessageBubbleView: View {
     let message: ChatMessage
     let codeThemeMode: CodeThemeMode
     @Environment(\.colorScheme) private var colorScheme
+    @State private var saveFeedback: String?
 
     var body: some View {
         Group {
@@ -18,6 +20,13 @@ struct MessageBubbleView: View {
             Button("复制全部") {
                 UIPasteboard.general.string = message.copyableText
             }
+        }
+        .alert("提示", isPresented: saveFeedbackBinding) {
+            Button("确定", role: .cancel) {
+                saveFeedback = nil
+            }
+        } message: {
+            Text(saveFeedback ?? "")
         }
     }
 
@@ -40,6 +49,7 @@ struct MessageBubbleView: View {
         HStack {
             Spacer(minLength: 38)
             content
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.vertical, 13)
                 .padding(.horizontal, 16)
                 .background(
@@ -51,6 +61,7 @@ struct MessageBubbleView: View {
                         .stroke(Color.black.opacity(colorScheme == .dark ? 0.2 : 0.05), lineWidth: 0.8)
                 )
                 .frame(maxWidth: 292, alignment: .trailing)
+                .frame(maxWidth: .infinity, alignment: .trailing)
         }
     }
 
@@ -118,25 +129,12 @@ struct MessageBubbleView: View {
     @ViewBuilder
     private func messageImage(_ attachment: ChatImageAttachment) -> some View {
         if let data = attachment.decodedImageData, let uiImage = UIImage(data: data) {
-            Image(uiImage: uiImage)
-                .resizable()
-                .scaledToFit()
-                .frame(maxWidth: 260, maxHeight: 260)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .contextMenu {
-                    Button("复制图片链接") {
-                        UIPasteboard.general.string = attachment.requestURLString
-                    }
-                }
+            renderedMessageImage(Image(uiImage: uiImage), attachment: attachment)
         } else if let urlString = attachment.renderURLString, let url = URL(string: urlString) {
             AsyncImage(url: url) { phase in
                 switch phase {
                 case .success(let image):
-                    image
-                        .resizable()
-                        .scaledToFit()
-                        .frame(maxWidth: 260, maxHeight: 260)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    renderedMessageImage(image, attachment: attachment)
                 case .failure:
                     Text("图片加载失败")
                         .font(.caption)
@@ -147,12 +145,25 @@ struct MessageBubbleView: View {
                     EmptyView()
                 }
             }
+        }
+    }
+
+    private func renderedMessageImage(_ image: Image, attachment: ChatImageAttachment) -> some View {
+        image
+            .resizable()
+            .scaledToFit()
+            .frame(maxWidth: 260, maxHeight: 260)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .contextMenu {
-                Button("复制图片链接") {
-                    UIPasteboard.general.string = attachment.requestURLString
+                if !attachment.requestURLString.isEmpty {
+                    Button("复制图片链接") {
+                        UIPasteboard.general.string = attachment.requestURLString
+                    }
+                }
+                Button("保存到相册") {
+                    saveImageAttachment(attachment)
                 }
             }
-        }
     }
 
     private var codeBackgroundColor: Color {
@@ -168,5 +179,80 @@ struct MessageBubbleView: View {
 
     private var userBubbleColor: Color {
         colorScheme == .dark ? Color(red: 0.2, green: 0.2, blue: 0.22) : Color(red: 0.94, green: 0.94, blue: 0.95)
+    }
+
+    private var saveFeedbackBinding: Binding<Bool> {
+        Binding(
+            get: { saveFeedback != nil },
+            set: { newValue in
+                if !newValue {
+                    saveFeedback = nil
+                }
+            }
+        )
+    }
+
+    private func saveImageAttachment(_ attachment: ChatImageAttachment) {
+        if let data = attachment.decodedImageData, let image = UIImage(data: data) {
+            writeImageToPhotos(image)
+            return
+        }
+
+        guard let urlString = attachment.renderURLString, let url = URL(string: urlString) else {
+            saveFeedback = "当前图片无法保存。"
+            return
+        }
+
+        Task {
+            do {
+                let (data, _) = try await URLSession.shared.data(from: url)
+                guard let image = UIImage(data: data) else {
+                    await MainActor.run {
+                        saveFeedback = "图片保存失败。"
+                    }
+                    return
+                }
+                await MainActor.run {
+                    writeImageToPhotos(image)
+                }
+            } catch {
+                await MainActor.run {
+                    saveFeedback = "图片保存失败：\(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func writeImageToPhotos(_ image: UIImage) {
+        let current = PHPhotoLibrary.authorizationStatus(for: .addOnly)
+        switch current {
+        case .authorized, .limited:
+            UIImageWriteToSavedPhotosAlbum(image, ImageSaveCoordinator.shared, #selector(ImageSaveCoordinator.handleSaveResult(_:didFinishSavingWithError:contextInfo:)), nil)
+            ImageSaveCoordinator.shared.onComplete = { error in
+                saveFeedback = error == nil ? "已保存到相册。" : "图片保存失败：\(error?.localizedDescription ?? "未知错误")"
+            }
+        case .notDetermined:
+            PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+                Task { @MainActor in
+                    if status == .authorized || status == .limited {
+                        writeImageToPhotos(image)
+                    } else {
+                        saveFeedback = "没有相册写入权限。"
+                    }
+                }
+            }
+        default:
+            saveFeedback = "没有相册写入权限。"
+        }
+    }
+}
+
+private final class ImageSaveCoordinator: NSObject {
+    static let shared = ImageSaveCoordinator()
+    var onComplete: ((Error?) -> Void)?
+
+    @objc func handleSaveResult(_ image: UIImage, didFinishSavingWithError error: Error?, contextInfo: UnsafeMutableRawPointer?) {
+        onComplete?(error)
+        onComplete = nil
     }
 }

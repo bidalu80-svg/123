@@ -7,6 +7,7 @@ import Network
 final class ChatViewModel: ObservableObject {
     @Published var config: ChatConfig {
         didSet {
+            updateCurrentModelAvailability()
             guard autoSaveEnabled else { return }
             ChatConfigStore.save(config)
         }
@@ -22,7 +23,7 @@ final class ChatViewModel: ObservableObject {
     @Published var statusMessage = "准备就绪"
     @Published var testLogs: [String] = []
 
-    @Published var draftImageAttachment: ChatImageAttachment?
+    @Published var draftImageAttachments: [ChatImageAttachment] = []
     @Published var draftFileAttachment: ChatFileAttachment?
 
     @Published var streamScrollTrigger: Int = 0
@@ -30,6 +31,7 @@ final class ChatViewModel: ObservableObject {
     @Published var selectedModelFromList: String = ""
     @Published var isLoadingModels = false
     @Published var isNetworkReachable = true
+    @Published var isCurrentModelAvailable = false
 
     private let service: ChatService
     private var autoSaveEnabled = false
@@ -58,6 +60,7 @@ final class ChatViewModel: ObservableObject {
 
         syncMessagesFromCurrentSession()
         selectedModelFromList = config.model
+        updateCurrentModelAvailability()
         autoSaveEnabled = true
         startNetworkMonitor()
     }
@@ -84,7 +87,7 @@ final class ChatViewModel: ObservableObject {
 
     var canSend: Bool {
         let text = draftMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !isSending && (!text.isEmpty || draftImageAttachment != nil || draftFileAttachment != nil)
+        return !isSending && (!text.isEmpty || !draftImageAttachments.isEmpty || draftFileAttachment != nil)
     }
 
     var networkStatusText: String {
@@ -93,9 +96,9 @@ final class ChatViewModel: ObservableObject {
 
     func sendCurrentMessage() async {
         let text = draftMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-        let image = draftImageAttachment
+        let images = draftImageAttachments
         let file = draftFileAttachment
-        guard !text.isEmpty || image != nil || file != nil else { return }
+        guard !text.isEmpty || !images.isEmpty || file != nil else { return }
         guard !isSending else { return }
         guard isNetworkReachable else {
             errorMessage = "当前网络不可用，请检查网络后重试。"
@@ -117,7 +120,7 @@ final class ChatViewModel: ObservableObject {
         let userMessage = ChatMessage(
             role: .user,
             content: text,
-            imageAttachments: image.map { [$0] } ?? [],
+            imageAttachments: images,
             fileAttachments: file.map { [$0] } ?? []
         )
 
@@ -131,7 +134,7 @@ final class ChatViewModel: ObservableObject {
         }
 
         draftMessage = ""
-        draftImageAttachment = nil
+        draftImageAttachments = []
         draftFileAttachment = nil
 
         let placeholderID = UUID()
@@ -286,9 +289,12 @@ final class ChatViewModel: ObservableObject {
                 config.model = first
             }
             selectedModelFromList = config.model
+            updateCurrentModelAvailability()
             statusMessage = "模型列表已更新（\(models.count) 个）"
             appendLog("模型测试：已获取 \(models.count) 个模型。")
         } catch {
+            availableModels = []
+            updateCurrentModelAvailability()
             appendLog("模型测试失败：\(error.localizedDescription)")
             statusMessage = "模型列表获取失败"
             errorMessage = error.localizedDescription
@@ -302,12 +308,18 @@ final class ChatViewModel: ObservableObject {
         selectedModelFromList = trimmed
     }
 
-    func setDraftImage(data: Data, mimeType: String) {
-        draftImageAttachment = ChatImageAttachment.fromImageData(data, mimeType: mimeType)
+    func addDraftImage(data: Data, mimeType: String) {
+        let attachment = ChatImageAttachment.fromImageData(data, mimeType: mimeType)
+        draftImageAttachments.append(attachment)
+        draftImageAttachments = deduplicateImages(draftImageAttachments)
     }
 
-    func removeDraftImage() {
-        draftImageAttachment = nil
+    func removeDraftImage(id: UUID) {
+        draftImageAttachments.removeAll { $0.id == id }
+    }
+
+    func clearDraftImages() {
+        draftImageAttachments = []
     }
 
     func setDraftFile(name: String, mimeType: String, text: String) {
@@ -336,9 +348,23 @@ final class ChatViewModel: ObservableObject {
         draftFileAttachment = nil
     }
 
+    private func updateCurrentModelAvailability() {
+        let trimmed = config.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isNetworkReachable, !trimmed.isEmpty else {
+            isCurrentModelAvailable = false
+            return
+        }
+
+        if availableModels.isEmpty {
+            isCurrentModelAvailable = true
+            return
+        }
+
+        isCurrentModelAvailable = availableModels.contains(trimmed)
+    }
+
     private var currentSessionIndex: Int? {
-        guard let currentSessionID else { return nil }
-        return sessions.firstIndex(where: { $0.id == currentSessionID })
+        sessions.firstIndex { $0.id == currentSessionID }
     }
 
     private func appendStreamingChunk(_ chunk: StreamChunk, to id: UUID) {
@@ -520,6 +546,7 @@ final class ChatViewModel: ObservableObject {
                 if self.isNetworkReachable == reachable { return }
 
                 self.isNetworkReachable = reachable
+                self.updateCurrentModelAvailability()
                 if reachable {
                     self.statusMessage = self.isSending ? "网络恢复，继续接收中…" : "网络已恢复"
                     self.appendLog("网络状态：已恢复连接。")

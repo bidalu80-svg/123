@@ -1,12 +1,12 @@
 import XCTest
 
 final class ChatAppUITests: XCTestCase {
-    func testExampleNavigation() {
+    func testMainChatScreenLoads() {
         let app = XCUIApplication()
         app.launch()
 
-        XCTAssertTrue(app.tabBars.buttons["聊天"].exists)
-        XCTAssertTrue(app.tabBars.buttons["配置"].exists)
-        XCTAssertTrue(app.tabBars.buttons["测试"].exists)
+        XCTAssertTrue(app.staticTexts["IEXA"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.textFields["有问题，尽管问"].exists)
+        XCTAssertTrue(app.buttons.firstMatch.exists)
     }
 }

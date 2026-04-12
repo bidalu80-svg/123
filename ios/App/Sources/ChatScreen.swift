@@ -17,7 +17,7 @@ struct ChatScreen: View {
     ]
 
     @State private var showErrorAlert = false
-    @State private var selectedPhotoItem: PhotosPickerItem?
+    @State private var selectedPhotoItems: [PhotosPickerItem] = []
     @State private var showPhotoPicker = false
     @State private var showAttachmentSheet = false
     @State private var showFileImporter = false
@@ -80,21 +80,26 @@ struct ChatScreen: View {
             refreshStarterPromptsIfNeeded()
             ensureRecentPhotoAssets()
         }
-        .onChange(of: selectedPhotoItem) { _, newItem in
-            guard let newItem else { return }
+        .onChange(of: selectedPhotoItems) { _, newItems in
+            guard !newItems.isEmpty else { return }
             Task {
-                if let data = try? await newItem.loadTransferable(type: Data.self) {
-                    let mimeType = newItem.supportedContentTypes.first?.preferredMIMEType ?? "image/jpeg"
-                    await MainActor.run {
-                        viewModel.setDraftImage(data: data, mimeType: mimeType)
-                        selectedPhotoItem = nil
+                for item in newItems {
+                    if let data = try? await item.loadTransferable(type: Data.self) {
+                        let mimeType = item.supportedContentTypes.first?.preferredMIMEType ?? "image/jpeg"
+                        await MainActor.run {
+                            viewModel.addDraftImage(data: data, mimeType: mimeType)
+                        }
                     }
+                }
+                await MainActor.run {
+                    selectedPhotoItems = []
                 }
             }
         }
         .photosPicker(
             isPresented: $showPhotoPicker,
-            selection: $selectedPhotoItem,
+            selection: $selectedPhotoItems,
+            maxSelectionCount: 10,
             matching: .images
         )
         .sheet(isPresented: $showAttachmentSheet) {
@@ -106,7 +111,7 @@ struct ChatScreen: View {
         .fullScreenCover(isPresented: $showCameraPicker) {
             CameraImagePicker { image in
                 if let data = image.jpegData(compressionQuality: 0.9) {
-                    viewModel.setDraftImage(data: data, mimeType: "image/jpeg")
+                    viewModel.addDraftImage(data: data, mimeType: "image/jpeg")
                 }
             }
             .ignoresSafeArea()
@@ -178,8 +183,10 @@ struct ChatScreen: View {
             .buttonStyle(.plain)
 
             Text("IEXA")
-                .font(.system(size: 36, weight: .bold))
-                .kerning(0.2)
+                .font(.custom("Didot", size: 28))
+                .italic()
+                .kerning(1.2)
+                .foregroundStyle(.primary)
 
             Menu {
                 Button(viewModel.isLoadingModels ? "拉取中…" : "拉取模型列表") {
@@ -201,7 +208,10 @@ struct ChatScreen: View {
                     }
                 }
             } label: {
-                HStack(spacing: 5) {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(viewModel.isCurrentModelAvailable ? Color.green : Color.red)
+                        .frame(width: 8, height: 8)
                     Text(shortModelName(viewModel.config.model))
                         .font(.system(size: 13, weight: .semibold))
                         .lineLimit(1)
@@ -298,8 +308,8 @@ struct ChatScreen: View {
 
     private var composer: some View {
         VStack(spacing: 8) {
-            if let attachment = viewModel.draftImageAttachment {
-                draftImagePreview(attachment)
+            if !viewModel.draftImageAttachments.isEmpty {
+                draftImagePreviewStrip
             }
 
             if let file = viewModel.draftFileAttachment {
@@ -329,8 +339,8 @@ struct ChatScreen: View {
                         guard viewModel.canSend else { return }
                         Task { await viewModel.sendCurrentMessage() }
                     }
-                    .font(.system(size: 19))
-                    .frame(height: 44, alignment: .center)
+                    .font(.system(size: 17))
+                    .frame(height: 38, alignment: .center)
 
                 Button {
                     pasteClipboardIntoDraft(sendAfterPaste: false)
@@ -378,10 +388,10 @@ struct ChatScreen: View {
                 }
                 .disabled(!viewModel.canSend && !viewModel.isSending)
             }
-            .padding(.vertical, 8)
+            .padding(.vertical, 6)
             .padding(.leading, 10)
             .padding(.trailing, 8)
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         }
         .padding(.horizontal, 12)
         .padding(.top, 6)
@@ -734,30 +744,39 @@ struct ChatScreen: View {
     }
 
     @ViewBuilder
+    private var draftImagePreviewStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                ForEach(viewModel.draftImageAttachments) { attachment in
+                    draftImagePreview(attachment)
+                }
+            }
+            .padding(.horizontal, 2)
+        }
+    }
+
+    @ViewBuilder
     private func draftImagePreview(_ attachment: ChatImageAttachment) -> some View {
         if let data = attachment.decodedImageData, let uiImage = UIImage(data: data) {
-            HStack(spacing: 10) {
+            ZStack(alignment: .topTrailing) {
                 Image(uiImage: uiImage)
                     .resizable()
                     .scaledToFill()
-                    .frame(width: 56, height: 56)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("已添加图片")
-                        .font(.caption)
-                    Text(attachment.mimeType)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                    .frame(width: 72, height: 72)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                Button {
+                    viewModel.removeDraftImage(id: attachment.id)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 22, height: 22)
+                        .background(Circle().fill(Color.black.opacity(0.72)))
                 }
-                Spacer()
-                Button("移除") {
-                    viewModel.removeDraftImage()
-                }
-                .buttonStyle(.borderedProminent)
-                .font(.caption2)
+                .buttonStyle(.plain)
+                .padding(6)
             }
-            .padding(10)
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
     }
 
@@ -864,7 +883,7 @@ struct ChatScreen: View {
         if let image = await requestImage(for: asset),
            let data = image.jpegData(compressionQuality: 0.9) {
             await MainActor.run {
-                viewModel.setDraftImage(data: data, mimeType: "image/jpeg")
+                viewModel.addDraftImage(data: data, mimeType: "image/jpeg")
                 showAttachmentSheet = false
             }
         } else {

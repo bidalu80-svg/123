@@ -270,24 +270,56 @@ enum ResponseCleaner {
     static func cleanAssistantText(_ raw: String) -> String {
         var text = raw
 
-        // Remove hidden thinking blocks.
         text = text.replacingOccurrences(
             of: "(?is)<think>.*?</think>",
             with: "",
             options: .regularExpression
         )
 
-        // Clean markdown title markers while keeping semantic content.
+        text = text.replacingOccurrences(
+            of: #"!\[[^\]]*\]\(([^)]+)\)"#,
+            with: "",
+            options: .regularExpression
+        )
+
+        text = text.replacingOccurrences(
+            of: #"https?://[^\s\"]+?(?:\.png|\.jpe?g|\.gif|\.webp|\.bmp|\.heic|\.heif|\.svg)(?:\?[^\s\"]*)?(?:#[^\s\"]*)?"#,
+            with: "",
+            options: .regularExpression
+        )
+
+        text = text.replacingOccurrences(
+            of: #"\[([^\]]+)\]\(([^)]+)\)"#,
+            with: "$1",
+            options: .regularExpression
+        )
+
         text = text.replacingOccurrences(
             of: "(?m)^\\s{0,3}#{1,6}\\s*",
             with: "",
             options: .regularExpression
         )
 
-        // Normalize bullet markers.
         text = text.replacingOccurrences(
-            of: "(?m)^\\s*\\*\\s+",
-            with: "• ",
+            of: "(?m)^\\s*([-*_])\\1{2,}\\s*$",
+            with: "",
+            options: .regularExpression
+        )
+
+        text = text.replacingOccurrences(of: "```", with: "")
+        text = text.replacingOccurrences(of: "**", with: "")
+        text = text.replacingOccurrences(of: "__", with: "")
+        text = text.replacingOccurrences(of: "`", with: "")
+
+        text = text.replacingOccurrences(
+            of: "(?m)^\\s*[-*•]\\s+",
+            with: "",
+            options: .regularExpression
+        )
+
+        text = text.replacingOccurrences(
+            of: "(?m)^\\s*\\u003e+\\s?",
+            with: "",
             options: .regularExpression
         )
 
@@ -296,3 +328,4 @@ enum ResponseCleaner {
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
+
