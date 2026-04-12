@@ -86,14 +86,21 @@ jobs:
         working-directory: ios
         run: xcodegen generate
 
-      - name: Run unit tests
+      - name: Run unit tests (if simulator available)
         working-directory: ios
         run: |
+          set -euo pipefail
+          SIM_NAME=$(xcrun simctl list devices available | sed -n 's/^[[:space:]]*\([^()]*iPhone[^()]*\) (.*/\1/p' | head -n1 | sed 's/[[:space:]]*$//')
+          if [ -z "${SIM_NAME:-}" ]; then
+            echo "No iOS Simulator runtime available on this runner. Skip unit tests."
+            exit 0
+          fi
+          echo "Using simulator: $SIM_NAME"
           xcodebuild \
             -project ChatAppiOS.xcodeproj \
             -scheme ChatApp \
             -configuration Debug \
-            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -destination "platform=iOS Simulator,name=$SIM_NAME" \
             test
 
       - name: Override bundle identifier if provided
