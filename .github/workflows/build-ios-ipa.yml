@@ -51,6 +51,40 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Download embedded CPython runtime (BeeWare)
+        working-directory: ios
+        env:
+          PYTHON_SUPPORT_TAG: 3.13-b13
+          PYTHON_SUPPORT_FILE: Python-3.13-iOS-support.b13.tar.gz
+        run: |
+          set -euo pipefail
+          RUNTIME_DIR="$RUNNER_TEMP/python-runtime"
+          ARCHIVE_PATH="$RUNNER_TEMP/$PYTHON_SUPPORT_FILE"
+          rm -rf "$RUNTIME_DIR" Vendor/Python.xcframework App/Resources/PythonRuntime
+          mkdir -p "$RUNTIME_DIR" Vendor App/Resources/PythonRuntime/lib
+
+          curl -L \
+            "https://github.com/beeware/Python-Apple-support/releases/download/$PYTHON_SUPPORT_TAG/$PYTHON_SUPPORT_FILE" \
+            -o "$ARCHIVE_PATH"
+
+          tar -xzf "$ARCHIVE_PATH" -C "$RUNTIME_DIR"
+
+          cp -R "$RUNTIME_DIR/Python.xcframework" Vendor/Python.xcframework
+          cp -R "$RUNTIME_DIR/Python.xcframework/lib/python3.13" App/Resources/PythonRuntime/lib/python3.13
+
+          # Overlay architecture-specific extension modules for iOS device.
+          rsync -a \
+            "$RUNTIME_DIR/Python.xcframework/ios-arm64/lib-arm64/python3.13/" \
+            "App/Resources/PythonRuntime/lib/python3.13/"
+
+          # Trim large folders to keep IPA size reasonable.
+          rm -rf \
+            App/Resources/PythonRuntime/lib/python3.13/test \
+            App/Resources/PythonRuntime/lib/python3.13/idlelib \
+            App/Resources/PythonRuntime/lib/python3.13/tkinter \
+            App/Resources/PythonRuntime/lib/python3.13/turtledemo \
+            App/Resources/PythonRuntime/lib/python3.13/ensurepip
+
       - name: Decode signing assets
         env:
           IOS_P12_BASE64: ${{ secrets.IOS_P12_BASE64 }}

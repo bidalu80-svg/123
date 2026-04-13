@@ -26,6 +26,10 @@ targets:
     sources:
       - path: App/Sources
       - path: App/Resources
+    dependencies:
+      - framework: Vendor/Python.xcframework
+        embed: true
+        codeSign: true
     settings:
       base:
         PRODUCT_NAME: IEXA

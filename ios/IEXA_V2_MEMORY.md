@@ -141,3 +141,15 @@
   - `ios/Tools/EMBEDDED_CPYTHON_SETUP.md`
 - 使用提示：
   - 未检测到 `Python.framework` 时，运行输出会提示“当前为兼容模式”。
+
+### 7) CI 自动嵌入 CPython（已接通）
+- `ios/project.yml` 已添加 `Vendor/Python.xcframework` 依赖（`embed + codeSign`）。
+- `.github/workflows/build-ios-ipa.yml` 已自动执行：
+  - 下载 BeeWare `Python-3.13-iOS-support.b13.tar.gz`
+  - 解包并注入 `Vendor/Python.xcframework`
+  - 生成 `App/Resources/PythonRuntime/lib/python3.13`
+  - 覆盖 iOS arm64 `lib-dynload` 扩展模块
+  - 裁剪 `test/idlelib/tkinter/turtledemo/ensurepip` 以控制体积
+- `.gitignore` 已忽略：
+  - `ios/Vendor/Python.xcframework/`
+  - `ios/App/Resources/PythonRuntime/`

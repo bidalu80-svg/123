@@ -29,6 +29,14 @@
 2. 选择 `Embed & Sign`
 3. 确保 `PythonRuntime` 目录被打进 App Resources
 
+## 当前仓库状态（已自动化）
+- `ios/project.yml` 已声明 `Vendor/Python.xcframework` 作为依赖并 `embed + codeSign`。
+- GitHub Actions `build-ios-ipa.yml` 已自动：
+  - 下载 BeeWare iOS 支持包
+  - 放置 `Vendor/Python.xcframework`
+  - 准备 `App/Resources/PythonRuntime/lib/python3.13`
+  - 覆盖 arm64 `lib-dynload` 扩展模块
+
 ## 验证方式
 在聊天里运行：
 

@@ -5,3 +5,7 @@
 
 .DS_Store
 Thumbs.db
+
+# Embedded CPython runtime artifacts (downloaded in CI)
+ios/Vendor/Python.xcframework/
+ios/App/Resources/PythonRuntime/
