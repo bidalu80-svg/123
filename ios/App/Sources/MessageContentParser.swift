@@ -122,21 +122,36 @@ enum MessageContentParser {
                 }
             }
 
-            let url: String?
+            let imageURL: String?
+            let fallbackText: String?
             if let markdownURLRange = Range(match.range(at: 1), in: text) {
-                url = String(text[markdownURLRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+                imageURL = String(text[markdownURLRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+                fallbackText = nil
             } else if let bareURLRange = Range(match.range(at: 2), in: text) {
                 let candidate = String(text[bareURLRange]).trimmingCharacters(in: .whitespacesAndNewlines)
-                url = (isLikelyImageURL(candidate) || isStandaloneURLLine(in: text, url: candidate)) ? candidate : nil
+                if isLikelyImageURL(candidate) {
+                    imageURL = candidate
+                    fallbackText = nil
+                } else {
+                    imageURL = nil
+                    fallbackText = candidate
+                }
             } else if let dataRange = Range(match.range(at: 3), in: text) {
                 let candidate = String(text[dataRange]).trimmingCharacters(in: .whitespacesAndNewlines)
-                url = candidate.hasPrefix("data:image") ? candidate : nil
+                imageURL = candidate.hasPrefix("data:image") ? candidate : nil
+                fallbackText = nil
             } else {
-                url = nil
+                imageURL = nil
+                fallbackText = nil
             }
 
-            if let url, !url.isEmpty {
-                results.append(.image(ChatImageAttachment(dataURL: url, mimeType: "image/*", remoteURL: url)))
+            if let imageURL, !imageURL.isEmpty {
+                results.append(.image(ChatImageAttachment(dataURL: imageURL, mimeType: "image/*", remoteURL: imageURL)))
+            } else if let fallbackText, !fallbackText.isEmpty {
+                let normalizedFallback = cleanMarkdownForDisplay(fallbackText)
+                if !normalizedFallback.isEmpty {
+                    results.append(.text(normalizedFallback))
+                }
             }
             cursor = wholeRange.upperBound
         }

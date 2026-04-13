@@ -306,7 +306,7 @@ enum ResponseCleaner {
 
         text = text.replacingOccurrences(
             of: #"\[([^\]]+)\]\(([^)]+)\)"#,
-            with: "$1",
+            with: "$1 $2",
             options: .regularExpression
         )
 

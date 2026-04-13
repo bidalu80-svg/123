@@ -103,6 +103,7 @@ final class ChatServiceTests: XCTestCase {
         XCTAssertFalse(cleaned.contains("[查看链接]"))
         XCTAssertFalse(cleaned.contains("> 引用"))
         XCTAssertTrue(cleaned.contains("查看链接"))
+        XCTAssertTrue(cleaned.contains("https://example.com"))
         XCTAssertTrue(cleaned.contains("第一条"))
         XCTAssertTrue(cleaned.contains("第二条"))
         XCTAssertTrue(cleaned.contains("```swift"))
@@ -178,6 +179,37 @@ final class ChatServiceTests: XCTestCase {
         XCTAssertTrue(text.contains("加粗"))
         XCTAssertTrue(text.contains("列表项"))
         XCTAssertTrue(text.contains("引用"))
+    }
+
+    func testMessageContentParserKeepsInlineNonImageURLAsText() {
+        let message = ChatMessage(
+            role: .assistant,
+            content: "百度官网是：https://www.baidu.com"
+        )
+
+        let segments = MessageContentParser.parse(message)
+
+        XCTAssertEqual(segments.count, 1)
+        guard case .text(let text) = segments[0] else {
+            XCTFail("Expected text segment")
+            return
+        }
+        XCTAssertEqual(text, "百度官网是：https://www.baidu.com")
+    }
+
+    func testMessageContentParserAfterCleanerKeepsMarkdownLinkURLAsText() {
+        let raw = "[百度官网](https://www.baidu.com)"
+        let cleaned = ResponseCleaner.cleanAssistantText(raw)
+        let message = ChatMessage(role: .assistant, content: cleaned)
+
+        let segments = MessageContentParser.parse(message)
+
+        XCTAssertEqual(segments.count, 1)
+        guard case .text(let text) = segments[0] else {
+            XCTFail("Expected text segment")
+            return
+        }
+        XCTAssertEqual(text, "百度官网 https://www.baidu.com")
     }
 }
 
