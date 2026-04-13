@@ -172,108 +172,120 @@ struct ChatScreen: View {
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
-            Button {
-                setSidebarOpen(!isSidebarOpen)
-            } label: {
-                TwoLineMenuIcon()
-                    .foregroundStyle(.primary)
-                    .frame(width: 34, height: 34)
-            }
-            .buttonStyle(.plain)
-
+        VStack(spacing: 8) {
             Text("IEXA")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.primary)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .center)
 
-            Menu {
-                Button(viewModel.isLoadingModels ? "拉取中…" : "拉取模型列表") {
-                    Task { await viewModel.refreshAvailableModels() }
+            HStack(spacing: 10) {
+                Button {
+                    setSidebarOpen(!isSidebarOpen)
+                } label: {
+                    TwoLineMenuIcon()
+                        .foregroundStyle(.primary)
+                        .frame(width: 34, height: 34)
                 }
-                .disabled(viewModel.isLoadingModels)
+                .buttonStyle(.plain)
+                .frame(width: 36, alignment: .leading)
 
-                Divider()
+                Spacer(minLength: 0)
 
-                ForEach(modelMenuOptions, id: \.self) { model in
-                    Button {
-                        viewModel.applySelectedModel(model)
-                    } label: {
-                        if model == viewModel.config.model {
-                            Label(model, systemImage: "checkmark")
-                        } else {
-                            Text(model)
+                Menu {
+                    Button(viewModel.isLoadingModels ? "拉取中…" : "拉取模型列表") {
+                        Task { await viewModel.refreshAvailableModels() }
+                    }
+                    .disabled(viewModel.isLoadingModels)
+
+                    Divider()
+
+                    ForEach(modelMenuOptions, id: \.self) { model in
+                        Button {
+                            viewModel.applySelectedModel(model)
+                        } label: {
+                            if model == viewModel.config.model {
+                                Label(model, systemImage: "checkmark")
+                            } else {
+                                Text(model)
+                            }
                         }
                     }
-                }
-            } label: {
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(viewModel.isCurrentModelAvailable ? Color.green : Color.red)
-                        .frame(width: 7, height: 7)
-                    Text(shortModelName(viewModel.config.model))
-                        .font(.system(size: 12, weight: .medium))
-                        .lineLimit(1)
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 10, weight: .semibold))
-                }
-                .foregroundStyle(.primary)
-                .padding(.horizontal, 11)
-                .padding(.vertical, 7)
-                .background(
-                    Capsule(style: .continuous)
-                        .fill(Color(.secondarySystemBackground))
-                )
-            }
-            .buttonStyle(.plain)
-
-            Spacer()
-            if !viewModel.isNetworkReachable {
-                Text("离线")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color.red)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
+                } label: {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(viewModel.isCurrentModelAvailable ? Color.green : Color.red)
+                            .frame(width: 7, height: 7)
+                        Text(shortModelName(viewModel.config.model))
+                            .font(.system(size: 12, weight: .medium))
+                            .lineLimit(1)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 10, weight: .semibold))
+                    }
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 7)
                     .background(
                         Capsule(style: .continuous)
-                            .fill(Color.red.opacity(0.1))
-                    )
-            }
-            Menu {
-                Button("新建会话", systemImage: "square.and.pencil") {
-                    viewModel.createNewSession()
-                }
-                Button("配置", systemImage: "gearshape") {
-                    showSettingsSheet = true
-                }
-                Button("测试中心", systemImage: "checkmark.circle") {
-                    showTestSheet = true
-                }
-                Divider()
-                Button("示例", systemImage: "wand.and.stars") {
-                    viewModel.loadDemoContent()
-                }
-                Button("清空", systemImage: "trash") {
-                    viewModel.clearCurrentSessionMessages()
-                }
-                Button("停止", systemImage: "stop.circle") {
-                    viewModel.stopGenerating()
-                }
-                .disabled(!viewModel.isSending)
-            } label: {
-                Image(systemName: "slider.horizontal.3")
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(.primary)
-                    .frame(width: 36, height: 36)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
                             .fill(Color(.secondarySystemBackground))
                     )
+                }
+                .buttonStyle(.plain)
+
+                Spacer(minLength: 0)
+
+                HStack(spacing: 8) {
+                    if !viewModel.isNetworkReachable {
+                        Text("离线")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Color.red)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(
+                                Capsule(style: .continuous)
+                                    .fill(Color.red.opacity(0.1))
+                            )
+                    }
+                    Menu {
+                        Button("新建会话", systemImage: "square.and.pencil") {
+                            viewModel.createNewSession()
+                        }
+                        Button("配置", systemImage: "gearshape") {
+                            showSettingsSheet = true
+                        }
+                        Button("测试中心", systemImage: "checkmark.circle") {
+                            showTestSheet = true
+                        }
+                        Divider()
+                        Button("示例", systemImage: "wand.and.stars") {
+                            viewModel.loadDemoContent()
+                        }
+                        Button("清空", systemImage: "trash") {
+                            viewModel.clearCurrentSessionMessages()
+                        }
+                        Button("停止", systemImage: "stop.circle") {
+                            viewModel.stopGenerating()
+                        }
+                        .disabled(!viewModel.isSending)
+                    } label: {
+                        Image(systemName: "slider.horizontal.3")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(.primary)
+                            .frame(width: 36, height: 36)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(Color(.secondarySystemBackground))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+                .frame(minWidth: 36, alignment: .trailing)
             }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 4)
+        .padding(.top, 6)
+        .padding(.bottom, 4)
     }
+
 
     private var messageList: some View {
         ScrollViewReader { proxy in
