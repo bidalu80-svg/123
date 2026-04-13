@@ -1000,6 +1000,8 @@ struct ChatScreen: View {
                 viewModel.removeDraftFile()
             }
             .buttonStyle(.borderedProminent)
+            .tint(Color(red: 0.16, green: 0.16, blue: 0.18))
+            .foregroundStyle(.white)
             .font(.caption2)
         }
         .padding(10)
