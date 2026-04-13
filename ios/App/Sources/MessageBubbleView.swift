@@ -1,7 +1,6 @@
 import SwiftUI
 import UIKit
 import Photos
-import AVFoundation
 
 struct MessageBubbleView: View {
     let message: ChatMessage
@@ -13,6 +12,7 @@ struct MessageBubbleView: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var saveFeedback: String?
     @State private var reaction: AssistantReaction = .none
+    @State private var actionFeedback: String?
 
     var body: some View {
         Group {
@@ -58,84 +58,107 @@ struct MessageBubbleView: View {
     }
 
     private var assistantActionBar: some View {
-        HStack(spacing: 10) {
-            Button {
+        HStack(spacing: 8) {
+            iconActionButton(systemName: "doc.on.doc", accessibilityLabel: "复制") {
                 UIPasteboard.general.string = message.copyableText
-            } label: {
-                Image(systemName: "doc.on.doc")
-                    .font(.system(size: 22, weight: .regular))
-                    .frame(width: 34, height: 34)
+                feedback(.success, "已复制")
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
 
-            Button {
-                speakAssistantText()
-            } label: {
-                Image(systemName: "speaker.wave.2")
-                    .font(.system(size: 22, weight: .regular))
-                    .frame(width: 34, height: 34)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-
-            Button {
+            iconActionButton(
+                systemName: reaction == .up ? "hand.thumbsup.fill" : "hand.thumbsup",
+                foregroundColor: reaction == .up ? .blue : .secondary,
+                accessibilityLabel: "点赞"
+            ) {
                 reaction = reaction == .up ? .none : .up
-            } label: {
-                Image(systemName: "hand.thumbsup")
-                    .font(.system(size: 22, weight: .regular))
-                    .frame(width: 34, height: 34)
+                if reaction == .up {
+                    feedback(.light, "已点赞")
+                } else {
+                    feedback(.light, "已取消点赞")
+                }
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(reaction == .up ? Color.blue : Color.secondary)
 
-            Button {
+            iconActionButton(
+                systemName: reaction == .down ? "hand.thumbsdown.fill" : "hand.thumbsdown",
+                foregroundColor: reaction == .down ? .red : .secondary,
+                accessibilityLabel: "点踩"
+            ) {
                 reaction = reaction == .down ? .none : .down
-            } label: {
-                Image(systemName: "hand.thumbsdown")
-                    .font(.system(size: 22, weight: .regular))
-                    .frame(width: 34, height: 34)
+                if reaction == .down {
+                    feedback(.light, "已点踩")
+                } else {
+                    feedback(.light, "已取消点踩")
+                }
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(reaction == .down ? Color.red : Color.secondary)
 
             if let onRegenerate {
-                Button {
+                iconActionButton(systemName: "arrow.clockwise", accessibilityLabel: "重试") {
                     onRegenerate()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 22, weight: .regular))
-                        .frame(width: 34, height: 34)
+                    feedback(.light, "正在重试…")
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
             }
 
             Menu {
                 Button("复制全部", systemImage: "doc.on.doc") {
                     UIPasteboard.general.string = message.copyableText
+                    feedback(.success, "已复制")
                 }
                 if let onRegenerate {
                     Button("重试", systemImage: "arrow.clockwise") {
                         onRegenerate()
+                        feedback(.light, "正在重试…")
                     }
                 }
             } label: {
                 Image(systemName: "ellipsis")
-                    .font(.system(size: 22, weight: .regular))
-                    .frame(width: 34, height: 34)
+                    .font(.system(size: 17, weight: .regular))
+                    .frame(width: 24, height: 24)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(MiniIconButtonStyle())
             .foregroundStyle(.secondary)
+
+            if let actionFeedback {
+                Text(actionFeedback)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .transition(.opacity.combined(with: .move(edge: .trailing)))
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .animation(.easeInOut(duration: 0.18), value: reaction)
+        .animation(.easeInOut(duration: 0.18), value: actionFeedback)
     }
 
-    private func speakAssistantText() {
-        let text = message.copyableText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        AssistantSpeech.shared.speak(text: text)
+    private func iconActionButton(
+        systemName: String,
+        foregroundColor: Color = .secondary,
+        accessibilityLabel: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 17, weight: .regular))
+                .frame(width: 24, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(MiniIconButtonStyle())
+        .foregroundStyle(foregroundColor)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private func feedback(_ kind: ActionFeedbackKind, _ text: String) {
+        switch kind {
+        case .success:
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+        case .light:
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        }
+
+        actionFeedback = text
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            guard actionFeedback == text else { return }
+            actionFeedback = nil
+        }
     }
 
     private var userMessageView: some View {
@@ -396,19 +419,21 @@ private enum AssistantReaction {
     case down
 }
 
-private final class AssistantSpeech {
-    static let shared = AssistantSpeech()
-    private let synthesizer = AVSpeechSynthesizer()
+private enum ActionFeedbackKind {
+    case success
+    case light
+}
 
-    func speak(text: String) {
-        if synthesizer.isSpeaking {
-            synthesizer.stopSpeaking(at: .immediate)
-        }
-
-        let utterance = AVSpeechUtterance(string: text)
-        utterance.rate = 0.5
-        utterance.voice = AVSpeechSynthesisVoice(language: "zh-CN")
-        synthesizer.speak(utterance)
+private struct MiniIconButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .padding(4)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.primary.opacity(configuration.isPressed ? 0.12 : 0.0001))
+            )
+            .scaleEffect(configuration.isPressed ? 0.94 : 1)
+            .opacity(configuration.isPressed ? 0.72 : 1)
     }
 }
 

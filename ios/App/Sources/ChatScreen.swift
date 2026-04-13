@@ -285,7 +285,7 @@ struct ChatScreen: View {
 
     private var messageList: some View {
         ScrollViewReader { proxy in
-            ZStack(alignment: .bottomTrailing) {
+            ZStack(alignment: .bottom) {
                 ScrollView {
                     LazyVStack(spacing: 16) {
                         Color.clear
@@ -313,6 +313,13 @@ struct ChatScreen: View {
                 }
                 .scrollIndicators(.hidden)
                 .scrollDismissesKeyboard(.interactively)
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 6).onChanged { _ in
+                        if isPinnedToBottom {
+                            isPinnedToBottom = false
+                        }
+                    }
+                )
                 .onAppear {
                     scrollToBottom(proxy, animated: false)
                 }
@@ -331,10 +338,9 @@ struct ChatScreen: View {
                     }
                 }
 
-                if shouldShowScrollJumpButtons {
-                    scrollJumpButton(proxy: proxy)
-                        .padding(.trailing, 6)
-                        .padding(.bottom, 6)
+                if shouldShowCenterScrollDownButton {
+                    scrollDownButton(proxy: proxy)
+                        .padding(.bottom, 12)
                 }
             }
         }
@@ -359,9 +365,9 @@ struct ChatScreen: View {
                     showAttachmentSheet = true
                 } label: {
                     Image(systemName: "plus")
-                        .font(.system(size: 19, weight: .regular))
+                        .font(.system(size: 17, weight: .regular))
                         .foregroundStyle(.primary)
-                        .frame(width: 42, height: 42)
+                        .frame(width: 36, height: 36)
                         .background(
                             Circle()
                                 .fill(Color(.secondarySystemBackground))
@@ -381,8 +387,8 @@ struct ChatScreen: View {
             .background(Color.clear)
         }
         .padding(.horizontal, 12)
-        .padding(.top, 6)
-        .padding(.bottom, 10)
+        .padding(.top, 4)
+        .padding(.bottom, 8)
         .background(Color(.systemBackground))
         .overlay(alignment: .top) {
             Divider().opacity(0.18)
@@ -397,9 +403,9 @@ struct ChatScreen: View {
                 pasteClipboardIntoDraft(sendAfterPaste: false)
             } label: {
                 Image(systemName: "doc.on.clipboard")
-                    .font(.system(size: 18, weight: .regular))
+                    .font(.system(size: 16, weight: .regular))
                     .foregroundStyle(.secondary)
-                    .frame(width: 30, height: 30)
+                    .frame(width: 26, height: 26)
             }
             .buttonStyle(.plain)
             .contextMenu {
@@ -432,7 +438,7 @@ struct ChatScreen: View {
                 }
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(Color.white)
-                .frame(width: 36, height: 36)
+                .frame(width: 30, height: 30)
                 .background(
                     Circle()
                         .fill(viewModel.canSend || viewModel.isSending ? Color.black : Color(.systemGray3))
@@ -440,18 +446,18 @@ struct ChatScreen: View {
             }
             .disabled(!viewModel.canSend && !viewModel.isSending)
         }
-        .frame(minHeight: 40)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 5)
+        .frame(minHeight: 34)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
         .background(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .fill(Color(.secondarySystemBackground))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .stroke(Color.black.opacity(0.04), lineWidth: 0.8)
         )
-        .shadow(color: Color.black.opacity(0.03), radius: 8, x: 0, y: 2)
+        .shadow(color: Color.black.opacity(0.025), radius: 6, x: 0, y: 2)
     }
 
     private var textInputArea: some View {
@@ -463,31 +469,27 @@ struct ChatScreen: View {
                 guard viewModel.canSend else { return }
                 Task { await viewModel.sendCurrentMessage() }
             }
-            .font(.system(size: 16))
-            .frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
+            .font(.system(size: 15))
+            .frame(maxWidth: .infinity, minHeight: 18, alignment: .leading)
     }
 
 
-    private func scrollJumpButton(proxy: ScrollViewProxy) -> some View {
+    private func scrollDownButton(proxy: ScrollViewProxy) -> some View {
         Button {
-            if isPinnedToBottom {
-                isPinnedToBottom = false
-                withAnimation(.easeOut(duration: 0.18)) {
-                    proxy.scrollTo(scrollTopAnchor, anchor: .top)
-                }
-            } else {
-                isPinnedToBottom = true
-                scrollToBottom(proxy, animated: true)
-            }
+            isPinnedToBottom = true
+            scrollToBottom(proxy, animated: true)
         } label: {
-            Image(systemName: isPinnedToBottom ? "arrow.up" : "arrow.down")
-                .font(.system(size: 14, weight: .semibold))
+            Image(systemName: "arrow.down")
+                .font(.system(size: 18, weight: .medium))
                 .foregroundStyle(.primary)
-                .frame(width: 38, height: 38)
-                .background(.ultraThinMaterial, in: Circle())
+                .frame(width: 48, height: 48)
+                .background(
+                    Circle()
+                        .fill(Color(.systemBackground))
+                        .shadow(color: Color.black.opacity(0.12), radius: 8, x: 0, y: 3)
+                )
         }
         .buttonStyle(.plain)
-        .opacity(0.82)
     }
 
     private var starterPromptStrip: some View {
@@ -678,6 +680,10 @@ struct ChatScreen: View {
         let maxLength = assistantMessages.map { $0.content.count }.max() ?? 0
         let totalLength = assistantMessages.reduce(0) { $0 + $1.content.count }
         return maxLength >= 380 || totalLength >= 1200
+    }
+
+    private var shouldShowCenterScrollDownButton: Bool {
+        shouldShowScrollJumpButtons && !isPinnedToBottom
     }
 
     private var latestAssistantMessageID: UUID? {

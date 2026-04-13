@@ -310,34 +310,6 @@ enum ResponseCleaner {
             options: .regularExpression
         )
 
-        text = text.replacingOccurrences(
-            of: "(?m)^\\s{0,3}#{1,6}\\s*",
-            with: "",
-            options: .regularExpression
-        )
-
-        text = text.replacingOccurrences(
-            of: "(?m)^\\s*([-*_])\\1{2,}\\s*$",
-            with: "",
-            options: .regularExpression
-        )
-
-        text = text.replacingOccurrences(of: "**", with: "")
-        text = text.replacingOccurrences(of: "__", with: "")
-        text = text.replacingOccurrences(of: "`", with: "")
-
-        text = text.replacingOccurrences(
-            of: "(?m)^\\s*[-*•]\\s+",
-            with: "",
-            options: .regularExpression
-        )
-
-        text = text.replacingOccurrences(
-            of: "(?m)^\\s*\\u003e+\\s?",
-            with: "",
-            options: .regularExpression
-        )
-
         text = text.replacingOccurrences(of: "\r\n", with: "\n")
         text = text.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
         text = restoreCodeBlocks(in: text, preserved: preservedCodeBlocks)
