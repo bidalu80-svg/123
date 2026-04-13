@@ -64,8 +64,8 @@ struct MessageBubbleView: View {
                         .stroke(Color.black.opacity(colorScheme == .dark ? 0.12 : 0.035), lineWidth: 0.8)
                 )
                 .frame(maxWidth: 290, alignment: .trailing)
-                .frame(maxWidth: .infinity, alignment: .trailing)
         }
+        .frame(maxWidth: .infinity, alignment: .trailing)
     }
 
     @ViewBuilder

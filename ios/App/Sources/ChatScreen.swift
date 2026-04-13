@@ -435,7 +435,7 @@ struct ChatScreen: View {
         }
         .frame(minHeight: 42)
         .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .padding(.vertical, 6)
         .background(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .fill(Color(.secondarySystemBackground))
@@ -457,7 +457,7 @@ struct ChatScreen: View {
                 Task { await viewModel.sendCurrentMessage() }
             }
             .font(.system(size: 16))
-            .frame(maxWidth: .infinity, minHeight: 26, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 22, alignment: .leading)
     }
 
 
