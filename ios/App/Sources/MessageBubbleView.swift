@@ -318,6 +318,8 @@ struct MessageBubbleView: View {
                     }
                     .font(.caption2)
                     .buttonStyle(.borderedProminent)
+                    .tint(Color(red: 0.08, green: 0.08, blue: 0.1))
+                    .foregroundStyle(.white)
                     .disabled(isRunning)
                 }
                 if canRunHTML {
@@ -326,7 +328,8 @@ struct MessageBubbleView: View {
                     }
                     .font(.caption2)
                     .buttonStyle(.borderedProminent)
-                    .tint(.blue)
+                    .tint(Color(red: 0.06, green: 0.36, blue: 0.86))
+                    .foregroundStyle(.white)
                 }
                 Button(isCopied ? "已复制" : "复制代码") {
                     UIPasteboard.general.string = content
