@@ -215,9 +215,15 @@ struct ChatScreen: View {
                         Circle()
                             .fill(viewModel.isCurrentModelAvailable ? Color.green : Color.red)
                             .frame(width: 7, height: 7)
-                        Text(shortModelName(viewModel.config.model))
-                            .font(.system(size: 12, weight: .medium))
-                            .lineLimit(1)
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text(shortModelName(viewModel.config.model))
+                                .font(.system(size: 12, weight: .semibold))
+                                .lineLimit(1)
+                            Text(modelVendorSubtitle(viewModel.config.model))
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
                         Image(systemName: "chevron.down")
                             .font(.system(size: 10, weight: .semibold))
                     }
@@ -695,6 +701,51 @@ struct ChatScreen: View {
         guard !trimmed.isEmpty else { return "模型" }
         if trimmed.count <= 16 { return trimmed }
         return "\(trimmed.prefix(16))…"
+    }
+
+    private func modelVendorSubtitle(_ rawModel: String) -> String {
+        let model = rawModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !model.isEmpty else { return "Unknown" }
+        return "\(detectModelVendor(model)) · \(model)"
+    }
+
+    private func detectModelVendor(_ model: String) -> String {
+        let lowered = model.lowercased()
+
+        if lowered.hasPrefix("gpt") || lowered.hasPrefix("o1") || lowered.hasPrefix("o3") || lowered.hasPrefix("o4") {
+            return "OpenAI"
+        }
+        if lowered.contains("claude") {
+            return "Anthropic"
+        }
+        if lowered.contains("gemini") {
+            return "Google"
+        }
+        if lowered.contains("deepseek") {
+            return "DeepSeek"
+        }
+        if lowered.contains("qwen") {
+            return "Alibaba"
+        }
+        if lowered.contains("kimi") || lowered.contains("moonshot") {
+            return "Moonshot"
+        }
+        if lowered.contains("grok") || lowered.contains("xai") {
+            return "xAI"
+        }
+        if lowered.contains("llama") {
+            return "Meta"
+        }
+        if lowered.contains("mistral") {
+            return "Mistral"
+        }
+        if lowered.contains("doubao") {
+            return "ByteDance"
+        }
+        if lowered.contains("ernie") || lowered.contains("wenxin") {
+            return "Baidu"
+        }
+        return "Unknown"
     }
 
     private func refreshStarterPromptsIfNeeded() {
