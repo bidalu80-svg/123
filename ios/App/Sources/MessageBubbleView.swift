@@ -7,6 +7,8 @@ struct MessageBubbleView: View {
     let codeThemeMode: CodeThemeMode
     let apiKey: String
     let apiBaseURL: String
+    let showsAssistantActionBar: Bool
+    let onRegenerate: (() -> Void)?
     @Environment(\.colorScheme) private var colorScheme
     @State private var saveFeedback: String?
 
@@ -42,9 +44,37 @@ struct MessageBubbleView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.top, 8)
             }
+
+            if showsAssistantActionBar {
+                assistantActionBar
+                    .padding(.top, 10)
+            }
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var assistantActionBar: some View {
+        HStack(spacing: 8) {
+            Button {
+                UIPasteboard.general.string = message.copyableText
+            } label: {
+                Label("复制", systemImage: "doc.on.doc")
+                    .font(.caption)
+            }
+            .buttonStyle(.bordered)
+
+            if let onRegenerate {
+                Button {
+                    onRegenerate()
+                } label: {
+                    Label("重试", systemImage: "arrow.clockwise")
+                        .font(.caption)
+                }
+                .buttonStyle(.bordered)
+            }
+        }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 

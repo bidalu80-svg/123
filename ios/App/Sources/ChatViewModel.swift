@@ -32,6 +32,7 @@ final class ChatViewModel: ObservableObject {
     @Published var isLoadingModels = false
     @Published var isNetworkReachable = true
     @Published var isCurrentModelAvailable = false
+    @Published var isShowingModelStatusRefresh = false
     @Published private(set) var hasValidatedModelList = false
 
     private let service: ChatService
@@ -190,6 +191,73 @@ final class ChatViewModel: ObservableObject {
         endBackgroundSendTask()
     }
 
+    func regenerateLastAssistantReply() async {
+        guard !isSending, isNetworkReachable, let index = currentSessionIndex else { return }
+
+        let sessionMessages = sessions[index].messages
+        guard let lastUserIndex = sessionMessages.lastIndex(where: { $0.role == .user }) else { return }
+        let userMessage = sessionMessages[lastUserIndex]
+        let historyBeforeSend = Array(sessionMessages[..<lastUserIndex])
+
+        sessions[index].messages.removeAll { $0.role == .assistant && $0.createdAt >= userMessage.createdAt }
+        messages = sessions[index].messages
+        persistSessions()
+
+        errorMessage = ""
+        statusMessage = "正在重新生成…"
+        isSending = true
+        defer {
+            inflightSendTask = nil
+            isSending = false
+            persistSessions()
+            endBackgroundSendTask()
+        }
+
+        let placeholderID = UUID()
+        let placeholder = ChatMessage(
+            id: placeholderID,
+            role: .assistant,
+            content: "",
+            isStreaming: config.streamEnabled
+        )
+        appendMessageToCurrentSession(placeholder)
+        persistSessions()
+        signalStreamScroll(force: true)
+        beginBackgroundSendTask()
+
+        let task = Task<ChatReply, Error> { [service, config] in
+            try await service.sendMessage(
+                config: config,
+                history: historyBeforeSend,
+                message: userMessage,
+                onEvent: { [weak self] chunk in
+                    Task { @MainActor in
+                        self?.appendStreamingChunk(chunk, to: placeholderID)
+                    }
+                }
+            )
+        }
+        inflightSendTask = task
+
+        do {
+            let reply = try await task.value
+            finishStreamingMessage(id: placeholderID, reply: reply)
+            statusMessage = "重新生成成功"
+            appendLog("聊天测试：已重新生成上一条回复。")
+        } catch is CancellationError {
+            finishCancellation(id: placeholderID)
+        } catch {
+            if hasRenderableContent(for: placeholderID) {
+                finishInterruption(id: placeholderID, error: error)
+            } else {
+                removeMessage(id: placeholderID)
+                errorMessage = error.localizedDescription
+                statusMessage = "重新生成失败"
+                appendLog("重新生成失败：\(error.localizedDescription)")
+            }
+        }
+    }
+
     func saveConfig() {
         config = normalizedConfigForSave(config)
         statusMessage = "配置已保存"
@@ -282,28 +350,40 @@ final class ChatViewModel: ObservableObject {
         await sendCurrentMessage()
     }
 
-    func refreshAvailableModels() async {
-        isLoadingModels = true
-        defer { isLoadingModels = false }
+
+    func refreshAvailableModels(silent: Bool = false) async {
+        if !silent {
+            isLoadingModels = true
+        } else {
+            isShowingModelStatusRefresh = true
+        }
+        defer {
+            if !silent {
+                isLoadingModels = false
+            } else {
+                isShowingModelStatusRefresh = false
+            }
+        }
 
         do {
             let models = try await service.fetchModels(config: normalizedConfigForSave(config))
             availableModels = models
             hasValidatedModelList = true
-            if !models.contains(config.model), let first = models.first {
-                config.model = first
-            }
             selectedModelFromList = config.model
             updateCurrentModelAvailability()
-            statusMessage = "模型列表已更新（\(models.count) 个）"
-            appendLog("模型测试：已获取 \(models.count) 个模型。")
+            if !silent {
+                statusMessage = "模型列表已更新（\(models.count) 个）"
+                appendLog("模型测试：已获取 \(models.count) 个模型。")
+            }
         } catch {
             availableModels = []
             hasValidatedModelList = false
             updateCurrentModelAvailability()
-            appendLog("模型测试失败：\(error.localizedDescription)")
-            statusMessage = "模型列表获取失败"
-            errorMessage = error.localizedDescription
+            if !silent {
+                appendLog("模型测试失败：\(error.localizedDescription)")
+                statusMessage = "模型列表获取失败"
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -343,10 +423,16 @@ final class ChatViewModel: ObservableObject {
         appendLog("应用进入后台：已申请后台任务，尽力维持本次请求。")
     }
 
+
     func appDidBecomeActive() {
         if isSending {
             statusMessage = "已回到前台，继续接收中…"
             appendLog("应用回到前台：继续处理本次请求。")
+        }
+
+        guard !isLoadingModels else { return }
+        Task {
+            await refreshAvailableModels(silent: true)
         }
     }
 

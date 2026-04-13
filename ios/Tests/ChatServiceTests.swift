@@ -207,6 +207,27 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.isCurrentModelAvailable)
     }
 
+    @MainActor
+    func testRefreshAvailableModelsDoesNotAutoSwitchCurrentModel() async throws {
+        URLProtocolStub.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/models")
+            let body = "{\"data\":[{\"id\":\"gpt-test\"},{\"id\":\"other\"}]}"
+            let data = try XCTUnwrap(body.data(using: .utf8))
+            let response = try XCTUnwrap(HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil))
+            return (response, data)
+        }
+
+        let viewModel = ChatViewModel(service: makeStubbedService())
+        viewModel.config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "custom-model", timeout: 30, streamEnabled: true)
+
+        await viewModel.refreshAvailableModels()
+
+        XCTAssertEqual(viewModel.config.model, "custom-model")
+        XCTAssertEqual(viewModel.availableModels, ["gpt-test", "other"])
+        XCTAssertFalse(viewModel.isCurrentModelAvailable)
+        XCTAssertTrue(viewModel.hasValidatedModelList)
+    }
+
     private func makeStubbedService() -> ChatService {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [URLProtocolStub.self]

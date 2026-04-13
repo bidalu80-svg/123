@@ -297,7 +297,11 @@ struct ChatScreen: View {
                                 message: message,
                                 codeThemeMode: viewModel.config.codeThemeMode,
                                 apiKey: viewModel.config.apiKey,
-                                apiBaseURL: viewModel.config.normalizedBaseURL
+                                apiBaseURL: viewModel.config.normalizedBaseURL,
+                                showsAssistantActionBar: message.id == latestAssistantMessageID && !message.isStreaming,
+                                onRegenerate: {
+                                    Task { await viewModel.regenerateLastAssistantReply() }
+                                }
                             )
                                 .id(message.id)
                         }
@@ -314,6 +318,9 @@ struct ChatScreen: View {
                 }
                 .onChange(of: viewModel.messages.count) { _, _ in
                     guard let lastMessage = viewModel.messages.last else { return }
+                    if lastMessage.role == .user {
+                        isPinnedToBottom = true
+                    }
                     if isPinnedToBottom || lastMessage.role == .user {
                         scrollToBottom(proxy, animated: true)
                     }
@@ -325,9 +332,9 @@ struct ChatScreen: View {
                 }
 
                 if shouldShowScrollJumpButtons {
-                    scrollJumpButtons(proxy: proxy)
-                        .padding(.trailing, 16)
-                        .padding(.bottom, 14)
+                    scrollJumpButton(proxy: proxy)
+                        .padding(.trailing, 6)
+                        .padding(.bottom, 6)
                 }
             }
         }
@@ -461,34 +468,25 @@ struct ChatScreen: View {
     }
 
 
-    private func scrollJumpButtons(proxy: ScrollViewProxy) -> some View {
-        VStack(spacing: 10) {
-            Button {
+    private func scrollJumpButton(proxy: ScrollViewProxy) -> some View {
+        Button {
+            if isPinnedToBottom {
                 isPinnedToBottom = false
                 withAnimation(.easeOut(duration: 0.18)) {
                     proxy.scrollTo(scrollTopAnchor, anchor: .top)
                 }
-            } label: {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .frame(width: 38, height: 38)
-                    .background(.ultraThinMaterial, in: Circle())
-            }
-            .buttonStyle(.plain)
-
-            Button {
+            } else {
                 isPinnedToBottom = true
                 scrollToBottom(proxy, animated: true)
-            } label: {
-                Image(systemName: "arrow.down")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .frame(width: 38, height: 38)
-                    .background(.ultraThinMaterial, in: Circle())
             }
-            .buttonStyle(.plain)
+        } label: {
+            Image(systemName: isPinnedToBottom ? "arrow.up" : "arrow.down")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.primary)
+                .frame(width: 38, height: 38)
+                .background(.ultraThinMaterial, in: Circle())
         }
+        .buttonStyle(.plain)
         .opacity(0.82)
     }
 
@@ -680,6 +678,10 @@ struct ChatScreen: View {
         let maxLength = assistantMessages.map { $0.content.count }.max() ?? 0
         let totalLength = assistantMessages.reduce(0) { $0 + $1.content.count }
         return maxLength >= 380 || totalLength >= 1200
+    }
+
+    private var latestAssistantMessageID: UUID? {
+        viewModel.messages.last(where: { $0.role == .assistant })?.id
     }
 
     private func shortModelName(_ name: String) -> String {
