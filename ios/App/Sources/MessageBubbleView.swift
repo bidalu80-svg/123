@@ -418,17 +418,20 @@ struct MessageBubbleView: View {
 
     private func supportsHTMLPreview(language: String?, title: String, content: String) -> Bool {
         let normalizedLanguage = (language ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if normalizedLanguage == "html" || normalizedLanguage == "htm" {
+        if ["html", "htm", "xhtml", "text/html"].contains(normalizedLanguage) {
             return true
         }
 
         let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if normalizedTitle == "html" || normalizedTitle == "htm" {
+        if ["html", "htm", "xhtml", "text/html"].contains(normalizedTitle) {
             return true
         }
 
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return trimmed.hasPrefix("<!doctype html") || trimmed.hasPrefix("<html")
+        return trimmed.hasPrefix("<!doctype html")
+            || trimmed.hasPrefix("<html")
+            || trimmed.contains("<body")
+            || trimmed.contains("<head")
     }
 
     private func openHTMLPreview(title: String, content: String) {

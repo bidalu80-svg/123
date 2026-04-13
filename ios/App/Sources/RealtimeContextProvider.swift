@@ -257,17 +257,21 @@ actor RealtimeContextProvider {
             return cached.summary
         }
 
-        guard let url = URL(string: "https://news.google.com/rss?hl=zh-CN&gl=CN&ceid=CN:zh-Hans") else {
-            throw ProviderError.invalidURL
+        var mergedTitles: [String] = []
+        for url in hotNewsFeedURLs() {
+            let (data, response) = try await session.data(from: url)
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                continue
+            }
+
+            let parser = RSSHeadlineParser(maxItems: normalizedCount * 2)
+            let titles = parser.parse(data: data)
+            if !titles.isEmpty {
+                mergedTitles.append(contentsOf: titles)
+            }
         }
 
-        let (data, response) = try await session.data(from: url)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            throw ProviderError.badResponse
-        }
-
-        let parser = RSSHeadlineParser(maxItems: normalizedCount)
-        let titles = parser.parse(data: data)
+        let titles = deduplicateHeadlines(mergedTitles).prefix(normalizedCount)
         guard !titles.isEmpty else { throw ProviderError.noData }
 
         let updateTime = formatTime(now, timeZone: .current)
@@ -303,6 +307,27 @@ actor RealtimeContextProvider {
         return raw.replacingOccurrences(of: "T", with: " ")
     }
 
+    private func hotNewsFeedURLs() -> [URL] {
+        [
+            "https://news.google.com/rss?hl=zh-CN&gl=CN&ceid=CN:zh-Hans",
+            "https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en",
+            "https://news.google.com/rss/headlines/section/topic/WORLD?hl=en-US&gl=US&ceid=US:en",
+            "https://news.google.com/rss/headlines/section/topic/BUSINESS?hl=en-US&gl=US&ceid=US:en"
+        ].compactMap(URL.init(string:))
+    }
+
+    private func deduplicateHeadlines(_ input: [String]) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for item in input {
+            let key = item.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if key.isEmpty || seen.contains(key) { continue }
+            seen.insert(key)
+            result.append(item)
+        }
+        return result
+    }
+
     private func parseSymbols(_ raw: String) -> [String] {
         raw
             .replacingOccurrences(of: "，", with: ",")
@@ -327,16 +352,22 @@ actor RealtimeContextProvider {
             "GC=F": "黄金",
             "CL=F": "WTI 原油",
             "BZ=F": "布伦特原油",
+            "SI=F": "白银",
+            "HG=F": "铜",
             "^GSPC": "标普500",
             "^IXIC": "纳斯达克",
             "^DJI": "道琼斯",
+            "^RUT": "罗素2000",
             "^N225": "日经225",
             "^HSI": "恒生指数",
+            "^FTSE": "富时100",
+            "^GDAXI": "德国DAX",
             "AAPL": "Apple",
             "NVDA": "NVIDIA",
             "TSLA": "Tesla",
             "MSFT": "Microsoft",
-            "GOOGL": "Google"
+            "GOOGL": "Google",
+            "AMZN": "Amazon"
         ]
         return map[symbol] ?? fallback ?? symbol
     }

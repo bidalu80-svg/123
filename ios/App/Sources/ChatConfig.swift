@@ -43,7 +43,7 @@ struct ChatConfig: Codable, Equatable {
         weatherContextEnabled: true,
         weatherLocation: "Shanghai",
         marketContextEnabled: true,
-        marketSymbols: "GC=F,CL=F,BZ=F,^GSPC,^IXIC,^DJI,AAPL,NVDA,TSLA",
+        marketSymbols: "GC=F,CL=F,BZ=F,SI=F,HG=F,^GSPC,^IXIC,^DJI,^RUT,^N225,^HSI,^FTSE,^GDAXI,AAPL,NVDA,TSLA,MSFT,AMZN",
         hotNewsContextEnabled: true,
         hotNewsCount: 6
     )
@@ -60,7 +60,7 @@ struct ChatConfig: Codable, Equatable {
         weatherContextEnabled: Bool = true,
         weatherLocation: String = "Shanghai",
         marketContextEnabled: Bool = true,
-        marketSymbols: String = "GC=F,CL=F,BZ=F,^GSPC,^IXIC,^DJI,AAPL,NVDA,TSLA",
+        marketSymbols: String = "GC=F,CL=F,BZ=F,SI=F,HG=F,^GSPC,^IXIC,^DJI,^RUT,^N225,^HSI,^FTSE,^GDAXI,AAPL,NVDA,TSLA,MSFT,AMZN",
         hotNewsContextEnabled: Bool = true,
         hotNewsCount: Int = 6
     ) {
@@ -93,7 +93,7 @@ struct ChatConfig: Codable, Equatable {
         weatherContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .weatherContextEnabled) ?? true
         weatherLocation = try c.decodeIfPresent(String.self, forKey: .weatherLocation) ?? "Shanghai"
         marketContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .marketContextEnabled) ?? true
-        marketSymbols = try c.decodeIfPresent(String.self, forKey: .marketSymbols) ?? "GC=F,CL=F,BZ=F,^GSPC,^IXIC,^DJI,AAPL,NVDA,TSLA"
+        marketSymbols = try c.decodeIfPresent(String.self, forKey: .marketSymbols) ?? "GC=F,CL=F,BZ=F,SI=F,HG=F,^GSPC,^IXIC,^DJI,^RUT,^N225,^HSI,^FTSE,^GDAXI,AAPL,NVDA,TSLA,MSFT,AMZN"
         hotNewsContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .hotNewsContextEnabled) ?? true
         hotNewsCount = try c.decodeIfPresent(Int.self, forKey: .hotNewsCount) ?? 6
     }
