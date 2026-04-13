@@ -4,6 +4,7 @@ import UIKit
 struct SelectableLinkTextView: UIViewRepresentable {
     let text: String
     var textColor: UIColor = .label
+    var linkColor: UIColor = .secondaryLabel
     var font: UIFont = .systemFont(ofSize: 17, weight: .regular)
 
     func makeCoordinator() -> Coordinator {
@@ -20,10 +21,10 @@ struct SelectableLinkTextView: UIViewRepresentable {
         view.textContainerInset = .zero
         view.textContainer.lineFragmentPadding = 0
         view.adjustsFontForContentSizeCategory = true
-        view.dataDetectorTypes = [.link]
+        view.dataDetectorTypes = []
         view.linkTextAttributes = [
-            .foregroundColor: UIColor.systemBlue,
-            .underlineStyle: NSUnderlineStyle.single.rawValue
+            .foregroundColor: linkColor,
+            .underlineStyle: 0
         ]
         // Let the parent SwiftUI ScrollView own vertical scrolling.
         view.panGestureRecognizer.isEnabled = false
@@ -40,7 +41,25 @@ struct SelectableLinkTextView: UIViewRepresentable {
             .paragraphStyle: paragraph
         ]
 
-        uiView.attributedText = NSAttributedString(string: text, attributes: attrs)
+        let attributed = NSMutableAttributedString(string: text, attributes: attrs)
+        if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) {
+            let nsText = text as NSString
+            let fullRange = NSRange(location: 0, length: nsText.length)
+            detector.enumerateMatches(in: text, options: [], range: fullRange) { match, _, _ in
+                guard let match, let url = match.url else { return }
+                attributed.addAttributes(
+                    [
+                        .link: url,
+                        .foregroundColor: linkColor,
+                        .underlineStyle: 0,
+                        .font: UIFont.systemFont(ofSize: font.pointSize, weight: .semibold)
+                    ],
+                    range: match.range
+                )
+            }
+        }
+
+        uiView.attributedText = attributed
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {

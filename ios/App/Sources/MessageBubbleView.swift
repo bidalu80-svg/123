@@ -235,6 +235,8 @@ struct MessageBubbleView: View {
         case .text(let text):
             SelectableLinkTextView(
                 text: text,
+                textColor: UIColor.label,
+                linkColor: UIColor.systemGray,
                 font: .systemFont(ofSize: 18, weight: .regular)
             )
                 .frame(maxWidth: .infinity, alignment: .leading)
