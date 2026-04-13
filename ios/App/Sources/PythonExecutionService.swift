@@ -60,6 +60,23 @@ final class PythonExecutionService {
             return false
         }
 
+        // Explicitly skip obvious fragments that frequently come from partial answers.
+        let fragmentLikePatterns = [
+            #"^self\.[A-Za-z_][A-Za-z0-9_]*\s*:"#,
+            #"^self\.[A-Za-z_][A-Za-z0-9_]*\s*="#,
+            #"^return\s+.+$"#,
+            #"^except\b.*:$"#,
+            #"^elif\b.*:$"#,
+            #"^else\s*:$"#
+        ]
+        if lines.count == 1 {
+            for pattern in fragmentLikePatterns {
+                if lines[0].range(of: pattern, options: .regularExpression) != nil {
+                    return false
+                }
+            }
+        }
+
         // If it contains runnable signals, allow.
         let runnableMarkers = [
             "print(",

@@ -155,6 +155,8 @@ import io
 import sys
 import traceback
 
+_MAX_OUT = 12000
+
 _buf = io.StringIO()
 _old_out = sys.stdout
 _old_err = sys.stderr
@@ -172,7 +174,7 @@ except SystemExit as e:
         _exit = int(getattr(e, "code", 0) or 0)
     except Exception:
         _exit = 1
-except Exception:
+except BaseException:
     _exit = 1
     traceback.print_exc()
 finally:
@@ -180,8 +182,12 @@ finally:
     sys.stderr = _old_err
     sys.stdin = _old_in
 
+_text = _buf.getvalue()
+if len(_text) > _MAX_OUT:
+    _text = _text[:_MAX_OUT] + "\\n...[输出过长，已截断]"
+
 with open(\(out), "w", encoding="utf-8") as f:
-    f.write(_buf.getvalue())
+    f.write(_text)
 with open(\(exit), "w", encoding="utf-8") as f:
     f.write(str(_exit))
 """
