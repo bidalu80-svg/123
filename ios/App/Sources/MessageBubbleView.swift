@@ -143,7 +143,8 @@ struct MessageBubbleView: View {
 
     private func renderedMessageImage<V: View>(_ imageView: V, attachment: ChatImageAttachment) -> some View {
         imageView
-            .frame(maxWidth: 260, maxHeight: 260)
+            .aspectRatio(contentMode: .fit)
+            .frame(maxWidth: 260, maxHeight: 460)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .contextMenu {
                 if !attachment.requestURLString.isEmpty {
