@@ -220,7 +220,28 @@ enum MessageContentParser {
         text = text.replacingOccurrences(of: "`", with: "")
         text = text.replacingOccurrences(of: "\r\n", with: "\n")
         text = text.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
+        text = expandGitHubRepositoryLinks(in: text)
         return text
+    }
+
+    private static func expandGitHubRepositoryLinks(in raw: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: #"(?<!github\.com/)\(([A-Za-z0-9-]{1,39}/[A-Za-z0-9_.-]{1,100})\)"#) else {
+            return raw
+        }
+
+        let nsRange = NSRange(raw.startIndex..<raw.endIndex, in: raw)
+        let matches = regex.matches(in: raw, range: nsRange)
+        guard !matches.isEmpty else { return raw }
+
+        var result = raw
+        for match in matches.reversed() {
+            guard let fullRange = Range(match.range, in: result),
+                  let repoRange = Range(match.range(at: 1), in: result) else { continue }
+            let repo = String(result[repoRange])
+            let replacement = "(\(repo) · https://github.com/\(repo))"
+            result.replaceSubrange(fullRange, with: replacement)
+        }
+        return result
     }
     private static func mergeAdjacentTextSegments(_ segments: [MessageSegment]) -> [MessageSegment] {
         var merged: [MessageSegment] = []

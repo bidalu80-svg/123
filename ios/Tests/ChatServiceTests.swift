@@ -231,6 +231,22 @@ final class ChatServiceTests: XCTestCase {
         XCTAssertTrue(text.contains("• 最小示例"))
         XCTAssertTrue(text.contains("• 运行程序"))
     }
+
+    func testMessageContentParserExpandsGitHubRepositoryRefWithURL() {
+        let message = ChatMessage(
+            role: .assistant,
+            content: "LangChain (langchain-ai/langchain)"
+        )
+
+        let segments = MessageContentParser.parse(message)
+        let text = segments.compactMap { segment -> String? in
+            if case .text(let value) = segment { return value }
+            return nil
+        }.joined()
+
+        XCTAssertTrue(text.contains("langchain-ai/langchain"))
+        XCTAssertTrue(text.contains("https://github.com/langchain-ai/langchain"))
+    }
 }
 
 final class ChatViewModelTests: XCTestCase {
