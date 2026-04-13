@@ -73,3 +73,71 @@
 2. 附件支持多文件同时发送
 3. 把会话存储升级到本地数据库（可检索、可分页）
 4. 为模型列表与回复解析增加网络层单测（mock URLProtocol）
+
+---
+
+## 2026-04-13 本轮要点（v2.1）
+
+### 1) Python 运行能力：改为本地零依赖
+- 目标：不依赖后端代理，不走外网执行服务。
+- 实现：`PythonExecutionService` 从远程 API 调用改为本地解释执行。
+- 当前支持：
+  - 变量赋值
+  - `print(...)`
+  - 算术表达式与括号
+  - `if/else`
+  - `while`
+  - `for ... in range(...)`
+  - `len(...)`
+  - 布尔与比较表达式
+- 保护策略：
+  - 最大代码长度限制
+  - 循环步数限制
+  - 输出长度限制
+- 文件：
+  - `ios/App/Sources/PythonExecutionService.swift`
+  - `ios/Tests/PythonExecutionServiceTests.swift`
+
+### 2) HTML 代码运行：识别增强
+- 目标：聊天代码块中更稳定地出现“运行网页”按钮。
+- 增强点：
+  - language/title 支持 `html` / `htm` / `xhtml` / `text/html`
+  - 内容检测新增 `<head>` / `<body>` 关键标记
+- 文件：
+  - `ios/App/Sources/MessageBubbleView.swift`
+
+### 3) 最新知识能力：实时上下文增强
+- 市场范围扩展（默认 symbols）：
+  - 商品：黄金、WTI、布伦特、白银、铜
+  - 指数：标普、纳指、道指、罗素2000、日经、恒生、富时100、DAX
+  - 个股：AAPL、NVDA、TSLA、MSFT、AMZN
+- 热点新闻来源升级为多源聚合并去重：
+  - Google News 中文
+  - Google News 英文
+  - Google News WORLD
+  - Google News BUSINESS
+- 文件：
+  - `ios/App/Sources/ChatConfig.swift`
+  - `ios/App/Sources/RealtimeContextProvider.swift`
+
+### 4) 构建与产物记录（2026-04-13）
+- 提交：
+  - `8cba38d` (`main`)
+- GitHub Actions：
+  - Workflow: `Build iOS IPA`
+  - Run: `24341287468`
+  - 链接：`https://github.com/Return-end/blankai-ios/actions/runs/24341287468`
+- 产物下载到本地：
+  - `artifacts/ipa-24341287468/exported/IEXA.ipa`
+
+### 5) 说明与限制
+- 本地 Python 运行器是“可控子集解释器”，优先保障离线可用与安全边界。
+- 若后续需要完整 CPython 兼容（第三方库、复杂语法、文件系统/网络等），建议单独规划沙箱与权限模型。
+
+### 6) 完整 CPython 集成（已加接入层）
+- 新增自动探测模块：若 App 内存在 `Python.framework`，优先走完整 CPython；否则回退轻量解释器。
+- 新增文件：
+  - `ios/App/Sources/EmbeddedCPythonRuntime.swift`
+  - `ios/Tools/EMBEDDED_CPYTHON_SETUP.md`
+- 使用提示：
+  - 未检测到 `Python.framework` 时，运行输出会提示“当前为兼容模式”。

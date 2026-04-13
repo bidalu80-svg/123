@@ -46,14 +46,44 @@ final class PythonExecutionService {
             return PythonExecutionResult(output: "代码过长（最多 \(maxCodeLength) 字符）", exitCode: 1)
         }
 
+        if let fullPythonResult = await EmbeddedCPythonRuntime.shared.runIfAvailable(code: trimmed) {
+            return fullPythonResult
+        }
+
+        let runtimeHint = await EmbeddedCPythonRuntime.shared.statusHint()
+
         do {
             let interpreter = LocalPythonInterpreter(maxOutputLength: maxOutputLength, maxLoopSteps: maxLoopSteps)
             return try interpreter.execute(code: trimmed)
         } catch let error as PythonExecutionError {
-            return PythonExecutionResult(output: error.errorDescription ?? "运行失败", exitCode: 1)
+            var message = error.errorDescription ?? "运行失败"
+            if shouldSuggestEmbeddedRuntime(for: trimmed) {
+                message += "\n\n提示：\(runtimeHint)"
+            }
+            return PythonExecutionResult(output: message, exitCode: 1)
         } catch {
             return PythonExecutionResult(output: "运行失败：\(error.localizedDescription)", exitCode: 1)
         }
+    }
+
+    private func shouldSuggestEmbeddedRuntime(for code: String) -> Bool {
+        let lowered = code.lowercased()
+        let markers = [
+            "import ",
+            "from ",
+            "def ",
+            "class ",
+            "try:",
+            "except ",
+            "finally:",
+            "with ",
+            "break",
+            "continue",
+            "input(",
+            "__name__",
+            "__main__"
+        ]
+        return markers.contains { lowered.contains($0) }
     }
 }
 
