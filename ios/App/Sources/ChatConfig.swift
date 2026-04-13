@@ -30,6 +30,7 @@ struct ChatConfig: Codable, Equatable {
     var marketSymbols: String
     var hotNewsContextEnabled: Bool
     var hotNewsCount: Int
+    var soundEffectsEnabled: Bool
 
     static let `default` = ChatConfig(
         apiURL: "https://xxx.com",
@@ -45,7 +46,8 @@ struct ChatConfig: Codable, Equatable {
         marketContextEnabled: true,
         marketSymbols: "GC=F,CL=F,BZ=F,SI=F,HG=F,^GSPC,^IXIC,^DJI,^RUT,^N225,^HSI,^FTSE,^GDAXI,AAPL,NVDA,TSLA,MSFT,AMZN",
         hotNewsContextEnabled: true,
-        hotNewsCount: 6
+        hotNewsCount: 6,
+        soundEffectsEnabled: true
     )
 
     init(
@@ -62,7 +64,8 @@ struct ChatConfig: Codable, Equatable {
         marketContextEnabled: Bool = true,
         marketSymbols: String = "GC=F,CL=F,BZ=F,SI=F,HG=F,^GSPC,^IXIC,^DJI,^RUT,^N225,^HSI,^FTSE,^GDAXI,AAPL,NVDA,TSLA,MSFT,AMZN",
         hotNewsContextEnabled: Bool = true,
-        hotNewsCount: Int = 6
+        hotNewsCount: Int = 6,
+        soundEffectsEnabled: Bool = true
     ) {
         self.apiURL = apiURL
         self.apiKey = apiKey
@@ -78,6 +81,7 @@ struct ChatConfig: Codable, Equatable {
         self.marketSymbols = marketSymbols
         self.hotNewsContextEnabled = hotNewsContextEnabled
         self.hotNewsCount = hotNewsCount
+        self.soundEffectsEnabled = soundEffectsEnabled
     }
 
     init(from decoder: Decoder) throws {
@@ -96,6 +100,7 @@ struct ChatConfig: Codable, Equatable {
         marketSymbols = try c.decodeIfPresent(String.self, forKey: .marketSymbols) ?? "GC=F,CL=F,BZ=F,SI=F,HG=F,^GSPC,^IXIC,^DJI,^RUT,^N225,^HSI,^FTSE,^GDAXI,AAPL,NVDA,TSLA,MSFT,AMZN"
         hotNewsContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .hotNewsContextEnabled) ?? true
         hotNewsCount = try c.decodeIfPresent(Int.self, forKey: .hotNewsCount) ?? 6
+        soundEffectsEnabled = try c.decodeIfPresent(Bool.self, forKey: .soundEffectsEnabled) ?? true
     }
 
     var normalizedBaseURL: String {
@@ -144,7 +149,8 @@ enum ChatConfigStore {
             marketContextEnabled: ChatConfig.default.marketContextEnabled,
             marketSymbols: ChatConfig.default.marketSymbols,
             hotNewsContextEnabled: ChatConfig.default.hotNewsContextEnabled,
-            hotNewsCount: ChatConfig.default.hotNewsCount
+            hotNewsCount: ChatConfig.default.hotNewsCount,
+            soundEffectsEnabled: ChatConfig.default.soundEffectsEnabled
         )
     }
 
@@ -216,7 +222,8 @@ enum ChatConfigStore {
             marketContextEnabled: config.marketContextEnabled,
             marketSymbols: config.marketSymbols.trimmingCharacters(in: .whitespacesAndNewlines),
             hotNewsContextEnabled: config.hotNewsContextEnabled,
-            hotNewsCount: min(max(config.hotNewsCount, 1), 12)
+            hotNewsCount: min(max(config.hotNewsCount, 1), 12),
+            soundEffectsEnabled: config.soundEffectsEnabled
         )
     }
 }

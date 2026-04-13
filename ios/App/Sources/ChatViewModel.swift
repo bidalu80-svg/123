@@ -112,6 +112,9 @@ final class ChatViewModel: ObservableObject {
         errorMessage = ""
         statusMessage = "正在发送请求…"
         isSending = true
+        if config.soundEffectsEnabled {
+            SoundEffectPlayer.playSend()
+        }
         defer {
             inflightSendTask = nil
             isSending = false
@@ -206,6 +209,9 @@ final class ChatViewModel: ObservableObject {
         errorMessage = ""
         statusMessage = "正在重新生成…"
         isSending = true
+        if config.soundEffectsEnabled {
+            SoundEffectPlayer.playSend()
+        }
         defer {
             inflightSendTask = nil
             isSending = false
@@ -487,6 +493,9 @@ final class ChatViewModel: ObservableObject {
         sessions[index].title = buildSessionTitle(from: sessions[index])
         messages = sessions[index].messages
         signalStreamScroll(force: true)
+        if config.soundEffectsEnabled {
+            SoundEffectPlayer.playReplyComplete()
+        }
     }
 
     private func finishCancellation(id: UUID) {
@@ -627,7 +636,8 @@ final class ChatViewModel: ObservableObject {
             marketContextEnabled: input.marketContextEnabled,
             marketSymbols: input.marketSymbols.trimmingCharacters(in: .whitespacesAndNewlines),
             hotNewsContextEnabled: input.hotNewsContextEnabled,
-            hotNewsCount: min(max(input.hotNewsCount, 1), 12)
+            hotNewsCount: min(max(input.hotNewsCount, 1), 12),
+            soundEffectsEnabled: input.soundEffectsEnabled
         )
     }
 

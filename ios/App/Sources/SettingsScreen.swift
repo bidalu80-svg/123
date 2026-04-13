@@ -96,6 +96,7 @@ struct SettingsScreen: View {
 
             Section("请求选项") {
                 Toggle("启用流式输出", isOn: $viewModel.config.streamEnabled)
+                Toggle("启用消息音效（发送/回复完成）", isOn: $viewModel.config.soundEffectsEnabled)
                 HStack {
                     Text("超时")
                     Spacer()
