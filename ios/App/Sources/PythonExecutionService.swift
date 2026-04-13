@@ -29,6 +29,63 @@ final class PythonExecutionService {
     private let maxOutputLength: Int
     private let maxLoopSteps: Int
 
+    static func isRunnableSnippet(_ code: String) -> Bool {
+        let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+
+        // Common non-runnable fragments from AI answers.
+        if trimmed.hasPrefix("self.") || trimmed.hasPrefix("cls.") {
+            return false
+        }
+        if trimmed == "..." || trimmed.contains("\n...") {
+            return false
+        }
+
+        let lines = trimmed
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { String($0).trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && !$0.hasPrefix("#") }
+
+        guard !lines.isEmpty else { return false }
+
+        // Incomplete block header like "if x:" without body.
+        if lines.count == 1, lines[0].hasSuffix(":") {
+            return false
+        }
+
+        // Single-line instance attribute snippets are usually not runnable alone.
+        if lines.count == 1,
+           lines[0].hasPrefix("self.") || lines[0].hasPrefix("cls.") {
+            return false
+        }
+
+        // If it contains runnable signals, allow.
+        let runnableMarkers = [
+            "print(",
+            "input(",
+            "for ",
+            "while ",
+            "if ",
+            "def ",
+            "class ",
+            "import ",
+            "from ",
+            "if __name__",
+            "="
+        ]
+        if runnableMarkers.contains(where: { marker in trimmed.contains(marker) }) {
+            return true
+        }
+
+        // Otherwise require at least one function call shape foo(...)
+        if trimmed.range(of: #"[A-Za-z_][A-Za-z0-9_]*\s*\("#, options: .regularExpression) != nil {
+            return true
+        }
+
+        return false
+    }
+
     init(
         maxCodeLength: Int = 12_000,
         maxOutputLength: Int = 20_000,

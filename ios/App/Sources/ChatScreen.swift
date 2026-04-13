@@ -158,7 +158,7 @@ struct ChatScreen: View {
             .safeAreaInset(edge: .top, spacing: 0) {
                 header
                     .padding(.horizontal, 12)
-                    .padding(.top, 6)
+                    .padding(.top, 2)
                     .padding(.bottom, 8)
                     .background(Color(.systemBackground))
                     .overlay(alignment: .bottom) {
@@ -215,21 +215,15 @@ struct ChatScreen: View {
                         Circle()
                             .fill(viewModel.isCurrentModelAvailable ? Color.green : Color.red)
                             .frame(width: 7, height: 7)
-                        VStack(alignment: .leading, spacing: 0) {
-                            Text(shortModelName(viewModel.config.model))
-                                .font(.system(size: 12, weight: .semibold))
-                                .lineLimit(1)
-                            Text(modelVendorSubtitle(viewModel.config.model, apiURL: viewModel.config.normalizedBaseURL))
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
+                        Text(modelVendorSubtitle(viewModel.config.model, apiURL: viewModel.config.normalizedBaseURL))
+                            .font(.system(size: 12, weight: .semibold))
+                            .lineLimit(1)
                         Image(systemName: "chevron.down")
                             .font(.system(size: 10, weight: .semibold))
                     }
                     .foregroundStyle(.primary)
-                    .padding(.horizontal, 11)
-                    .padding(.vertical, 7)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
                     .background(
                         Capsule(style: .continuous)
                             .fill(Color(.secondarySystemBackground))
@@ -284,7 +278,7 @@ struct ChatScreen: View {
             }
         }
         .padding(.horizontal, 8)
-        .padding(.top, 6)
+        .padding(.top, 2)
         .padding(.bottom, 4)
     }
 
@@ -696,16 +690,9 @@ struct ChatScreen: View {
         viewModel.messages.last(where: { $0.role == .assistant })?.id
     }
 
-    private func shortModelName(_ name: String) -> String {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return "模型" }
-        if trimmed.count <= 16 { return trimmed }
-        return "\(trimmed.prefix(16))…"
-    }
-
     private func modelVendorSubtitle(_ rawModel: String, apiURL: String) -> String {
         let model = rawModel.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !model.isEmpty else { return "Unknown" }
+        guard !model.isEmpty else { return "Unknown · 模型" }
         let direct = detectModelVendor(model)
         if direct != "Unknown" {
             return "\(direct) · \(model)"

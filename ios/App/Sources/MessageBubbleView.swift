@@ -301,6 +301,7 @@ struct MessageBubbleView: View {
         let isCopied = copiedCodeToken == copyToken
         let isRunning = runningCodeToken == copyToken
         let canRunPython = supportsPythonRun(language: language, title: title)
+            && PythonExecutionService.isRunnableSnippet(content)
         let canRunHTML = supportsHTMLPreview(language: language, title: title, content: content)
         let runOutput = codeRunOutputs[copyToken]
         let runError = codeRunErrors[copyToken]
