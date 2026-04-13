@@ -254,7 +254,7 @@ struct MessageBubbleView: View {
         let copyToken = "\(title)|\(language ?? "")|\(content)"
         let isCopied = copiedCodeToken == copyToken
 
-        VStack(alignment: .leading, spacing: 8) {
+        return VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text(title)
                     .font(.caption2.weight(.semibold))
