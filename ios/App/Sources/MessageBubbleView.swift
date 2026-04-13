@@ -17,6 +17,7 @@ struct MessageBubbleView: View {
     @State private var runningCodeToken: String?
     @State private var codeRunOutputs: [String: String] = [:]
     @State private var codeRunErrors: [String: String] = [:]
+    @State private var activeHTMLPreview: HTMLPreviewPayload?
 
     var body: some View {
         Group {
@@ -37,6 +38,9 @@ struct MessageBubbleView: View {
             }
         } message: {
             Text(saveFeedback ?? "")
+        }
+        .sheet(item: $activeHTMLPreview) { payload in
+            HTMLPreviewSheet(title: payload.title, html: payload.html)
         }
     }
 
@@ -258,6 +262,7 @@ struct MessageBubbleView: View {
         let isCopied = copiedCodeToken == copyToken
         let isRunning = runningCodeToken == copyToken
         let canRunPython = supportsPythonRun(language: language, title: title)
+        let canRunHTML = supportsHTMLPreview(language: language, title: title, content: content)
         let runOutput = codeRunOutputs[copyToken]
         let runError = codeRunErrors[copyToken]
 
@@ -274,6 +279,14 @@ struct MessageBubbleView: View {
                     .font(.caption2)
                     .buttonStyle(.borderedProminent)
                     .disabled(isRunning)
+                }
+                if canRunHTML {
+                    Button("运行网页") {
+                        openHTMLPreview(title: title, content: content)
+                    }
+                    .font(.caption2)
+                    .buttonStyle(.borderedProminent)
+                    .tint(.blue)
                 }
                 Button(isCopied ? "已复制" : "复制代码") {
                     UIPasteboard.general.string = content
@@ -401,6 +414,30 @@ struct MessageBubbleView: View {
                 }
             }
         }
+    }
+
+    private func supportsHTMLPreview(language: String?, title: String, content: String) -> Bool {
+        let normalizedLanguage = (language ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalizedLanguage == "html" || normalizedLanguage == "htm" {
+            return true
+        }
+
+        let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalizedTitle == "html" || normalizedTitle == "htm" {
+            return true
+        }
+
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return trimmed.hasPrefix("<!doctype html") || trimmed.hasPrefix("<html")
+    }
+
+    private func openHTMLPreview(title: String, content: String) {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            feedback(.light, "HTML 代码为空")
+            return
+        }
+        activeHTMLPreview = HTMLPreviewPayload(title: title, html: trimmed)
     }
 
     @ViewBuilder
@@ -539,6 +576,12 @@ struct MessageBubbleView: View {
         }
         return nil
     }
+}
+
+private struct HTMLPreviewPayload: Identifiable {
+    let id = UUID()
+    let title: String
+    let html: String
 }
 
 private enum AssistantReaction {

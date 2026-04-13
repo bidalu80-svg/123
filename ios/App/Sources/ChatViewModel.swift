@@ -623,7 +623,11 @@ final class ChatViewModel: ObservableObject {
             codeThemeMode: input.codeThemeMode,
             realtimeContextEnabled: input.realtimeContextEnabled,
             weatherContextEnabled: input.weatherContextEnabled,
-            weatherLocation: input.weatherLocation.trimmingCharacters(in: .whitespacesAndNewlines)
+            weatherLocation: input.weatherLocation.trimmingCharacters(in: .whitespacesAndNewlines),
+            marketContextEnabled: input.marketContextEnabled,
+            marketSymbols: input.marketSymbols.trimmingCharacters(in: .whitespacesAndNewlines),
+            hotNewsContextEnabled: input.hotNewsContextEnabled,
+            hotNewsCount: min(max(input.hotNewsCount, 1), 12)
         )
     }
 

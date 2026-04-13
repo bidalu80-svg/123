@@ -115,7 +115,27 @@ struct SettingsScreen: View {
                             .autocorrectionDisabled()
                     }
 
-                    Text("模型不会自动知道实时时间和天气；启用后会在每次请求前注入系统实时信息。")
+                    Toggle("注入市场价格（油价/金价/股市）", isOn: $viewModel.config.marketContextEnabled)
+
+                    if viewModel.config.marketContextEnabled {
+                        TextField("市场代码（逗号分隔）", text: $viewModel.config.marketSymbols)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+
+                        Text("示例：GC=F,CL=F,BZ=F,^GSPC,^IXIC,^DJI,AAPL,NVDA,TSLA")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Toggle("注入热门事件", isOn: $viewModel.config.hotNewsContextEnabled)
+
+                    if viewModel.config.hotNewsContextEnabled {
+                        Stepper(value: $viewModel.config.hotNewsCount, in: 1...12) {
+                            Text("热门事件条数：\(viewModel.config.hotNewsCount)")
+                        }
+                    }
+
+                    Text("模型不会自动知道实时世界信息；启用后会在每次请求前注入时间、天气、市场和热门事件摘要。")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }

@@ -26,6 +26,10 @@ struct ChatConfig: Codable, Equatable {
     var realtimeContextEnabled: Bool
     var weatherContextEnabled: Bool
     var weatherLocation: String
+    var marketContextEnabled: Bool
+    var marketSymbols: String
+    var hotNewsContextEnabled: Bool
+    var hotNewsCount: Int
 
     static let `default` = ChatConfig(
         apiURL: "https://xxx.com",
@@ -37,7 +41,11 @@ struct ChatConfig: Codable, Equatable {
         codeThemeMode: .followApp,
         realtimeContextEnabled: true,
         weatherContextEnabled: true,
-        weatherLocation: "Shanghai"
+        weatherLocation: "Shanghai",
+        marketContextEnabled: true,
+        marketSymbols: "GC=F,CL=F,BZ=F,^GSPC,^IXIC,^DJI,AAPL,NVDA,TSLA",
+        hotNewsContextEnabled: true,
+        hotNewsCount: 6
     )
 
     init(
@@ -50,7 +58,11 @@ struct ChatConfig: Codable, Equatable {
         codeThemeMode: CodeThemeMode = .followApp,
         realtimeContextEnabled: Bool = true,
         weatherContextEnabled: Bool = true,
-        weatherLocation: String = "Shanghai"
+        weatherLocation: String = "Shanghai",
+        marketContextEnabled: Bool = true,
+        marketSymbols: String = "GC=F,CL=F,BZ=F,^GSPC,^IXIC,^DJI,AAPL,NVDA,TSLA",
+        hotNewsContextEnabled: Bool = true,
+        hotNewsCount: Int = 6
     ) {
         self.apiURL = apiURL
         self.apiKey = apiKey
@@ -62,6 +74,10 @@ struct ChatConfig: Codable, Equatable {
         self.realtimeContextEnabled = realtimeContextEnabled
         self.weatherContextEnabled = weatherContextEnabled
         self.weatherLocation = weatherLocation
+        self.marketContextEnabled = marketContextEnabled
+        self.marketSymbols = marketSymbols
+        self.hotNewsContextEnabled = hotNewsContextEnabled
+        self.hotNewsCount = hotNewsCount
     }
 
     init(from decoder: Decoder) throws {
@@ -76,6 +92,10 @@ struct ChatConfig: Codable, Equatable {
         realtimeContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .realtimeContextEnabled) ?? true
         weatherContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .weatherContextEnabled) ?? true
         weatherLocation = try c.decodeIfPresent(String.self, forKey: .weatherLocation) ?? "Shanghai"
+        marketContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .marketContextEnabled) ?? true
+        marketSymbols = try c.decodeIfPresent(String.self, forKey: .marketSymbols) ?? "GC=F,CL=F,BZ=F,^GSPC,^IXIC,^DJI,AAPL,NVDA,TSLA"
+        hotNewsContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .hotNewsContextEnabled) ?? true
+        hotNewsCount = try c.decodeIfPresent(Int.self, forKey: .hotNewsCount) ?? 6
     }
 
     var normalizedBaseURL: String {
@@ -120,7 +140,11 @@ enum ChatConfigStore {
             codeThemeMode: ChatConfig.default.codeThemeMode,
             realtimeContextEnabled: ChatConfig.default.realtimeContextEnabled,
             weatherContextEnabled: ChatConfig.default.weatherContextEnabled,
-            weatherLocation: ChatConfig.default.weatherLocation
+            weatherLocation: ChatConfig.default.weatherLocation,
+            marketContextEnabled: ChatConfig.default.marketContextEnabled,
+            marketSymbols: ChatConfig.default.marketSymbols,
+            hotNewsContextEnabled: ChatConfig.default.hotNewsContextEnabled,
+            hotNewsCount: ChatConfig.default.hotNewsCount
         )
     }
 
@@ -188,7 +212,11 @@ enum ChatConfigStore {
             codeThemeMode: config.codeThemeMode,
             realtimeContextEnabled: config.realtimeContextEnabled,
             weatherContextEnabled: config.weatherContextEnabled,
-            weatherLocation: config.weatherLocation.trimmingCharacters(in: .whitespacesAndNewlines)
+            weatherLocation: config.weatherLocation.trimmingCharacters(in: .whitespacesAndNewlines),
+            marketContextEnabled: config.marketContextEnabled,
+            marketSymbols: config.marketSymbols.trimmingCharacters(in: .whitespacesAndNewlines),
+            hotNewsContextEnabled: config.hotNewsContextEnabled,
+            hotNewsCount: min(max(config.hotNewsCount, 1), 12)
         )
     }
 }

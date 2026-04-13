@@ -10,6 +10,8 @@ enum PythonExecutionError: LocalizedError, Equatable {
     case requestFailed
     case responseFailed
     case decodeFailed
+    case certificateInvalid
+    case networkBlocked
 
     var errorDescription: String? {
         switch self {
@@ -21,6 +23,10 @@ enum PythonExecutionError: LocalizedError, Equatable {
             return "Python 运行服务响应异常。"
         case .decodeFailed:
             return "Python 运行结果解析失败。"
+        case .certificateInvalid:
+            return "运行服务证书校验失败，可能是网络代理/抓包导致。请切换网络后重试。"
+        case .networkBlocked:
+            return "无法连接到运行服务，请检查当前网络是否限制了外网访问。"
         }
     }
 }
@@ -31,12 +37,12 @@ final class PythonExecutionService {
     private let executeEndpoints: [String]
 
     private let session: URLSession
+    private let retryableHTTPStatusCodes: Set<Int> = [408, 409, 425, 429, 500, 502, 503, 504]
 
     init(
         session: URLSession? = nil,
         executeEndpoints: [String] = [
-            "https://emkc.org/api/v2/piston/execute",
-            "https://piston.rs/api/v2/execute"
+            "https://emkc.org/api/v2/piston/execute"
         ]
     ) {
         self.executeEndpoints = executeEndpoints
@@ -62,7 +68,11 @@ final class PythonExecutionService {
             do {
                 return try await runPython(code: trimmed, endpoint: endpoint)
             } catch {
-                lastError = error
+                if let mapped = mapNetworkError(error) {
+                    lastError = mapped
+                } else {
+                    lastError = error
+                }
             }
         }
 
@@ -89,7 +99,37 @@ final class PythonExecutionService {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(payload)
 
-        let (data, response) = try await session.data(for: request)
+        var data: Data = Data()
+        var response: URLResponse?
+        var lastError: Error?
+
+        for attempt in 0..<3 {
+            do {
+                let result = try await session.data(for: request)
+                data = result.0
+                response = result.1
+
+                if let http = response as? HTTPURLResponse, retryableHTTPStatusCodes.contains(http.statusCode), attempt < 2 {
+                    let delay = UInt64(350_000_000 * (attempt + 1))
+                    try await Task.sleep(nanoseconds: delay)
+                    continue
+                }
+                break
+            } catch {
+                lastError = error
+                if let urlError = mapNetworkError(error), urlError == .networkBlocked, attempt < 2 {
+                    let delay = UInt64(350_000_000 * (attempt + 1))
+                    try await Task.sleep(nanoseconds: delay)
+                    continue
+                }
+                throw mapNetworkError(error) ?? PythonExecutionError.requestFailed
+            }
+        }
+
+        if let lastError, response == nil {
+            throw mapNetworkError(lastError) ?? PythonExecutionError.requestFailed
+        }
+
         guard let http = response as? HTTPURLResponse else {
             throw PythonExecutionError.responseFailed
         }
@@ -126,6 +166,26 @@ final class PythonExecutionService {
             output: normalizedOutput,
             exitCode: run?.code ?? 0
         )
+    }
+
+    private func mapNetworkError(_ error: Error) -> PythonExecutionError? {
+        guard let urlError = error as? URLError else { return nil }
+        switch urlError.code {
+        case .serverCertificateHasBadDate,
+             .serverCertificateUntrusted,
+             .serverCertificateHasUnknownRoot,
+             .secureConnectionFailed:
+            return .certificateInvalid
+        case .notConnectedToInternet,
+             .networkConnectionLost,
+             .cannotFindHost,
+             .cannotConnectToHost,
+             .dnsLookupFailed,
+             .timedOut:
+            return .networkBlocked
+        default:
+            return nil
+        }
     }
 }
 

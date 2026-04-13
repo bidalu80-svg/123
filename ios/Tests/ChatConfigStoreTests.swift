@@ -35,5 +35,8 @@ final class ChatConfigStoreTests: XCTestCase {
         XCTAssertTrue(config.realtimeContextEnabled)
         XCTAssertTrue(config.weatherContextEnabled)
         XCTAssertEqual(config.weatherLocation, "Shanghai")
+        XCTAssertTrue(config.marketContextEnabled)
+        XCTAssertTrue(config.hotNewsContextEnabled)
+        XCTAssertEqual(config.hotNewsCount, 6)
     }
 }
