@@ -39,21 +39,25 @@ final class PythonExecutionService {
         self.maxLoopSteps = maxLoopSteps
     }
 
-    func runPython(code: String) async throws -> PythonExecutionResult {
+    func runPython(code: String, stdin: String? = nil) async throws -> PythonExecutionResult {
         let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw PythonExecutionError.emptyCode }
         guard trimmed.count <= maxCodeLength else {
             return PythonExecutionResult(output: "代码过长（最多 \(maxCodeLength) 字符）", exitCode: 1)
         }
 
-        if let fullPythonResult = await EmbeddedCPythonRuntime.shared.runIfAvailable(code: trimmed) {
+        if let fullPythonResult = await EmbeddedCPythonRuntime.shared.runIfAvailable(code: trimmed, stdin: stdin) {
             return fullPythonResult
         }
 
         let runtimeHint = await EmbeddedCPythonRuntime.shared.statusHint()
 
         do {
-            let interpreter = LocalPythonInterpreter(maxOutputLength: maxOutputLength, maxLoopSteps: maxLoopSteps)
+            let interpreter = LocalPythonInterpreter(
+                maxOutputLength: maxOutputLength,
+                maxLoopSteps: maxLoopSteps,
+                stdin: stdin ?? ""
+            )
             return try interpreter.execute(code: trimmed)
         } catch let error as PythonExecutionError {
             var message = error.errorDescription ?? "运行失败"
@@ -92,13 +96,16 @@ private final class LocalPythonInterpreter {
     private var output: [String] = []
     private var outputCount = 0
     private var steps = 0
+    private var inputBuffer: [String]
+    private var inputCursor = 0
 
     private let maxOutputLength: Int
     private let maxLoopSteps: Int
 
-    init(maxOutputLength: Int, maxLoopSteps: Int) {
+    init(maxOutputLength: Int, maxLoopSteps: Int, stdin: String) {
         self.maxOutputLength = maxOutputLength
         self.maxLoopSteps = maxLoopSteps
+        self.inputBuffer = stdin.replacingOccurrences(of: "\r\n", with: "\n").split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
     }
 
     func execute(code: String) throws -> PythonExecutionResult {
@@ -370,6 +377,18 @@ private final class LocalPythonInterpreter {
         if expr == "False" { return .bool(false) }
         if expr == "None" { return .none }
 
+        if expr.hasPrefix("input("), expr.hasSuffix(")") {
+            let inner = String(expr.dropFirst(6).dropLast())
+            let promptExpr = inner.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !promptExpr.isEmpty {
+                let prompt = try evalExpr(promptExpr, line: line).rendered
+                if !prompt.isEmpty {
+                    try appendOutput(prompt)
+                }
+            }
+            return .string(readInputLine())
+        }
+
         if expr.hasPrefix("len("), expr.hasSuffix(")") {
             let inner = String(expr.dropFirst(4).dropLast())
             let value = try evalExpr(inner, line: line)
@@ -498,6 +517,12 @@ private final class LocalPythonInterpreter {
         let tail = current.trimmingCharacters(in: .whitespacesAndNewlines)
         if !tail.isEmpty { result.append(tail) }
         return result
+    }
+
+    private func readInputLine() -> String {
+        guard inputCursor < inputBuffer.count else { return "" }
+        defer { inputCursor += 1 }
+        return inputBuffer[inputCursor]
     }
 }
 

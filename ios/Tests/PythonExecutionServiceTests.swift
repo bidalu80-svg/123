@@ -33,6 +33,18 @@ final class PythonExecutionServiceTests: XCTestCase {
         XCTAssertTrue(result.output.contains("除数不能为 0"))
     }
 
+    func testRunPythonSupportsInputViaStdin() async throws {
+        let service = PythonExecutionService()
+        let code = """
+        name = input("请输入名字：")
+        print(name)
+        """
+        let result = try await service.runPython(code: code, stdin: "IEXA\n")
+
+        XCTAssertEqual(result.exitCode, 0)
+        XCTAssertTrue(result.output.contains("IEXA"))
+    }
+
     func testRunPythonRejectsEmptyCode() async {
         let service = PythonExecutionService()
 

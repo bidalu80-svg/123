@@ -15,7 +15,7 @@ actor EmbeddedCPythonRuntime {
     private var prepared = false
     private var cachedStatusHint = "未检测到嵌入 CPython 运行时，当前使用兼容模式。"
 
-    func runIfAvailable(code: String) -> PythonExecutionResult? {
+    func runIfAvailable(code: String, stdin: String?) -> PythonExecutionResult? {
         guard prepareIfNeeded() else { return nil }
         guard let pyRunSimpleString else {
             cachedStatusHint = "嵌入 CPython 已加载，但缺少运行入口符号。"
@@ -36,6 +36,7 @@ actor EmbeddedCPythonRuntime {
 
             let script = makeHarnessScript(
                 userCode: code,
+                stdinText: stdin ?? "",
                 outputPath: outputURL.path,
                 exitPath: exitURL.path
             )
@@ -144,8 +145,9 @@ actor EmbeddedCPythonRuntime {
         return deduped
     }
 
-    private func makeHarnessScript(userCode: String, outputPath: String, exitPath: String) -> String {
+    private func makeHarnessScript(userCode: String, stdinText: String, outputPath: String, exitPath: String) -> String {
         let code = pythonLiteral(userCode)
+        let stdin = pythonLiteral(stdinText)
         let out = pythonLiteral(outputPath)
         let exit = pythonLiteral(exitPath)
         return """
@@ -156,10 +158,12 @@ import traceback
 _buf = io.StringIO()
 _old_out = sys.stdout
 _old_err = sys.stderr
+_old_in = sys.stdin
 _exit = 0
 
 sys.stdout = _buf
 sys.stderr = _buf
+sys.stdin = io.StringIO(\(stdin))
 try:
     _globals = {"__name__": "__main__"}
     exec(compile(\(code), "<chatapp>", "exec"), _globals, _globals)
@@ -174,6 +178,7 @@ except Exception:
 finally:
     sys.stdout = _old_out
     sys.stderr = _old_err
+    sys.stdin = _old_in
 
 with open(\(out), "w", encoding="utf-8") as f:
     f.write(_buf.getvalue())

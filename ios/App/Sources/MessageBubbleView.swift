@@ -18,6 +18,8 @@ struct MessageBubbleView: View {
     @State private var codeRunOutputs: [String: String] = [:]
     @State private var codeRunErrors: [String: String] = [:]
     @State private var activeHTMLPreview: HTMLPreviewPayload?
+    @State private var pendingPythonRun: PendingPythonRun?
+    @State private var pythonStdinDraft = ""
 
     var body: some View {
         Group {
@@ -41,6 +43,9 @@ struct MessageBubbleView: View {
         }
         .sheet(item: $activeHTMLPreview) { payload in
             HTMLPreviewSheet(title: payload.title, html: payload.html)
+        }
+        .sheet(item: $pendingPythonRun) { payload in
+            pythonInputSheet(payload: payload)
         }
     }
 
@@ -308,7 +313,7 @@ struct MessageBubbleView: View {
                 Spacer()
                 if canRunPython {
                     Button(isRunning ? "运行中…" : "运行") {
-                        runPythonCode(content, token: copyToken)
+                        requestPythonRun(content, token: copyToken)
                     }
                     .font(.caption2)
                     .buttonStyle(.borderedProminent)
@@ -421,13 +426,22 @@ struct MessageBubbleView: View {
         return normalizedTitle == "python" || normalizedTitle == "py"
     }
 
-    private func runPythonCode(_ code: String, token: String) {
+    private func requestPythonRun(_ code: String, token: String) {
+        if needsInteractiveInput(code) {
+            pythonStdinDraft = ""
+            pendingPythonRun = PendingPythonRun(token: token, code: code)
+            return
+        }
+        runPythonCode(code, token: token, stdin: nil)
+    }
+
+    private func runPythonCode(_ code: String, token: String, stdin: String?) {
         runningCodeToken = token
         codeRunErrors[token] = nil
 
         Task {
             do {
-                let result = try await PythonExecutionService.shared.runPython(code: code)
+                let result = try await PythonExecutionService.shared.runPython(code: code, stdin: stdin)
                 await MainActor.run {
                     let rendered: String
                     if result.exitCode == 0 {
@@ -445,6 +459,49 @@ struct MessageBubbleView: View {
                     codeRunErrors[token] = error.localizedDescription
                     runningCodeToken = nil
                     feedback(.light, "代码运行失败")
+                }
+            }
+        }
+    }
+
+    private func needsInteractiveInput(_ code: String) -> Bool {
+        code.range(of: #"(?<![A-Za-z0-9_])input\s*\("#, options: .regularExpression) != nil
+    }
+
+    private func pythonInputSheet(payload: PendingPythonRun) -> some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("检测到代码包含 input()。每行对应一次输入，按顺序提供给程序。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                TextEditor(text: $pythonStdinDraft)
+                    .font(.system(.body, design: .monospaced))
+                    .frame(minHeight: 220)
+                    .padding(8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color(.secondarySystemBackground))
+                    )
+
+                Spacer(minLength: 0)
+            }
+            .padding(16)
+            .navigationTitle("Python 输入")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("取消") {
+                        pendingPythonRun = nil
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("运行") {
+                        let input = pythonStdinDraft.replacingOccurrences(of: "\r\n", with: "\n")
+                        let normalizedInput = input.isEmpty ? nil : input
+                        pendingPythonRun = nil
+                        runPythonCode(payload.code, token: payload.token, stdin: normalizedInput)
+                    }
                 }
             }
         }
@@ -619,6 +676,12 @@ private struct HTMLPreviewPayload: Identifiable {
     let id = UUID()
     let title: String
     let html: String
+}
+
+private struct PendingPythonRun: Identifiable {
+    let id = UUID()
+    let token: String
+    let code: String
 }
 
 private enum AssistantReaction {
