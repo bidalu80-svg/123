@@ -14,6 +14,9 @@ struct MessageBubbleView: View {
     @State private var reaction: AssistantReaction = .none
     @State private var actionFeedback: String?
     @State private var copiedCodeToken: String?
+    @State private var runningCodeToken: String?
+    @State private var codeRunOutputs: [String: String] = [:]
+    @State private var codeRunErrors: [String: String] = [:]
 
     var body: some View {
         Group {
@@ -222,7 +225,7 @@ struct MessageBubbleView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
         case .code(let language, let content):
-            codeBlock(title: (language ?? "code").uppercased(), content: content)
+            codeBlock(title: (language ?? "code").uppercased(), content: content, language: language)
         case .file(let name, let language, let content):
             codeBlock(title: "FILE · \(name)", content: content, language: language)
         case .image(let attachment):
@@ -242,7 +245,7 @@ struct MessageBubbleView: View {
             )
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .code(let language, let content):
-            codeBlock(title: (language ?? "code").uppercased(), content: content)
+            codeBlock(title: (language ?? "code").uppercased(), content: content, language: language)
         case .file(let name, let language, let content):
             codeBlock(title: "FILE · \(name)", content: content, language: language)
         case .image(let attachment):
@@ -253,6 +256,10 @@ struct MessageBubbleView: View {
     private func codeBlock(title: String, content: String, language: String? = nil) -> some View {
         let copyToken = "\(title)|\(language ?? "")|\(content)"
         let isCopied = copiedCodeToken == copyToken
+        let isRunning = runningCodeToken == copyToken
+        let canRunPython = supportsPythonRun(language: language, title: title)
+        let runOutput = codeRunOutputs[copyToken]
+        let runError = codeRunErrors[copyToken]
 
         return VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -260,6 +267,14 @@ struct MessageBubbleView: View {
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
+                if canRunPython {
+                    Button(isRunning ? "运行中…" : "运行") {
+                        runPythonCode(content, token: copyToken)
+                    }
+                    .font(.caption2)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isRunning)
+                }
                 Button(isCopied ? "已复制" : "复制代码") {
                     UIPasteboard.general.string = content
                     UINotificationFeedbackGenerator().notificationOccurred(.success)
@@ -285,12 +300,107 @@ struct MessageBubbleView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
             }
+
+            if isRunning {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .scaleEffect(0.75)
+                    Text("正在运行 Python…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if let runOutput, !runOutput.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("运行输出")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("复制输出") {
+                            UIPasteboard.general.string = runOutput
+                            UINotificationFeedbackGenerator().notificationOccurred(.success)
+                            feedback(.light, "已复制运行输出")
+                        }
+                        .font(.caption2)
+                        .buttonStyle(.bordered)
+                    }
+
+                    Text(runOutput)
+                        .font(.system(.caption, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+                .padding(8)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.primary.opacity(colorScheme == .dark ? 0.16 : 0.06))
+                )
+            }
+
+            if let runError, !runError.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("运行失败")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.red)
+                    Text(runError)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+                .padding(8)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.red.opacity(colorScheme == .dark ? 0.18 : 0.08))
+                )
+            }
         }
         .padding(10)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(codeBackgroundColor)
         )
+    }
+
+    private func supportsPythonRun(language: String?, title: String) -> Bool {
+        let normalizedLanguage = (language ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalizedLanguage == "python" || normalizedLanguage == "py" {
+            return true
+        }
+
+        let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalizedTitle == "python" || normalizedTitle == "py"
+    }
+
+    private func runPythonCode(_ code: String, token: String) {
+        runningCodeToken = token
+        codeRunErrors[token] = nil
+
+        Task {
+            do {
+                let result = try await PythonExecutionService.shared.runPython(code: code)
+                await MainActor.run {
+                    let rendered: String
+                    if result.exitCode == 0 {
+                        rendered = result.output
+                    } else {
+                        rendered = "\(result.output)\n\n[退出码 \(result.exitCode)]"
+                    }
+                    codeRunOutputs[token] = rendered
+                    runningCodeToken = nil
+                    feedback(.success, "代码运行完成")
+                }
+            } catch {
+                await MainActor.run {
+                    codeRunOutputs[token] = nil
+                    codeRunErrors[token] = error.localizedDescription
+                    runningCodeToken = nil
+                    feedback(.light, "代码运行失败")
+                }
+            }
+        }
     }
 
     @ViewBuilder
