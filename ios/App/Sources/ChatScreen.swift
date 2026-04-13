@@ -433,9 +433,9 @@ struct ChatScreen: View {
             }
             .disabled(!viewModel.canSend && !viewModel.isSending)
         }
-        .frame(minHeight: 42)
+        .frame(minHeight: 40)
         .padding(.horizontal, 14)
-        .padding(.vertical, 6)
+        .padding(.vertical, 5)
         .background(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .fill(Color(.secondarySystemBackground))
@@ -448,7 +448,7 @@ struct ChatScreen: View {
     }
 
     private var textInputArea: some View {
-        TextField("Message", text: $viewModel.draftMessage, axis: .vertical)
+        TextField("发消息", text: $viewModel.draftMessage, axis: .vertical)
             .lineLimit(1...6)
             .submitLabel(.send)
             .focused($isComposerFocused)
@@ -457,7 +457,7 @@ struct ChatScreen: View {
                 Task { await viewModel.sendCurrentMessage() }
             }
             .font(.system(size: 16))
-            .frame(maxWidth: .infinity, minHeight: 22, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
     }
 
 

@@ -51,8 +51,7 @@ struct MessageBubbleView: View {
     private var userMessageView: some View {
         HStack {
             Spacer(minLength: 68)
-            content
-                .fixedSize(horizontal: false, vertical: true)
+            userMessageContent
                 .padding(.vertical, 13)
                 .padding(.horizontal, 17)
                 .background(
@@ -69,6 +68,22 @@ struct MessageBubbleView: View {
     }
 
     @ViewBuilder
+    private var userMessageContent: some View {
+        let segments = MessageContentParser.parse(message)
+        if segments.isEmpty && message.isStreaming {
+            Text("正在发送…")
+                .foregroundStyle(.secondary)
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                    userSegmentView(segment)
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder
     private var content: some View {
         let segments = MessageContentParser.parse(message)
         if segments.isEmpty && message.isStreaming {
@@ -80,6 +95,23 @@ struct MessageBubbleView: View {
                     segmentView(segment)
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func userSegmentView(_ segment: MessageSegment) -> some View {
+        switch segment {
+        case .text(let text):
+            SelectableLinkTextView(
+                text: text,
+                font: .systemFont(ofSize: 18, weight: .regular)
+            )
+        case .code(let language, let content):
+            codeBlock(title: (language ?? "code").uppercased(), content: content)
+        case .file(let name, let language, let content):
+            codeBlock(title: "FILE · \(name)", content: content, language: language)
+        case .image(let attachment):
+            messageImage(attachment)
         }
     }
 
@@ -144,7 +176,7 @@ struct MessageBubbleView: View {
     private func renderedMessageImage<V: View>(_ imageView: V, attachment: ChatImageAttachment) -> some View {
         imageView
             .aspectRatio(contentMode: .fit)
-            .frame(maxWidth: 260, maxHeight: 460)
+            .frame(maxWidth: 260, maxHeight: 560)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .contextMenu {
                 if !attachment.requestURLString.isEmpty {
