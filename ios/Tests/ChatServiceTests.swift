@@ -211,6 +211,26 @@ final class ChatServiceTests: XCTestCase {
         }
         XCTAssertEqual(text, "百度官网 https://www.baidu.com")
     }
+
+    func testMessageContentParserConvertsNumberedListToBulletList() {
+        let message = ChatMessage(
+            role: .assistant,
+            content: "1) 安装依赖\n2. 最小示例\n3、运行程序"
+        )
+
+        let segments = MessageContentParser.parse(message)
+        let text = segments.compactMap { segment -> String? in
+            if case .text(let value) = segment { return value }
+            return nil
+        }.joined()
+
+        XCTAssertFalse(text.contains("1)"))
+        XCTAssertFalse(text.contains("2."))
+        XCTAssertFalse(text.contains("3、"))
+        XCTAssertTrue(text.contains("• 安装依赖"))
+        XCTAssertTrue(text.contains("• 最小示例"))
+        XCTAssertTrue(text.contains("• 运行程序"))
+    }
 }
 
 final class ChatViewModelTests: XCTestCase {
