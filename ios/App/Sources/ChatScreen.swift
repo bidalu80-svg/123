@@ -176,7 +176,7 @@ struct ChatScreen: View {
             Button {
                 setSidebarOpen(!isSidebarOpen)
             } label: {
-                UnevenHamburgerIcon()
+                TwoLineMenuIcon()
                     .foregroundStyle(.primary)
                     .frame(width: 34, height: 34)
             }
@@ -261,10 +261,14 @@ struct ChatScreen: View {
                 }
                 .disabled(!viewModel.isSending)
             } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 22, weight: .semibold))
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(.primary)
-                    .frame(width: 36, height: 36)
+                    .frame(width: 38, height: 38)
+                    .background(
+                        RoundedRectangle(cornerRadius: 13, style: .continuous)
+                            .fill(Color(.secondarySystemBackground))
+                    )
             }
             .buttonStyle(.plain)
         }
@@ -336,70 +340,27 @@ struct ChatScreen: View {
                 starterPromptStrip
             }
 
-            HStack(alignment: .center, spacing: 10) {
+            HStack(alignment: .bottom, spacing: 12) {
                 Button {
                     showAttachmentSheet = true
                 } label: {
                     Image(systemName: "plus")
-                        .font(.system(size: 21, weight: .regular))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 40, height: 40)
-                        .background(Circle().fill(Color(.systemGray6)))
+                        .font(.system(size: 20, weight: .regular))
+                        .foregroundStyle(.primary)
+                        .frame(width: 42, height: 42)
+                        .background(
+                            Circle()
+                                .fill(Color(.secondarySystemBackground))
+                        )
                 }
                 .buttonStyle(.plain)
 
-                textInputArea
-
-                Button {
-                    pasteClipboardIntoDraft(sendAfterPaste: false)
-                } label: {
-                    Image(systemName: "doc.on.clipboard")
-                        .font(.system(size: 22, weight: .regular))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 32, height: 32)
-                }
-                .buttonStyle(.plain)
-                .contextMenu {
-                    Button("粘贴到输入框", systemImage: "doc.on.clipboard") {
-                        pasteClipboardIntoDraft(sendAfterPaste: false)
-                    }
-                    Button("粘贴并发送", systemImage: "paperplane") {
-                        pasteClipboardIntoDraft(sendAfterPaste: true)
-                    }
-                    if viewModel.isSending {
-                        Button("停止生成", systemImage: "stop.circle") {
-                            viewModel.stopGenerating()
-                        }
-                    }
-                }
-
-                Button {
-                    if viewModel.isSending {
-                        viewModel.stopGenerating()
-                    } else {
-                        Task { await viewModel.sendCurrentMessage() }
-                    }
-                } label: {
-                    Group {
-                        if viewModel.isSending {
-                            Image(systemName: "stop.fill")
-                        } else if viewModel.canSend {
-                            Image(systemName: "arrow.up")
-                        } else {
-                            Image(systemName: "waveform")
-                        }
-                    }
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(Color.white)
-                    .frame(width: 40, height: 40)
-                    .background(Circle().fill(Color.black))
-                }
-                .disabled(!viewModel.canSend && !viewModel.isSending)
+                composerInputContainer
             }
-            .padding(.vertical, 5)
-            .padding(.leading, 9)
-            .padding(.trailing, 8)
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .padding(.vertical, 2)
+            .padding(.leading, 0)
+            .padding(.trailing, 0)
+            .background(Color.clear)
         }
         .padding(.horizontal, 12)
         .padding(.top, 6)
@@ -410,25 +371,78 @@ struct ChatScreen: View {
         }
     }
 
-    private var textInputArea: some View {
-        HStack {
-            TextField("有问题，尽管问", text: $viewModel.draftMessage)
-                .lineLimit(1)
-                .submitLabel(.send)
-                .focused($isComposerFocused)
-                .onSubmit {
-                    guard viewModel.canSend else { return }
+    private var composerInputContainer: some View {
+        HStack(alignment: .bottom, spacing: 10) {
+            textInputArea
+
+            Button {
+                pasteClipboardIntoDraft(sendAfterPaste: false)
+            } label: {
+                Image(systemName: "doc.on.clipboard")
+                    .font(.system(size: 20, weight: .regular))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 32, height: 32)
+            }
+            .buttonStyle(.plain)
+            .contextMenu {
+                Button("粘贴到输入框", systemImage: "doc.on.clipboard") {
+                    pasteClipboardIntoDraft(sendAfterPaste: false)
+                }
+                Button("粘贴并发送", systemImage: "paperplane") {
+                    pasteClipboardIntoDraft(sendAfterPaste: true)
+                }
+                if viewModel.isSending {
+                    Button("停止生成", systemImage: "stop.circle") {
+                        viewModel.stopGenerating()
+                    }
+                }
+            }
+
+            Button {
+                if viewModel.isSending {
+                    viewModel.stopGenerating()
+                } else {
                     Task { await viewModel.sendCurrentMessage() }
                 }
-                .font(.system(size: 16))
+            } label: {
+                Group {
+                    if viewModel.isSending {
+                        Image(systemName: "stop.fill")
+                    } else {
+                        Image(systemName: "arrow.up")
+                    }
+                }
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Color.white)
+                .frame(width: 38, height: 38)
+                .background(
+                    Circle()
+                        .fill(viewModel.canSend || viewModel.isSending ? Color.black : Color(.systemGray3))
+                )
+            }
+            .disabled(!viewModel.canSend && !viewModel.isSending)
         }
-        .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
-        .padding(.horizontal, 12)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            isComposerFocused = true
-        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .fill(Color(.secondarySystemBackground))
+        )
     }
+
+    private var textInputArea: some View {
+        TextField("给 IEXA 发送消息", text: $viewModel.draftMessage, axis: .vertical)
+            .lineLimit(1...6)
+            .submitLabel(.send)
+            .focused($isComposerFocused)
+            .onSubmit {
+                guard viewModel.canSend else { return }
+                Task { await viewModel.sendCurrentMessage() }
+            }
+            .font(.system(size: 16))
+            .frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
+    }
+
 
     private func scrollJumpButtons(proxy: ScrollViewProxy) -> some View {
         VStack(spacing: 10) {
@@ -1038,15 +1052,13 @@ struct ChatScreen: View {
     }
 }
 
-private struct UnevenHamburgerIcon: View {
+private struct TwoLineMenuIcon: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 5) {
             Capsule(style: .continuous)
-                .frame(width: 18, height: 2.4)
+                .frame(width: 18, height: 2.6)
             Capsule(style: .continuous)
-                .frame(width: 13, height: 2.4)
-            Capsule(style: .continuous)
-                .frame(width: 9, height: 2.4)
+                .frame(width: 12, height: 2.6)
         }
     }
 }

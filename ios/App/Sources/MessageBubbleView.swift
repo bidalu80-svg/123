@@ -42,27 +42,27 @@ struct MessageBubbleView: View {
                     .padding(.top, 8)
             }
         }
-        .padding(.horizontal, 2)
-        .padding(.vertical, 2)
+        .padding(.horizontal, 4)
+        .padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var userMessageView: some View {
         HStack {
-            Spacer(minLength: 38)
+            Spacer(minLength: 52)
             content
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.vertical, 13)
-                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+                .padding(.horizontal, 18)
                 .background(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
                         .fill(userBubbleColor)
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .stroke(Color.black.opacity(colorScheme == .dark ? 0.2 : 0.05), lineWidth: 0.8)
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .stroke(Color.black.opacity(colorScheme == .dark ? 0.14 : 0.04), lineWidth: 0.8)
                 )
-                .frame(maxWidth: 292, alignment: .trailing)
+                .frame(maxWidth: 300, alignment: .trailing)
                 .frame(maxWidth: .infinity, alignment: .trailing)
         }
     }
@@ -184,7 +184,7 @@ struct MessageBubbleView: View {
     }
 
     private var userBubbleColor: Color {
-        colorScheme == .dark ? Color(red: 0.2, green: 0.2, blue: 0.22) : Color(red: 0.94, green: 0.94, blue: 0.95)
+        colorScheme == .dark ? Color(red: 0.18, green: 0.18, blue: 0.2) : Color(red: 0.94, green: 0.94, blue: 0.95)
     }
 
     private var saveFeedbackBinding: Binding<Bool> {
