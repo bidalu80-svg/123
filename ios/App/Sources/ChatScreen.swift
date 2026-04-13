@@ -219,7 +219,7 @@ struct ChatScreen: View {
                             Text(shortModelName(viewModel.config.model))
                                 .font(.system(size: 12, weight: .semibold))
                                 .lineLimit(1)
-                            Text(modelVendorSubtitle(viewModel.config.model))
+                            Text(modelVendorSubtitle(viewModel.config.model, apiURL: viewModel.config.normalizedBaseURL))
                                 .font(.system(size: 10, weight: .medium))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
@@ -703,10 +703,15 @@ struct ChatScreen: View {
         return "\(trimmed.prefix(16))…"
     }
 
-    private func modelVendorSubtitle(_ rawModel: String) -> String {
+    private func modelVendorSubtitle(_ rawModel: String, apiURL: String) -> String {
         let model = rawModel.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !model.isEmpty else { return "Unknown" }
-        return "\(detectModelVendor(model)) · \(model)"
+        let direct = detectModelVendor(model)
+        if direct != "Unknown" {
+            return "\(direct) · \(model)"
+        }
+        let fromHost = detectVendorFromAPIURL(apiURL)
+        return "\(fromHost) · \(model)"
     }
 
     private func detectModelVendor(_ model: String) -> String {
@@ -744,6 +749,55 @@ struct ChatScreen: View {
         }
         if lowered.contains("ernie") || lowered.contains("wenxin") {
             return "Baidu"
+        }
+        return "Unknown"
+    }
+
+    private func detectVendorFromAPIURL(_ apiURL: String) -> String {
+        let normalized = apiURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty,
+              let host = URL(string: normalized)?.host?.lowercased() else {
+            return "Unknown"
+        }
+
+        if host.contains("openai") {
+            return "OpenAI"
+        }
+        if host.contains("anthropic") {
+            return "Anthropic"
+        }
+        if host.contains("google") || host.contains("gemini") {
+            return "Google"
+        }
+        if host.contains("deepseek") {
+            return "DeepSeek"
+        }
+        if host.contains("qwen") || host.contains("aliyun") || host.contains("dashscope") {
+            return "Alibaba"
+        }
+        if host.contains("moonshot") || host.contains("kimi") {
+            return "Moonshot"
+        }
+        if host.contains("x.ai") || host.contains("xai") || host.contains("grok") {
+            return "xAI"
+        }
+        if host.contains("meta") || host.contains("llama") {
+            return "Meta"
+        }
+        if host.contains("mistral") {
+            return "Mistral"
+        }
+        if host.contains("doubao") || host.contains("volces") || host.contains("bytedance") {
+            return "ByteDance"
+        }
+        if host.contains("baidu") || host.contains("wenxin") {
+            return "Baidu"
+        }
+        if host.contains("siliconflow") {
+            return "SiliconFlow"
+        }
+        if host.contains("tencent") || host.contains("hunyuan") {
+            return "Tencent"
         }
         return "Unknown"
     }
