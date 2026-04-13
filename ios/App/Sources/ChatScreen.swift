@@ -271,10 +271,6 @@ struct ChatScreen: View {
                             .font(.system(size: 16, weight: .medium))
                             .foregroundStyle(.primary)
                             .frame(width: 36, height: 36)
-                            .background(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .fill(Color(.secondarySystemBackground))
-                            )
                     }
                     .buttonStyle(.plain)
                 }
