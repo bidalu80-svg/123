@@ -26,6 +26,10 @@ targets:
     sources:
       - path: App/Sources
       - path: App/Resources
+        excludes:
+          - PythonRuntime/**
+      - path: App/Resources/PythonRuntime
+        type: folder
     dependencies:
       - framework: Vendor/Python.xcframework
         embed: true

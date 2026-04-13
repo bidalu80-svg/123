@@ -46,6 +46,9 @@ struct MessageBubbleView: View {
 
     private var assistantMessageView: some View {
         VStack(alignment: .leading, spacing: 0) {
+            assistantIdentityHeader
+                .padding(.bottom, 6)
+
             content
 
             if message.isStreaming {
@@ -63,6 +66,37 @@ struct MessageBubbleView: View {
         .padding(.horizontal, 6)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var assistantIdentityHeader: some View {
+        HStack(spacing: 8) {
+            assistantIdentityIcon
+
+            Text("IEXA")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.primary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var assistantIdentityIcon: some View {
+        if UIImage(named: "AppLogo") != nil {
+            Image("AppLogo")
+                .resizable()
+                .scaledToFill()
+                .frame(width: 18, height: 18)
+                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+        } else {
+            Image(systemName: "sparkles")
+                .font(.system(size: 12, weight: .semibold))
+                .frame(width: 18, height: 18)
+                .foregroundStyle(.white)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(Color.black)
+                )
+        }
     }
 
     private var assistantActionBar: some View {
