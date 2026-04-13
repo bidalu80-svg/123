@@ -6,6 +6,10 @@ struct ChatReply: Equatable {
 }
 
 struct ChatRequestBuilder {
+    private static let iexaIdentitySystemPrompt = """
+    你是 IEXA，一款智能助手。用户问你“你是谁/你叫什么”时，请明确回答你叫 IEXA。
+    """
+
     static func makeRequest(config: ChatConfig, history: [ChatMessage], message: ChatMessage) throws -> URLRequest {
         let completionURL = config.completionURLString
         guard let url = URL(string: completionURL), !completionURL.isEmpty else {
@@ -21,14 +25,25 @@ struct ChatRequestBuilder {
             request.setValue("Bearer \(trimmedAPIKey)", forHTTPHeaderField: "Authorization")
         }
 
+        let normalizedMessages = buildMessagesWithIdentity(history: history, message: message)
+
         let payload: [String: Any] = [
             "model": config.model,
-            "messages": history.map(\.apiPayload) + [message.apiPayload],
+            "messages": normalizedMessages,
             "stream": config.streamEnabled
         ]
 
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
         return request
+    }
+
+    private static func buildMessagesWithIdentity(history: [ChatMessage], message: ChatMessage) -> [[String: Any]] {
+        let hasSystemMessage = history.contains { $0.role == .system } || message.role == .system
+        let prefix: [[String: Any]] = hasSystemMessage ? [] : [[
+            "role": "system",
+            "content": iexaIdentitySystemPrompt
+        ]]
+        return prefix + history.map(\.apiPayload) + [message.apiPayload]
     }
 
     static func makeModelsRequest(config: ChatConfig) throws -> URLRequest {

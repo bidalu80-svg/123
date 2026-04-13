@@ -11,14 +11,34 @@ final class ChatServiceTests: XCTestCase {
         let payload = try XCTUnwrap(request.httpBody)
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
         let messages = try XCTUnwrap(json["messages"] as? [[String: Any]])
+        let first = try XCTUnwrap(messages.first)
         let last = try XCTUnwrap(messages.last)
 
         XCTAssertEqual(request.url?.absoluteString, "https://example.com/v1/chat/completions")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer token-123")
         XCTAssertEqual(json["model"] as? String, "gpt-test")
         XCTAssertEqual(json["stream"] as? Bool, true)
-        XCTAssertEqual(messages.count, 2)
+        XCTAssertEqual(first["role"] as? String, "system")
+        XCTAssertEqual(messages.count, 3)
         XCTAssertEqual(last["content"] as? String, "hello")
+    }
+
+    func testBuildRequestDoesNotDuplicateSystemIdentityWhenHistoryAlreadyHasSystemMessage() throws {
+        let config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
+        let history = [
+            ChatMessage(role: .system, content: "你是 IEXA"),
+            ChatMessage(role: .assistant, content: "history")
+        ]
+        let requestMessage = ChatMessage(role: .user, content: "你是谁")
+
+        let request = try ChatRequestBuilder.makeRequest(config: config, history: history, message: requestMessage)
+        let payload = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+        let messages = try XCTUnwrap(json["messages"] as? [[String: Any]])
+        let systemCount = messages.filter { ($0["role"] as? String) == "system" }.count
+
+        XCTAssertEqual(systemCount, 1)
+        XCTAssertEqual(messages.count, 3)
     }
 
     func testBuildRequestSupportsMultipleImageAttachments() throws {
