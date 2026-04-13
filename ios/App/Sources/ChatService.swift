@@ -139,7 +139,10 @@ final class ChatService {
         message: ChatMessage,
         onEvent: @escaping @Sendable (StreamChunk) -> Void
     ) async throws -> ChatReply {
-        let realtimeContext = await realtimeContextProvider.buildSystemContext(config: config)
+        let realtimeContext = await realtimeContextProvider.buildSystemContext(
+            config: config,
+            userPrompt: message.copyableText
+        )
         let request = try ChatRequestBuilder.makeRequest(
             config: config,
             history: history,

@@ -54,6 +54,15 @@ actor RealtimeContextProvider {
         let regularMarketTime: Int?
     }
 
+    private struct ChinaFuelPriceSnapshot {
+        let province: String
+        let gasoline92: Double
+        let gasoline95: Double
+        let gasoline98: Double
+        let diesel0: Double
+        let updateDate: String?
+    }
+
     private enum ProviderError: Error {
         case invalidURL
         case badResponse
@@ -66,6 +75,7 @@ actor RealtimeContextProvider {
     private var locationCache: [String: GeocodingResult] = [:]
     private var marketCache: [String: CachedEntry] = [:]
     private var hotNewsCache: [Int: CachedEntry] = [:]
+    private var chinaFuelCache: [String: CachedEntry] = [:]
 
     private let weatherTTL: TimeInterval = 15 * 60
     private let marketTTL: TimeInterval = 5 * 60
@@ -84,7 +94,7 @@ actor RealtimeContextProvider {
         self.session = URLSession(configuration: configuration)
     }
 
-    func buildSystemContext(config: ChatConfig, now: Date = Date()) async -> String? {
+    func buildSystemContext(config: ChatConfig, userPrompt: String? = nil, now: Date = Date()) async -> String? {
         guard config.realtimeContextEnabled else { return nil }
 
         var lines: [String] = []
@@ -103,7 +113,8 @@ actor RealtimeContextProvider {
         }
 
         if config.marketContextEnabled {
-            let symbols = parseSymbols(config.marketSymbols)
+            let inferredSymbols = inferSymbols(from: userPrompt ?? "")
+            let symbols = mergeSymbols(parseSymbols(config.marketSymbols), inferredSymbols)
             if !symbols.isEmpty {
                 if let marketLine = try? await fetchMarketSummary(symbols: symbols, now: now) {
                     lines.append(marketLine)
@@ -121,8 +132,192 @@ actor RealtimeContextProvider {
             }
         }
 
+        if let prompt = userPrompt, shouldInjectChinaFuelPrice(for: prompt) {
+            if let fuelLine = try? await fetchChinaFuelSummary(from: prompt, now: now) {
+                lines.append(fuelLine)
+            } else {
+                lines.append("中国成品油（省级）价格：暂时获取失败。")
+            }
+        }
+
         lines.append("以上信息会随时间变化，回答价格或事件时请注明“以最新市场为准”。")
         return lines.joined(separator: "\n")
+    }
+
+    private func shouldInjectChinaFuelPrice(for prompt: String) -> Bool {
+        let lowered = prompt.lowercased()
+        if lowered.contains("油价") || lowered.contains("汽油") || lowered.contains("柴油") {
+            return true
+        }
+        return false
+    }
+
+    private func fetchChinaFuelSummary(from prompt: String, now: Date) async throws -> String {
+        let province = detectProvince(from: prompt) ?? "广东"
+        let cacheKey = province.lowercased()
+        if let cached = chinaFuelCache[cacheKey], now.timeIntervalSince(cached.timestamp) < 30 * 60 {
+            return cached.summary
+        }
+
+        let snapshot = try await fetchChinaFuelPrice(province: province)
+        let updateTime = snapshot.updateDate ?? formatTime(now, timeZone: .current)
+        let summary = String(
+            format: "中国油价（%@，更新 %@）：92# %.2f，95# %.2f，98# %.2f，0#柴油 %.2f（元/升）",
+            snapshot.province,
+            updateTime,
+            snapshot.gasoline92,
+            snapshot.gasoline95,
+            snapshot.gasoline98,
+            snapshot.diesel0
+        )
+
+        chinaFuelCache[cacheKey] = CachedEntry(summary: summary, timestamp: now)
+        return summary
+    }
+
+    private func fetchChinaFuelPrice(province: String) async throws -> ChinaFuelPriceSnapshot {
+        let slug = provincePageSlug(for: province)
+        guard let url = URL(string: "https://www.chayoujia.net/\(slug).html") else {
+            throw ProviderError.invalidURL
+        }
+
+        let (data, response) = try await session.data(from: url)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw ProviderError.badResponse
+        }
+
+        guard let html = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .unicode) else {
+            throw ProviderError.noData
+        }
+
+        guard let prices = extractFuelPrices(from: html) else {
+            throw ProviderError.noData
+        }
+        let updateDate = extractFuelUpdateDate(from: html)
+        return ChinaFuelPriceSnapshot(
+            province: provinceDisplayName(for: province),
+            gasoline92: prices.0,
+            gasoline95: prices.1,
+            gasoline98: prices.2,
+            diesel0: prices.3,
+            updateDate: updateDate
+        )
+    }
+
+    private func extractFuelPrices(from html: String) -> (Double, Double, Double, Double)? {
+        let pattern = #"\]\s*([0-9]+\.[0-9]+)\s+([0-9]+\.[0-9]+)\s+([0-9]+\.[0-9]+)\s+([0-9]+\.[0-9]+)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let nsRange = NSRange(html.startIndex..<html.endIndex, in: html)
+        guard let match = regex.firstMatch(in: html, range: nsRange),
+              match.numberOfRanges >= 5 else {
+            return nil
+        }
+
+        func group(_ index: Int) -> Double? {
+            guard let range = Range(match.range(at: index), in: html) else { return nil }
+            return Double(String(html[range]))
+        }
+
+        guard let p92 = group(1),
+              let p95 = group(2),
+              let p98 = group(3),
+              let d0 = group(4) else {
+            return nil
+        }
+        return (p92, p95, p98, d0)
+    }
+
+    private func extractFuelUpdateDate(from html: String) -> String? {
+        let pattern = #"最后更新[:：]\s*([0-9]{4}-[0-9]{2}-[0-9]{2})"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let nsRange = NSRange(html.startIndex..<html.endIndex, in: html)
+        guard let match = regex.firstMatch(in: html, range: nsRange),
+              match.numberOfRanges >= 2,
+              let range = Range(match.range(at: 1), in: html) else {
+            return nil
+        }
+        return String(html[range])
+    }
+
+    private func detectProvince(from prompt: String) -> String? {
+        let map: [String: String] = [
+            "北京": "beijing",
+            "天津": "tianjin",
+            "河北": "hebei",
+            "山西": "shanxi",
+            "内蒙古": "neimenggu",
+            "辽宁": "liaoning",
+            "吉林": "jilin",
+            "黑龙江": "heilongjiang",
+            "上海": "shanghai",
+            "江苏": "jiangsu",
+            "浙江": "zhejiang",
+            "安徽": "anhui",
+            "福建": "fujian",
+            "江西": "jiangxi",
+            "山东": "shandong",
+            "河南": "henan",
+            "湖北": "hubei",
+            "湖南": "hunan",
+            "广东": "guangdong",
+            "广西": "guangxi",
+            "海南": "hainan",
+            "重庆": "chongqing",
+            "四川": "sichuan",
+            "贵州": "guizhou",
+            "云南": "yunnan",
+            "西藏": "xizang",
+            "陕西": "shanxisheng",
+            "甘肃": "gansu",
+            "青海": "qinghai",
+            "宁夏": "ningxia",
+            "新疆": "xinjiang"
+        ]
+        for key in map.keys where prompt.contains(key) {
+            return key
+        }
+        return nil
+    }
+
+    private func provincePageSlug(for province: String) -> String {
+        let map: [String: String] = [
+            "北京": "beijing",
+            "天津": "tianjin",
+            "河北": "hebei",
+            "山西": "shanxi",
+            "内蒙古": "neimenggu",
+            "辽宁": "liaoning",
+            "吉林": "jilin",
+            "黑龙江": "heilongjiang",
+            "上海": "shanghai",
+            "江苏": "jiangsu",
+            "浙江": "zhejiang",
+            "安徽": "anhui",
+            "福建": "fujian",
+            "江西": "jiangxi",
+            "山东": "shandong",
+            "河南": "henan",
+            "湖北": "hubei",
+            "湖南": "hunan",
+            "广东": "guangdong",
+            "广西": "guangxi",
+            "海南": "hainan",
+            "重庆": "chongqing",
+            "四川": "sichuan",
+            "贵州": "guizhou",
+            "云南": "yunnan",
+            "西藏": "xizang",
+            "陕西": "shanxisheng",
+            "甘肃": "gansu",
+            "青海": "qinghai",
+            "宁夏": "ningxia",
+            "新疆": "xinjiang"
+        ]
+        return map[province] ?? "guangdong"
+    }
+
+    private func provinceDisplayName(for province: String) -> String {
+        province.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func fetchWeatherSummary(location: String, now: Date) async throws -> String {
@@ -215,18 +410,7 @@ actor RealtimeContextProvider {
             return cached.summary
         }
 
-        var components = URLComponents(string: "https://query1.finance.yahoo.com/v7/finance/quote")
-        components?.queryItems = [
-            URLQueryItem(name: "symbols", value: normalized.joined(separator: ","))
-        ]
-
-        guard let url = components?.url else { throw ProviderError.invalidURL }
-        let (data, response) = try await session.data(from: url)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            throw ProviderError.badResponse
-        }
-
-        let envelope = try JSONDecoder().decode(YahooQuoteEnvelope.self, from: data)
+        let envelope = try await fetchYahooQuotes(symbols: normalized)
         guard !envelope.quoteResponse.result.isEmpty else { throw ProviderError.noData }
 
         let updateTime = formatTime(now, timeZone: .current)
@@ -249,6 +433,32 @@ actor RealtimeContextProvider {
         let summary = rows.joined(separator: "\n")
         marketCache[cacheKey] = CachedEntry(summary: summary, timestamp: now)
         return summary
+    }
+
+    private func fetchYahooQuotes(symbols: [String]) async throws -> YahooQuoteEnvelope {
+        let hosts = [
+            "https://query1.finance.yahoo.com/v7/finance/quote",
+            "https://query2.finance.yahoo.com/v7/finance/quote"
+        ]
+
+        var lastError: Error?
+        for base in hosts {
+            do {
+                var components = URLComponents(string: base)
+                components?.queryItems = [
+                    URLQueryItem(name: "symbols", value: symbols.joined(separator: ","))
+                ]
+                guard let url = components?.url else { throw ProviderError.invalidURL }
+                let (data, response) = try await session.data(from: url)
+                guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                    throw ProviderError.badResponse
+                }
+                return try JSONDecoder().decode(YahooQuoteEnvelope.self, from: data)
+            } catch {
+                lastError = error
+            }
+        }
+        throw lastError ?? ProviderError.noData
     }
 
     private func fetchHotNewsSummary(count: Int, now: Date) async throws -> String {
@@ -335,6 +545,52 @@ actor RealtimeContextProvider {
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+    }
+
+    private func mergeSymbols(_ left: [String], _ right: [String]) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for symbol in (left + right) {
+            let key = symbol.uppercased()
+            if key.isEmpty || seen.contains(key) { continue }
+            seen.insert(key)
+            result.append(symbol)
+        }
+        return result
+    }
+
+    private func inferSymbols(from prompt: String) -> [String] {
+        let normalized = prompt.lowercased()
+        guard !normalized.isEmpty else { return [] }
+
+        let map: [(keys: [String], symbols: [String])] = [
+            (["油价", "原油", "wti"], ["CL=F"]),
+            (["布伦特", "brent"], ["BZ=F"]),
+            (["金价", "黄金", "gold"], ["GC=F"]),
+            (["白银", "silver"], ["SI=F"]),
+            (["铜价", "铜", "copper"], ["HG=F"]),
+            (["比特币", "btc", "bitcoin"], ["BTC-USD"]),
+            (["以太坊", "eth", "ethereum"], ["ETH-USD"]),
+            (["纳斯达克", "纳指", "nasdaq"], ["^IXIC"]),
+            (["标普", "sp500", "s&p"], ["^GSPC"]),
+            (["道琼斯", "dow"], ["^DJI"]),
+            (["恒生", "hsi"], ["^HSI"]),
+            (["日经", "nikkei"], ["^N225"]),
+            (["美元", "人民币", "usd/cny", "usdcny"], ["CNY=X"]),
+            (["苹果", "aapl"], ["AAPL"]),
+            (["英伟达", "nvidia", "nvda"], ["NVDA"]),
+            (["特斯拉", "tesla", "tsla"], ["TSLA"]),
+            (["微软", "msft"], ["MSFT"]),
+            (["亚马逊", "amazon", "amzn"], ["AMZN"])
+        ]
+
+        var inferred: [String] = []
+        for item in map {
+            if item.keys.contains(where: { normalized.contains($0) }) {
+                inferred.append(contentsOf: item.symbols)
+            }
+        }
+        return inferred
     }
 
     private func formatPrice(_ value: Double) -> String {
