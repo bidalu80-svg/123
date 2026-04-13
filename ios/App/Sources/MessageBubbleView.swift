@@ -13,6 +13,7 @@ struct MessageBubbleView: View {
     @State private var saveFeedback: String?
     @State private var reaction: AssistantReaction = .none
     @State private var actionFeedback: String?
+    @State private var copiedCodeToken: String?
 
     var body: some View {
         Group {
@@ -250,17 +251,32 @@ struct MessageBubbleView: View {
     }
 
     private func codeBlock(title: String, content: String, language: String? = nil) -> some View {
+        let copyToken = "\(title)|\(language ?? "")|\(content)"
+        let isCopied = copiedCodeToken == copyToken
+
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text(title)
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button("复制代码") {
+                Button(isCopied ? "已复制" : "复制代码") {
                     UIPasteboard.general.string = content
+                    UINotificationFeedbackGenerator().notificationOccurred(.success)
+                    withAnimation(.easeInOut(duration: 0.16)) {
+                        copiedCodeToken = copyToken
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                        guard copiedCodeToken == copyToken else { return }
+                        withAnimation(.easeInOut(duration: 0.16)) {
+                            copiedCodeToken = nil
+                        }
+                    }
                 }
                 .font(.caption2)
                 .buttonStyle(.bordered)
+                .tint(isCopied ? .green : nil)
+                .animation(.easeInOut(duration: 0.16), value: isCopied)
             }
 
             ScrollView(.horizontal, showsIndicators: false) {
