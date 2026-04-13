@@ -38,31 +38,32 @@ struct MessageBubbleView: View {
 
             if message.isStreaming {
                 ProgressView()
+                    .scaleEffect(0.9)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.top, 8)
             }
         }
-        .padding(.horizontal, 4)
-        .padding(.vertical, 6)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var userMessageView: some View {
         HStack {
-            Spacer(minLength: 52)
+            Spacer(minLength: 68)
             content
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.vertical, 14)
-                .padding(.horizontal, 18)
+                .padding(.vertical, 13)
+                .padding(.horizontal, 17)
                 .background(
                     RoundedRectangle(cornerRadius: 24, style: .continuous)
                         .fill(userBubbleColor)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .stroke(Color.black.opacity(colorScheme == .dark ? 0.14 : 0.04), lineWidth: 0.8)
+                        .stroke(Color.black.opacity(colorScheme == .dark ? 0.12 : 0.035), lineWidth: 0.8)
                 )
-                .frame(maxWidth: 300, alignment: .trailing)
+                .frame(maxWidth: 290, alignment: .trailing)
                 .frame(maxWidth: .infinity, alignment: .trailing)
         }
     }

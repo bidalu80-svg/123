@@ -183,8 +183,7 @@ struct ChatScreen: View {
             .buttonStyle(.plain)
 
             Text("IEXA")
-                .font(.system(size: 18, weight: .bold, design: .serif))
-                .kerning(0.2)
+                .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(.primary)
 
             Menu {
@@ -210,16 +209,16 @@ struct ChatScreen: View {
                 HStack(spacing: 6) {
                     Circle()
                         .fill(viewModel.isCurrentModelAvailable ? Color.green : Color.red)
-                        .frame(width: 8, height: 8)
+                        .frame(width: 7, height: 7)
                     Text(shortModelName(viewModel.config.model))
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(size: 12, weight: .medium))
                         .lineLimit(1)
                     Image(systemName: "chevron.down")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 10, weight: .semibold))
                 }
                 .foregroundStyle(.primary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 7)
                 .background(
                     Capsule(style: .continuous)
                         .fill(Color(.secondarySystemBackground))
@@ -262,11 +261,11 @@ struct ChatScreen: View {
                 .disabled(!viewModel.isSending)
             } label: {
                 Image(systemName: "slider.horizontal.3")
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(.primary)
-                    .frame(width: 38, height: 38)
+                    .frame(width: 36, height: 36)
                     .background(
-                        RoundedRectangle(cornerRadius: 13, style: .continuous)
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
                             .fill(Color(.secondarySystemBackground))
                     )
             }
@@ -345,12 +344,16 @@ struct ChatScreen: View {
                     showAttachmentSheet = true
                 } label: {
                     Image(systemName: "plus")
-                        .font(.system(size: 20, weight: .regular))
+                        .font(.system(size: 19, weight: .regular))
                         .foregroundStyle(.primary)
-                        .frame(width: 42, height: 42)
+                        .frame(width: 40, height: 40)
                         .background(
                             Circle()
                                 .fill(Color(.secondarySystemBackground))
+                        )
+                        .overlay(
+                            Circle()
+                                .stroke(Color.black.opacity(0.04), lineWidth: 0.8)
                         )
                 }
                 .buttonStyle(.plain)
@@ -379,9 +382,9 @@ struct ChatScreen: View {
                 pasteClipboardIntoDraft(sendAfterPaste: false)
             } label: {
                 Image(systemName: "doc.on.clipboard")
-                    .font(.system(size: 20, weight: .regular))
+                    .font(.system(size: 18, weight: .regular))
                     .foregroundStyle(.secondary)
-                    .frame(width: 32, height: 32)
+                    .frame(width: 30, height: 30)
             }
             .buttonStyle(.plain)
             .contextMenu {
@@ -412,9 +415,9 @@ struct ChatScreen: View {
                         Image(systemName: "arrow.up")
                     }
                 }
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(Color.white)
-                .frame(width: 38, height: 38)
+                .frame(width: 36, height: 36)
                 .background(
                     Circle()
                         .fill(viewModel.canSend || viewModel.isSending ? Color.black : Color(.systemGray3))
@@ -423,15 +426,20 @@ struct ChatScreen: View {
             .disabled(!viewModel.canSend && !viewModel.isSending)
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.vertical, 11)
         .background(
-            RoundedRectangle(cornerRadius: 26, style: .continuous)
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
                 .fill(Color(.secondarySystemBackground))
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .stroke(Color.black.opacity(0.04), lineWidth: 0.8)
+        )
+        .shadow(color: Color.black.opacity(0.04), radius: 10, x: 0, y: 2)
     }
 
     private var textInputArea: some View {
-        TextField("给 IEXA 发送消息", text: $viewModel.draftMessage, axis: .vertical)
+        TextField("Message", text: $viewModel.draftMessage, axis: .vertical)
             .lineLimit(1...6)
             .submitLabel(.send)
             .focused($isComposerFocused)
@@ -440,7 +448,7 @@ struct ChatScreen: View {
                 Task { await viewModel.sendCurrentMessage() }
             }
             .font(.system(size: 16))
-            .frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 26, alignment: .leading)
     }
 
 
@@ -476,10 +484,10 @@ struct ChatScreen: View {
     }
 
     private var starterPromptStrip: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("提示词")
-                    .font(.system(size: 13, weight: .semibold))
+                Text("推荐")
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button("换一批") {
@@ -487,43 +495,46 @@ struct ChatScreen: View {
                         refreshStarterPrompts(force: true)
                     }
                 }
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: 13, weight: .medium))
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
             }
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
-                    ForEach(Array(activeStarterPrompts.enumerated()), id: \.offset) { _, prompt in
-                        Button {
-                            viewModel.draftMessage = "\(prompt.title)\n\(prompt.subtitle)"
-                            isComposerFocused = true
-                        } label: {
-                            VStack(alignment: .leading, spacing: 2) {
+            VStack(spacing: 10) {
+                ForEach(Array(activeStarterPrompts.enumerated()), id: \.offset) { _, prompt in
+                    Button {
+                        viewModel.draftMessage = "\(prompt.title)\n\(prompt.subtitle)"
+                        isComposerFocused = true
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
                                 Text(prompt.title)
-                                    .font(.system(size: 18, weight: .semibold))
+                                    .font(.system(size: 16, weight: .medium))
                                     .foregroundStyle(.primary)
                                     .lineLimit(1)
                                 Text(prompt.subtitle)
-                                    .font(.system(size: 13, weight: .medium))
+                                    .font(.system(size: 13, weight: .regular))
                                     .foregroundStyle(.secondary)
-                                    .lineLimit(1)
+                                    .lineLimit(2)
                             }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
-                            .background(
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .fill(Color(.systemGray6))
-                            )
+                            Spacer()
+                            Image(systemName: "arrow.up.right")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.secondary)
                         }
-                        .buttonStyle(.plain)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 14)
+                        .background(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .fill(Color(.secondarySystemBackground))
+                        )
                     }
+                    .buttonStyle(.plain)
                 }
-                .padding(.horizontal, 2)
-                .padding(.bottom, 2)
             }
         }
     }
+
 
     private var attachmentSheet: some View {
         ScrollView(showsIndicators: false) {
