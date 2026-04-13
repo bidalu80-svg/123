@@ -65,6 +65,27 @@ final class ChatServiceTests: XCTestCase {
         XCTAssertEqual((content[2]["image_url"] as? [String: String])?["url"], attachments[1].requestURLString)
     }
 
+    func testBuildRequestIncludesRealtimeSystemContext() throws {
+        let config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
+        let requestMessage = ChatMessage(role: .user, content: "现在几点")
+
+        let request = try ChatRequestBuilder.makeRequest(
+            config: config,
+            history: [],
+            message: requestMessage,
+            realtimeSystemContext: "当前日期时间：2026-04-13 18:20:00"
+        )
+
+        let payload = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+        let messages = try XCTUnwrap(json["messages"] as? [[String: Any]])
+
+        XCTAssertEqual(messages.count, 3)
+        XCTAssertEqual(messages[0]["role"] as? String, "system")
+        XCTAssertEqual(messages[1]["role"] as? String, "system")
+        XCTAssertEqual(messages[1]["content"] as? String, "当前日期时间：2026-04-13 18:20:00")
+    }
+
     func testResponseCleanerRemovesBareImageLinks() {
         let raw = "结论如下\nhttps://example.com/generated-image.png\n请查看"
 

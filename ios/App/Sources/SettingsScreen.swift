@@ -104,6 +104,22 @@ struct SettingsScreen: View {
                 }
                 Slider(value: $viewModel.config.timeout, in: 5...120, step: 5)
 
+                Toggle("注入实时日期时间", isOn: $viewModel.config.realtimeContextEnabled)
+
+                if viewModel.config.realtimeContextEnabled {
+                    Toggle("注入天气信息", isOn: $viewModel.config.weatherContextEnabled)
+
+                    if viewModel.config.weatherContextEnabled {
+                        TextField("天气城市（如 Shanghai / 北京）", text: $viewModel.config.weatherLocation)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                    }
+
+                    Text("模型不会自动知道实时时间和天气；启用后会在每次请求前注入系统实时信息。")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
                 Picker("主题", selection: $viewModel.config.themeMode) {
                     Text("跟随系统").tag(AppThemeMode.system)
                     Text("浅色").tag(AppThemeMode.light)

@@ -23,6 +23,9 @@ struct ChatConfig: Codable, Equatable {
     var streamEnabled: Bool
     var themeMode: AppThemeMode
     var codeThemeMode: CodeThemeMode
+    var realtimeContextEnabled: Bool
+    var weatherContextEnabled: Bool
+    var weatherLocation: String
 
     static let `default` = ChatConfig(
         apiURL: "https://xxx.com",
@@ -31,7 +34,10 @@ struct ChatConfig: Codable, Equatable {
         timeout: 30,
         streamEnabled: true,
         themeMode: .system,
-        codeThemeMode: .followApp
+        codeThemeMode: .followApp,
+        realtimeContextEnabled: true,
+        weatherContextEnabled: true,
+        weatherLocation: "Shanghai"
     )
 
     init(
@@ -41,7 +47,10 @@ struct ChatConfig: Codable, Equatable {
         timeout: Double,
         streamEnabled: Bool,
         themeMode: AppThemeMode = .system,
-        codeThemeMode: CodeThemeMode = .followApp
+        codeThemeMode: CodeThemeMode = .followApp,
+        realtimeContextEnabled: Bool = true,
+        weatherContextEnabled: Bool = true,
+        weatherLocation: String = "Shanghai"
     ) {
         self.apiURL = apiURL
         self.apiKey = apiKey
@@ -50,6 +59,9 @@ struct ChatConfig: Codable, Equatable {
         self.streamEnabled = streamEnabled
         self.themeMode = themeMode
         self.codeThemeMode = codeThemeMode
+        self.realtimeContextEnabled = realtimeContextEnabled
+        self.weatherContextEnabled = weatherContextEnabled
+        self.weatherLocation = weatherLocation
     }
 
     init(from decoder: Decoder) throws {
@@ -61,6 +73,9 @@ struct ChatConfig: Codable, Equatable {
         streamEnabled = try c.decode(Bool.self, forKey: .streamEnabled)
         themeMode = try c.decodeIfPresent(AppThemeMode.self, forKey: .themeMode) ?? .system
         codeThemeMode = try c.decodeIfPresent(CodeThemeMode.self, forKey: .codeThemeMode) ?? .followApp
+        realtimeContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .realtimeContextEnabled) ?? true
+        weatherContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .weatherContextEnabled) ?? true
+        weatherLocation = try c.decodeIfPresent(String.self, forKey: .weatherLocation) ?? "Shanghai"
     }
 
     var normalizedBaseURL: String {
@@ -102,7 +117,10 @@ enum ChatConfigStore {
             timeout: ChatConfig.default.timeout,
             streamEnabled: ChatConfig.default.streamEnabled,
             themeMode: ChatConfig.default.themeMode,
-            codeThemeMode: ChatConfig.default.codeThemeMode
+            codeThemeMode: ChatConfig.default.codeThemeMode,
+            realtimeContextEnabled: ChatConfig.default.realtimeContextEnabled,
+            weatherContextEnabled: ChatConfig.default.weatherContextEnabled,
+            weatherLocation: ChatConfig.default.weatherLocation
         )
     }
 
@@ -167,7 +185,10 @@ enum ChatConfigStore {
             timeout: min(max(config.timeout, 5), 120),
             streamEnabled: config.streamEnabled,
             themeMode: config.themeMode,
-            codeThemeMode: config.codeThemeMode
+            codeThemeMode: config.codeThemeMode,
+            realtimeContextEnabled: config.realtimeContextEnabled,
+            weatherContextEnabled: config.weatherContextEnabled,
+            weatherLocation: config.weatherLocation.trimmingCharacters(in: .whitespacesAndNewlines)
         )
     }
 }

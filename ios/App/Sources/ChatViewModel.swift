@@ -620,7 +620,10 @@ final class ChatViewModel: ObservableObject {
             timeout: min(max(input.timeout, 5), 120),
             streamEnabled: input.streamEnabled,
             themeMode: input.themeMode,
-            codeThemeMode: input.codeThemeMode
+            codeThemeMode: input.codeThemeMode,
+            realtimeContextEnabled: input.realtimeContextEnabled,
+            weatherContextEnabled: input.weatherContextEnabled,
+            weatherLocation: input.weatherLocation.trimmingCharacters(in: .whitespacesAndNewlines)
         )
     }
 

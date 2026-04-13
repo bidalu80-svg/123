@@ -10,7 +10,12 @@ struct ChatRequestBuilder {
     你是 IEXA，一款智能助手。用户问你“你是谁/你叫什么”时，请明确回答你叫 IEXA。
     """
 
-    static func makeRequest(config: ChatConfig, history: [ChatMessage], message: ChatMessage) throws -> URLRequest {
+    static func makeRequest(
+        config: ChatConfig,
+        history: [ChatMessage],
+        message: ChatMessage,
+        realtimeSystemContext: String? = nil
+    ) throws -> URLRequest {
         let completionURL = config.completionURLString
         guard let url = URL(string: completionURL), !completionURL.isEmpty else {
             throw ChatServiceError.invalidURL
@@ -25,7 +30,11 @@ struct ChatRequestBuilder {
             request.setValue("Bearer \(trimmedAPIKey)", forHTTPHeaderField: "Authorization")
         }
 
-        let normalizedMessages = buildMessagesWithIdentity(history: history, message: message)
+        let normalizedMessages = buildMessagesWithIdentity(
+            history: history,
+            message: message,
+            realtimeSystemContext: realtimeSystemContext
+        )
 
         let payload: [String: Any] = [
             "model": config.model,
@@ -37,12 +46,28 @@ struct ChatRequestBuilder {
         return request
     }
 
-    private static func buildMessagesWithIdentity(history: [ChatMessage], message: ChatMessage) -> [[String: Any]] {
+    private static func buildMessagesWithIdentity(
+        history: [ChatMessage],
+        message: ChatMessage,
+        realtimeSystemContext: String?
+    ) -> [[String: Any]] {
         let hasSystemMessage = history.contains { $0.role == .system } || message.role == .system
-        let prefix: [[String: Any]] = hasSystemMessage ? [] : [[
-            "role": "system",
-            "content": iexaIdentitySystemPrompt
-        ]]
+        var prefix: [[String: Any]] = []
+        if !hasSystemMessage {
+            prefix.append([
+                "role": "system",
+                "content": iexaIdentitySystemPrompt
+            ])
+        }
+
+        let trimmedRealtimeContext = realtimeSystemContext?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedRealtimeContext.isEmpty {
+            prefix.append([
+                "role": "system",
+                "content": trimmedRealtimeContext
+            ])
+        }
+
         return prefix + history.map(\.apiPayload) + [message.apiPayload]
     }
 
@@ -85,8 +110,14 @@ enum ChatServiceError: LocalizedError, Equatable {
 
 final class ChatService {
     private let session: URLSession
+    private let realtimeContextProvider: RealtimeContextProvider
 
-    init(session: URLSession? = nil) {
+    init(
+        session: URLSession? = nil,
+        realtimeContextProvider: RealtimeContextProvider = RealtimeContextProvider()
+    ) {
+        self.realtimeContextProvider = realtimeContextProvider
+
         if let session {
             self.session = session
             return
@@ -108,7 +139,13 @@ final class ChatService {
         message: ChatMessage,
         onEvent: @escaping @Sendable (StreamChunk) -> Void
     ) async throws -> ChatReply {
-        let request = try ChatRequestBuilder.makeRequest(config: config, history: history, message: message)
+        let realtimeContext = await realtimeContextProvider.buildSystemContext(config: config)
+        let request = try ChatRequestBuilder.makeRequest(
+            config: config,
+            history: history,
+            message: message,
+            realtimeSystemContext: realtimeContext
+        )
 
         if config.streamEnabled {
             return try await withRetry { [self] in

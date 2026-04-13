@@ -15,4 +15,25 @@ final class ChatConfigStoreTests: XCTestCase {
             "https://api.example.com/v1/chat/completions"
         )
     }
+
+    func testDecodeLegacyConfigDefaultsRealtimeFields() throws {
+        let legacyJSON = """
+        {
+          "apiURL": "https://example.com",
+          "apiKey": "",
+          "model": "gpt-test",
+          "timeout": 30,
+          "streamEnabled": true,
+          "themeMode": "system",
+          "codeThemeMode": "followApp"
+        }
+        """
+
+        let data = try XCTUnwrap(legacyJSON.data(using: .utf8))
+        let config = try JSONDecoder().decode(ChatConfig.self, from: data)
+
+        XCTAssertTrue(config.realtimeContextEnabled)
+        XCTAssertTrue(config.weatherContextEnabled)
+        XCTAssertEqual(config.weatherLocation, "Shanghai")
+    }
 }
