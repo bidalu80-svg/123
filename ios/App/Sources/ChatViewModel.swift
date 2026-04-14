@@ -38,6 +38,7 @@ final class ChatViewModel: ObservableObject {
 
     private let service: ChatService
     private var autoSaveEnabled = false
+    private let streamScrollThrottleInterval: TimeInterval = 0.11
     private var lastStreamScrollSignal: Date = .distantPast
     private var inflightSendTask: Task<ChatReply, Error>?
     private var privateMessages: [ChatMessage] = []
@@ -692,7 +693,7 @@ final class ChatViewModel: ObservableObject {
 
     private func signalStreamScroll(force: Bool = false) {
         let now = Date()
-        if force || now.timeIntervalSince(lastStreamScrollSignal) >= 0.08 {
+        if force || now.timeIntervalSince(lastStreamScrollSignal) >= streamScrollThrottleInterval {
             streamScrollTrigger &+= 1
             lastStreamScrollSignal = now
         }
