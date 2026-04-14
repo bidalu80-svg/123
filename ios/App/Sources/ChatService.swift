@@ -118,14 +118,7 @@ struct ChatRequestBuilder {
             request.setValue("Bearer \(trimmedAPIKey)", forHTTPHeaderField: "Authorization")
         }
 
-        let payload: [String: Any] = [
-            "model": config.model,
-            "prompt": prompt,
-            "size": config.imageGenerationSize.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? ChatConfig.default.imageGenerationSize
-                : config.imageGenerationSize.trimmingCharacters(in: .whitespacesAndNewlines),
-            "n": 1
-        ]
+        let payload = makeImageGenerationPayload(config: config, prompt: prompt)
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
         return request
     }
@@ -197,6 +190,87 @@ struct ChatRequestBuilder {
         body.append("--\(boundary)\r\n".data(using: .utf8) ?? Data())
         body.append("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n".data(using: .utf8) ?? Data())
         body.append("\(value)\r\n".data(using: .utf8) ?? Data())
+    }
+
+    private static func makeImageGenerationPayload(config: ChatConfig, prompt: String) -> [String: Any] {
+        let size = config.imageGenerationSize.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? ChatConfig.default.imageGenerationSize
+            : config.imageGenerationSize.trimmingCharacters(in: .whitespacesAndNewlines)
+        let loweredModel = config.model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+        // xAI grok-imagine uses aspect_ratio / resolution and can fail on OpenAI-only `size`.
+        let usesXAIShape = loweredModel.contains("grok-imagine") || loweredModel.contains("grok-image")
+        if usesXAIShape {
+            var payload: [String: Any] = [
+                "model": config.model,
+                "prompt": prompt,
+                "n": 1
+            ]
+            if let aspectRatio = normalizedAspectRatio(from: size) {
+                payload["aspect_ratio"] = aspectRatio
+            }
+            if let resolution = normalizedResolution(from: size) {
+                payload["resolution"] = resolution
+            }
+            return payload
+        }
+
+        return [
+            "model": config.model,
+            "prompt": prompt,
+            "size": size,
+            "n": 1
+        ]
+    }
+
+    private static func normalizedAspectRatio(from raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let allowed: Set<String> = ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"]
+        if allowed.contains(trimmed) { return trimmed }
+
+        guard let (width, height) = parseWidthHeight(from: trimmed) else { return nil }
+        let divisor = greatestCommonDivisor(width, height)
+        let reduced = "\(width / divisor):\(height / divisor)"
+        return allowed.contains(reduced) ? reduced : nil
+    }
+
+    private static func normalizedResolution(from raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if trimmed == "1k" || trimmed == "2k" { return trimmed }
+        guard let (width, height) = parseWidthHeight(from: trimmed) else { return nil }
+        return max(width, height) > 1024 ? "2k" : "1k"
+    }
+
+    private static func parseWidthHeight(from raw: String) -> (Int, Int)? {
+        var normalized = raw
+            .replacingOccurrences(of: "×", with: "x")
+            .replacingOccurrences(of: "*", with: "x")
+            .replacingOccurrences(of: " ", with: "")
+
+        if normalized.hasPrefix("size=") {
+            normalized = String(normalized.dropFirst("size=".count))
+        }
+
+        let parts = normalized.split(separator: "x", omittingEmptySubsequences: true)
+        guard parts.count == 2,
+              let width = Int(parts[0]),
+              let height = Int(parts[1]),
+              width > 0,
+              height > 0 else {
+            return nil
+        }
+        return (width, height)
+    }
+
+    private static func greatestCommonDivisor(_ a: Int, _ b: Int) -> Int {
+        var x = abs(a)
+        var y = abs(b)
+        while y != 0 {
+            let remainder = x % y
+            x = y
+            y = remainder
+        }
+        return max(x, 1)
     }
 }
 

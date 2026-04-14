@@ -140,6 +140,22 @@ final class ChatServiceTests: XCTestCase {
         XCTAssertEqual(json["size"] as? String, "1024x1024")
     }
 
+    func testBuildImagesGenerationRequestUsesXAIShapeForGrokImagine() throws {
+        var config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "grok-imagine-1", timeout: 30, streamEnabled: false)
+        config.imagesGenerationsPath = "/v1/images/generations"
+        config.imageGenerationSize = "1024x1024"
+
+        let request = try ChatRequestBuilder.makeImagesGenerationRequest(config: config, prompt: "a cat")
+        let payload = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+
+        XCTAssertEqual(json["model"] as? String, "grok-imagine-1")
+        XCTAssertEqual(json["prompt"] as? String, "a cat")
+        XCTAssertEqual(json["aspect_ratio"] as? String, "1:1")
+        XCTAssertEqual(json["resolution"] as? String, "1k")
+        XCTAssertNil(json["size"])
+    }
+
     func testBuildEmbeddingsRequestUsesConfiguredEndpoint() throws {
         var config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "text-embedding", timeout: 30, streamEnabled: false)
         config.embeddingsPath = "/v1/embeddings"
