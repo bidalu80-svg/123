@@ -503,7 +503,7 @@ struct ChatScreen: View {
     }
 
     private var textInputArea: some View {
-        TextField(viewModel.isPrivateMode ? "私密聊天，内容不会保存" : "有问题，尽管问", text: $viewModel.draftMessage, axis: .vertical)
+        TextField(composerPlaceholderText, text: $viewModel.draftMessage, axis: .vertical)
             .lineLimit(1...6)
             .submitLabel(.send)
             .focused($isComposerFocused)
@@ -514,6 +514,17 @@ struct ChatScreen: View {
             .font(.system(size: 15))
             .foregroundStyle(viewModel.isPrivateMode ? Color.white : Color.primary)
             .frame(maxWidth: .infinity, minHeight: 18, alignment: .leading)
+    }
+
+    private var composerPlaceholderText: String {
+        let transcript = speechToText.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        if speechToText.isRecording && transcript.isEmpty {
+            return "请说话"
+        }
+        if viewModel.isPrivateMode {
+            return "私密聊天，内容不会保存"
+        }
+        return "有问题，尽管问"
     }
 
     private var shouldUseVoicePrimaryAction: Bool {
