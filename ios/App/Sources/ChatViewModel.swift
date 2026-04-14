@@ -17,6 +17,7 @@ final class ChatViewModel: ObservableObject {
     @Published var messages: [ChatMessage] = []
     @Published var sessions: [ChatSession] = []
     @Published var currentSessionID: UUID?
+    @Published var isPrivateMode = false
 
     @Published var isSending = false
     @Published var errorMessage = ""
@@ -39,6 +40,7 @@ final class ChatViewModel: ObservableObject {
     private var autoSaveEnabled = false
     private var lastStreamScrollSignal: Date = .distantPast
     private var inflightSendTask: Task<ChatReply, Error>?
+    private var privateMessages: [ChatMessage] = []
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
     private var pathMonitor: NWPathMonitor?
     private let pathMonitorQueue = DispatchQueue(label: "chatapp.network.monitor")
@@ -99,6 +101,27 @@ final class ChatViewModel: ObservableObject {
         isNetworkReachable ? "在线" : "离线"
     }
 
+    func setPrivateMode(_ enabled: Bool) {
+        guard enabled != isPrivateMode else { return }
+
+        if isSending {
+            stopGenerating()
+        }
+
+        isPrivateMode = enabled
+        if enabled {
+            privateMessages = []
+            messages = []
+            statusMessage = "已开启私密聊天（不会保存聊天记录）"
+            appendLog("私密聊天：已开启（本次对话仅保存在内存）。")
+        } else {
+            privateMessages = []
+            syncMessagesFromCurrentSession()
+            statusMessage = "已关闭私密聊天"
+            appendLog("私密聊天：已关闭（恢复普通会话）。")
+        }
+    }
+
     func sendCurrentMessage() async {
         let text = draftMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         let images = draftImageAttachments
@@ -134,7 +157,11 @@ final class ChatViewModel: ObservableObject {
         )
 
         var historyBeforeSend: [ChatMessage] = []
-        if let current = currentSessionIndex {
+        if isPrivateMode {
+            historyBeforeSend = privateMessages
+            privateMessages.append(userMessage)
+            messages = privateMessages
+        } else if let current = currentSessionIndex {
             historyBeforeSend = sessions[current].messages
             sessions[current].messages.append(userMessage)
             sessions[current].updatedAt = Date()
@@ -199,6 +226,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     func regenerateLastAssistantReply() async {
+        guard !isPrivateMode else { return }
         guard !isSending, isNetworkReachable, let index = currentSessionIndex else { return }
 
         let sessionMessages = sessions[index].messages
@@ -288,6 +316,14 @@ final class ChatViewModel: ObservableObject {
     }
 
     func clearCurrentSessionMessages() {
+        if isPrivateMode {
+            privateMessages.removeAll()
+            messages = []
+            statusMessage = "私密聊天已清空"
+            appendLog("私密聊天：已清空当前私密消息。")
+            return
+        }
+
         guard let index = currentSessionIndex else { return }
         sessions[index].messages.removeAll()
         sessions[index].updatedAt = Date()
@@ -298,6 +334,14 @@ final class ChatViewModel: ObservableObject {
     }
 
     func clearAllSessions() {
+        if isPrivateMode {
+            privateMessages.removeAll()
+            messages = []
+            statusMessage = "私密聊天已清空"
+            appendLog("私密聊天：已清空。")
+            return
+        }
+
         sessions.removeAll()
         let first = ChatSession(title: "新会话")
         sessions = [first]
@@ -475,6 +519,25 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func appendStreamingChunk(_ chunk: StreamChunk, to id: UUID) {
+        if isPrivateMode {
+            guard let msgIndex = privateMessages.firstIndex(where: { $0.id == id }) else { return }
+
+            if !chunk.deltaText.isEmpty {
+                privateMessages[msgIndex].content += chunk.deltaText
+                privateMessages[msgIndex].isStreaming = config.streamEnabled
+            }
+
+            if !chunk.imageURLs.isEmpty {
+                let newImages = chunk.imageURLs.map { ChatImageAttachment(dataURL: $0, mimeType: "image/*", remoteURL: $0) }
+                privateMessages[msgIndex].imageAttachments.append(contentsOf: newImages)
+                privateMessages[msgIndex].imageAttachments = deduplicateImages(privateMessages[msgIndex].imageAttachments)
+            }
+
+            messages = privateMessages
+            signalStreamScroll()
+            return
+        }
+
         guard let index = currentSessionIndex,
               let msgIndex = sessions[index].messages.firstIndex(where: { $0.id == id }) else { return }
 
@@ -495,6 +558,21 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func finishStreamingMessage(id: UUID, reply: ChatReply) {
+        if isPrivateMode {
+            guard let msgIndex = privateMessages.firstIndex(where: { $0.id == id }) else { return }
+            privateMessages[msgIndex].content = reply.text
+            privateMessages[msgIndex].imageAttachments = deduplicateImages(
+                privateMessages[msgIndex].imageAttachments + reply.imageAttachments
+            )
+            privateMessages[msgIndex].isStreaming = false
+            messages = privateMessages
+            signalStreamScroll(force: true)
+            if config.soundEffectsEnabled {
+                SoundEffectPlayer.playReplyComplete()
+            }
+            return
+        }
+
         guard let index = currentSessionIndex,
               let msgIndex = sessions[index].messages.firstIndex(where: { $0.id == id }) else { return }
 
@@ -513,6 +591,19 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func finishCancellation(id: UUID) {
+        if isPrivateMode {
+            guard let msgIndex = privateMessages.firstIndex(where: { $0.id == id }) else { return }
+            privateMessages[msgIndex].isStreaming = false
+            if privateMessages[msgIndex].content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+                privateMessages[msgIndex].imageAttachments.isEmpty {
+                privateMessages.remove(at: msgIndex)
+            }
+            messages = privateMessages
+            statusMessage = "已停止生成"
+            appendLog("私密聊天：已停止本次生成。")
+            return
+        }
+
         guard let index = currentSessionIndex,
               let msgIndex = sessions[index].messages.firstIndex(where: { $0.id == id }) else { return }
 
@@ -530,6 +621,15 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func finishInterruption(id: UUID, error: Error) {
+        if isPrivateMode {
+            guard let msgIndex = privateMessages.firstIndex(where: { $0.id == id }) else { return }
+            privateMessages[msgIndex].isStreaming = false
+            messages = privateMessages
+            statusMessage = "连接中断，已保留已生成内容"
+            appendLog("私密聊天中断：\(error.localizedDescription)")
+            return
+        }
+
         guard let index = currentSessionIndex,
               let msgIndex = sessions[index].messages.firstIndex(where: { $0.id == id }) else { return }
 
@@ -542,6 +642,12 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func appendMessageToCurrentSession(_ message: ChatMessage) {
+        if isPrivateMode {
+            privateMessages.append(message)
+            messages = privateMessages
+            return
+        }
+
         guard let index = currentSessionIndex else { return }
         sessions[index].messages.append(message)
         sessions[index].updatedAt = Date()
@@ -549,6 +655,12 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func removeMessage(id: UUID) {
+        if isPrivateMode {
+            privateMessages.removeAll { $0.id == id }
+            messages = privateMessages
+            return
+        }
+
         guard let index = currentSessionIndex else { return }
         sessions[index].messages.removeAll { $0.id == id }
         sessions[index].updatedAt = Date()
@@ -561,10 +673,16 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func persistSessions() {
+        guard !isPrivateMode else { return }
         ChatSessionStore.saveSessions(sessions, currentSessionID: currentSessionID)
     }
 
     private func syncMessagesFromCurrentSession() {
+        if isPrivateMode {
+            messages = privateMessages
+            return
+        }
+
         guard let index = currentSessionIndex else {
             messages = []
             return
@@ -609,6 +727,13 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func hasRenderableContent(for id: UUID) -> Bool {
+        if isPrivateMode {
+            guard let msgIndex = privateMessages.firstIndex(where: { $0.id == id }) else { return false }
+            let message = privateMessages[msgIndex]
+            let text = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !text.isEmpty || !message.imageAttachments.isEmpty
+        }
+
         guard let index = currentSessionIndex,
               let msgIndex = sessions[index].messages.firstIndex(where: { $0.id == id }) else { return false }
 

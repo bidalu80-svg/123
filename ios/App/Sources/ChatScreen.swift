@@ -6,6 +6,7 @@ import UIKit
 
 struct ChatScreen: View {
     @EnvironmentObject private var viewModel: ChatViewModel
+    @AppStorage("chatapp.config.onboarding.done") private var hasCompletedInitialConfig = false
 
     private let sidebarWidth: CGFloat = 286
     private let edgeDragActivationWidth: CGFloat = 28
@@ -35,6 +36,7 @@ struct ChatScreen: View {
     @FocusState private var isComposerFocused: Bool
     @StateObject private var speechToText = SpeechToTextService(localeIdentifier: "zh-CN")
     @State private var speechDraftPrefix = ""
+    @State private var showInitialConfigSheet = false
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -82,6 +84,9 @@ struct ChatScreen: View {
         .onAppear {
             refreshStarterPromptsIfNeeded()
             ensureRecentPhotoAssets()
+            if !hasCompletedInitialConfig {
+                showInitialConfigSheet = true
+            }
         }
         .onChange(of: selectedPhotoItems) { _, newItems in
             guard !newItems.isEmpty else { return }
@@ -153,6 +158,18 @@ struct ChatScreen: View {
                 TestCenterScreen()
             }
             .environmentObject(viewModel)
+        }
+        .sheet(isPresented: $showInitialConfigSheet) {
+            NavigationStack {
+                InitialConfigSheet(
+                    isPresented: $showInitialConfigSheet,
+                    onComplete: {
+                        hasCompletedInitialConfig = true
+                    }
+                )
+            }
+            .environmentObject(viewModel)
+            .interactiveDismissDisabled(true)
         }
     }
 
@@ -264,6 +281,23 @@ struct ChatScreen: View {
                                     .fill(Color.red.opacity(0.1))
                             )
                     }
+
+                    Button {
+                        viewModel.setPrivateMode(!viewModel.isPrivateMode)
+                    } label: {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                .fill(viewModel.isPrivateMode ? Color.black : Color(.secondarySystemBackground))
+                                .frame(width: 36, height: 36)
+
+                            Text("👻")
+                                .font(.system(size: 16))
+                                .opacity(viewModel.isPrivateMode ? 1 : 0.8)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(viewModel.isPrivateMode ? "关闭私密聊天" : "开启私密聊天")
+
                     Menu {
                         Button("新建会话", systemImage: "square.and.pencil") {
                             viewModel.createNewSession()
@@ -319,7 +353,7 @@ struct ChatScreen: View {
                                 apiKey: viewModel.config.apiKey,
                                 apiBaseURL: viewModel.config.normalizedBaseURL,
                                 showsAssistantActionBar: message.role == .assistant && !message.isStreaming,
-                                onRegenerate: (isLatestAssistant && viewModel.config.endpointMode == .chatCompletions) ? {
+                                onRegenerate: (isLatestAssistant && viewModel.config.endpointMode == .chatCompletions && !viewModel.isPrivateMode) ? {
                                     Task { await viewModel.regenerateLastAssistantReply() }
                                 } : nil
                             )
@@ -420,39 +454,14 @@ struct ChatScreen: View {
             textInputArea
 
             Button {
-                if speechToText.isRecording {
-                    stopVoiceTranscription()
-                } else {
-                    Task { await startVoiceTranscription() }
-                }
-            } label: {
-                Image(systemName: speechToText.isRecording ? "waveform.circle.fill" : "mic.fill")
-                    .font(.system(size: 16, weight: .regular))
-                    .foregroundStyle(speechToText.isRecording ? Color.red : .secondary)
-                    .frame(width: 26, height: 26)
-            }
-            .buttonStyle(.plain)
-            .contextMenu {
-                Button(speechToText.isRecording ? "停止语音输入" : "开始语音输入", systemImage: speechToText.isRecording ? "stop.circle" : "mic") {
+                if viewModel.isSending {
+                    viewModel.stopGenerating()
+                } else if shouldUseVoicePrimaryAction {
                     if speechToText.isRecording {
                         stopVoiceTranscription()
                     } else {
                         Task { await startVoiceTranscription() }
                     }
-                }
-                Button("清空识别文本", systemImage: "text.badge.xmark") {
-                    speechToText.clearTranscript()
-                }
-                if viewModel.isSending {
-                    Button("停止生成", systemImage: "stop.circle") {
-                        viewModel.stopGenerating()
-                    }
-                }
-            }
-
-            Button {
-                if viewModel.isSending {
-                    viewModel.stopGenerating()
                 } else {
                     if speechToText.isRecording {
                         stopVoiceTranscription()
@@ -463,6 +472,8 @@ struct ChatScreen: View {
                 Group {
                     if viewModel.isSending {
                         Image(systemName: "stop.fill")
+                    } else if shouldUseVoicePrimaryAction {
+                        Image(systemName: speechToText.isRecording ? "waveform" : "waveform.path")
                     } else {
                         Image(systemName: "arrow.up")
                     }
@@ -472,27 +483,27 @@ struct ChatScreen: View {
                 .frame(width: 30, height: 30)
                 .background(
                     Circle()
-                        .fill(viewModel.canSend || viewModel.isSending ? Color.black : Color(.systemGray3))
+                        .fill(canTapPrimaryComposerButton ? Color.black : Color(.systemGray3))
                 )
             }
-            .disabled(!viewModel.canSend && !viewModel.isSending)
+            .disabled(!canTapPrimaryComposerButton)
         }
         .frame(minHeight: 34)
         .padding(.horizontal, 12)
         .padding(.vertical, 4)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(Color(.secondarySystemBackground))
+                .fill(viewModel.isPrivateMode ? Color.black : Color(.secondarySystemBackground))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(Color.black.opacity(0.04), lineWidth: 0.8)
+                .stroke(viewModel.isPrivateMode ? Color.white.opacity(0.18) : Color.black.opacity(0.04), lineWidth: 0.8)
         )
         .shadow(color: Color.black.opacity(0.025), radius: 6, x: 0, y: 2)
     }
 
     private var textInputArea: some View {
-        TextField("发消息", text: $viewModel.draftMessage, axis: .vertical)
+        TextField(viewModel.isPrivateMode ? "私密聊天，内容不会保存" : "有问题，尽管问", text: $viewModel.draftMessage, axis: .vertical)
             .lineLimit(1...6)
             .submitLabel(.send)
             .focused($isComposerFocused)
@@ -501,7 +512,21 @@ struct ChatScreen: View {
                 Task { await viewModel.sendCurrentMessage() }
             }
             .font(.system(size: 15))
+            .foregroundStyle(viewModel.isPrivateMode ? Color.white : Color.primary)
             .frame(maxWidth: .infinity, minHeight: 18, alignment: .leading)
+    }
+
+    private var shouldUseVoicePrimaryAction: Bool {
+        if viewModel.config.endpointMode == .models { return false }
+        if viewModel.isSending { return false }
+        let trimmed = viewModel.draftMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty
+            && viewModel.draftImageAttachments.isEmpty
+            && viewModel.draftFileAttachment == nil
+    }
+
+    private var canTapPrimaryComposerButton: Bool {
+        viewModel.isSending || shouldUseVoicePrimaryAction || viewModel.canSend
     }
 
 
@@ -1396,6 +1421,50 @@ struct ChatScreen: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
             sidebarAnimationLock = false
         }
+    }
+}
+
+private struct InitialConfigSheet: View {
+    @EnvironmentObject private var viewModel: ChatViewModel
+    @Binding var isPresented: Bool
+    let onComplete: () -> Void
+
+    private var canContinue: Bool {
+        let url = viewModel.config.apiURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = viewModel.config.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !url.isEmpty && !model.isEmpty
+    }
+
+    var body: some View {
+        Form {
+            Section("首次使用配置") {
+                Text("请先填写基础配置。保存后，下次打开将不再弹出这个窗口。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                TextField("站点地址（如 https://xxx.com）", text: $viewModel.config.apiURL)
+                    .keyboardType(.URL)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+
+                SecureField("API Key（可选）", text: $viewModel.config.apiKey)
+
+                TextField("模型名称（如 gpt-5.4）", text: $viewModel.config.model)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+            }
+
+            Section {
+                Button("保存并开始使用") {
+                    viewModel.saveConfig()
+                    onComplete()
+                    isPresented = false
+                }
+                .disabled(!canContinue)
+            }
+        }
+        .navigationTitle("欢迎使用 IEXA")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
