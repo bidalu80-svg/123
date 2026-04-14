@@ -153,3 +153,80 @@
 - `.gitignore` 已忽略：
   - `ios/Vendor/Python.xcframework/`
   - `ios/App/Resources/PythonRuntime/`
+
+---
+
+## 2026-04-14 本轮要点（v2.2）
+
+### 1) 接口模式可切换（核心）
+- 目标：把 OpenAI 风格常用接口做成可切换模式，便于直接在 App 内测试。
+- 新增模式：
+  - `Chat` -> `/v1/chat/completions`
+  - `Image` -> `/v1/images/generations`
+  - `Audio` -> `/v1/audio/transcriptions`
+  - `Embedding` -> `/v1/embeddings`
+  - `Models` -> `/v1/models`
+- 实现文件：
+  - `ios/App/Sources/ChatConfig.swift`
+  - `ios/App/Sources/ChatService.swift`
+  - `ios/App/Sources/ChatViewModel.swift`
+  - `ios/App/Sources/SettingsScreen.swift`
+  - `ios/App/Sources/ChatScreen.swift`
+
+### 2) 配置能力增强
+- `ChatConfig` 新增：
+  - `endpointMode`
+  - 各接口 path（chat/image/audio/embedding/models）
+  - 生图尺寸 `imageGenerationSize`
+- `Settings` 页新增：
+  - 接口模式选择器
+  - 各 endpoint 路径可编辑
+  - 当前生效 endpoint URL 显示
+
+### 3) 发送链路按模式分流
+- `ChatService.sendMessage` 现在按模式路由：
+  - Chat: 走原有流式/非流式聊天
+  - Image: 调用生图接口并回显图片
+  - Embedding: 调用向量接口并回显维度+前几维
+  - Models: 直接回显模型列表
+  - Audio: 支持 multipart 音频转写（需音频附件）
+
+### 4) 文件与音频附件能力
+- 单文件导入继续支持“任意单文件”，文本自动解码。
+- 对音频文件（mp3/wav/m4a/aac/ogg/flac）：
+  - 保留二进制 base64 以支持 `/v1/audio/transcriptions`
+  - 草稿区显示“音频已附加”提示
+- 相关文件：
+  - `ios/App/Sources/ChatMessage.swift`
+  - `ios/App/Sources/ChatViewModel.swift`
+  - `ios/App/Sources/ChatScreen.swift`
+
+### 5) 其他本轮优化
+- 图片加载失败修复增强：
+  - URL 归一化、鉴权头重试、JSON 二次取图
+  - 文件：`ios/App/Sources/RemoteImageView.swift`
+- Python `notification` 兼容 shim：
+  - 文件：`ios/App/Sources/EmbeddedCPythonRuntime.swift`
+- 跨会话记忆：
+  - 文件：`ios/App/Sources/ConversationMemoryStore.swift`
+- 中文语音转文本输入：
+  - 文件：`ios/App/Sources/SpeechToTextService.swift`
+  - 权限：`Info.plist` 增加麦克风和语音识别说明
+- 模型厂商识别扩展：
+  - 增加 MiniMax / Zhipu / Perplexity / Cohere / Groq / Together / Fireworks 等识别
+- 聊天气泡头像图标升级为渐变聊天徽标：
+  - 文件：`ios/App/Sources/MessageBubbleView.swift`
+
+### 6) 测试补充
+- `ios/Tests/ChatConfigStoreTests.swift` 增加 endpoint 归一化覆盖。
+- `ios/Tests/ChatServiceTests.swift` 增加 image / embeddings request builder 覆盖。
+
+### 7) 本次 IPA 重新构建结果
+- 提交：
+  - `b5f0373` (`main`)
+- GitHub Actions：
+  - Workflow: `Build iOS IPA`
+  - Run: `24381110916`
+  - 链接：`https://github.com/Return-end/blankai-ios/actions/runs/24381110916`
+- 产物（已下载到本地）：
+  - `artifacts/run-24381110916/chatapp-ipa/exported/IEXA.ipa`
