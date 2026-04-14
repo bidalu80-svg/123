@@ -86,22 +86,27 @@ struct MessageBubbleView: View {
 
     @ViewBuilder
     private var assistantIdentityIcon: some View {
-        if UIImage(named: "AppLogo") != nil {
-            Image("AppLogo")
-                .resizable()
-                .scaledToFill()
-                .frame(width: 18, height: 18)
-                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-        } else {
-            Image(systemName: "sparkles")
-                .font(.system(size: 12, weight: .semibold))
-                .frame(width: 18, height: 18)
-                .foregroundStyle(.white)
-                .background(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(Color.black)
+        ZStack {
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.10, green: 0.22, blue: 0.58),
+                            Color(red: 0.26, green: 0.50, blue: 0.96)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
                 )
+
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .stroke(Color.white.opacity(0.18), lineWidth: 0.8)
+
+            Image(systemName: "bubble.left.and.bubble.right.fill")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.95))
         }
+        .frame(width: 18, height: 18)
     }
 
     private var assistantActionBar: some View {

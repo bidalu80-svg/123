@@ -14,9 +14,10 @@ struct ChatRequestBuilder {
         config: ChatConfig,
         history: [ChatMessage],
         message: ChatMessage,
-        realtimeSystemContext: String? = nil
+        realtimeSystemContext: String? = nil,
+        memorySystemContext: String? = nil
     ) throws -> URLRequest {
-        let completionURL = config.completionURLString
+        let completionURL = config.chatCompletionsURLString
         guard let url = URL(string: completionURL), !completionURL.isEmpty else {
             throw ChatServiceError.invalidURL
         }
@@ -33,7 +34,8 @@ struct ChatRequestBuilder {
         let normalizedMessages = buildMessagesWithIdentity(
             history: history,
             message: message,
-            realtimeSystemContext: realtimeSystemContext
+            realtimeSystemContext: realtimeSystemContext,
+            memorySystemContext: memorySystemContext
         )
 
         let payload: [String: Any] = [
@@ -49,7 +51,8 @@ struct ChatRequestBuilder {
     private static func buildMessagesWithIdentity(
         history: [ChatMessage],
         message: ChatMessage,
-        realtimeSystemContext: String?
+        realtimeSystemContext: String?,
+        memorySystemContext: String?
     ) -> [[String: Any]] {
         let hasSystemMessage = history.contains { $0.role == .system } || message.role == .system
         var prefix: [[String: Any]] = []
@@ -65,6 +68,14 @@ struct ChatRequestBuilder {
             prefix.append([
                 "role": "system",
                 "content": trimmedRealtimeContext
+            ])
+        }
+
+        let trimmedMemoryContext = memorySystemContext?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedMemoryContext.isEmpty {
+            prefix.append([
+                "role": "system",
+                "content": trimmedMemoryContext
             ])
         }
 
@@ -86,6 +97,102 @@ struct ChatRequestBuilder {
         }
         return request
     }
+
+    static func makeImagesGenerationRequest(config: ChatConfig, prompt: String) throws -> URLRequest {
+        let endpoint = config.imagesGenerationsURLString
+        guard let url = URL(string: endpoint), !endpoint.isEmpty else {
+            throw ChatServiceError.invalidURL
+        }
+
+        var request = URLRequest(url: url, timeoutInterval: config.timeout)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let trimmedAPIKey = config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedAPIKey.isEmpty {
+            request.setValue("Bearer \(trimmedAPIKey)", forHTTPHeaderField: "Authorization")
+        }
+
+        let payload: [String: Any] = [
+            "model": config.model,
+            "prompt": prompt,
+            "size": config.imageGenerationSize.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? ChatConfig.default.imageGenerationSize
+                : config.imageGenerationSize.trimmingCharacters(in: .whitespacesAndNewlines),
+            "n": 1
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        return request
+    }
+
+    static func makeEmbeddingsRequest(config: ChatConfig, input: String) throws -> URLRequest {
+        let endpoint = config.embeddingsURLString
+        guard let url = URL(string: endpoint), !endpoint.isEmpty else {
+            throw ChatServiceError.invalidURL
+        }
+
+        var request = URLRequest(url: url, timeoutInterval: config.timeout)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let trimmedAPIKey = config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedAPIKey.isEmpty {
+            request.setValue("Bearer \(trimmedAPIKey)", forHTTPHeaderField: "Authorization")
+        }
+
+        let payload: [String: Any] = [
+            "model": config.model,
+            "input": input
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        return request
+    }
+
+    static func makeAudioTranscriptionsRequest(
+        config: ChatConfig,
+        fileName: String,
+        mimeType: String,
+        fileData: Data,
+        prompt: String?
+    ) throws -> URLRequest {
+        let endpoint = config.audioTranscriptionsURLString
+        guard let url = URL(string: endpoint), !endpoint.isEmpty else {
+            throw ChatServiceError.invalidURL
+        }
+
+        let boundary = "----ChatAppBoundary\(UUID().uuidString)"
+        var request = URLRequest(url: url, timeoutInterval: max(config.timeout, 120))
+        request.httpMethod = "POST"
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+
+        let trimmedAPIKey = config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedAPIKey.isEmpty {
+            request.setValue("Bearer \(trimmedAPIKey)", forHTTPHeaderField: "Authorization")
+        }
+
+        var body = Data()
+
+        appendMultipartField(name: "model", value: config.model, boundary: boundary, to: &body)
+        if let prompt, !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            appendMultipartField(name: "prompt", value: prompt, boundary: boundary, to: &body)
+        }
+
+        body.append("--\(boundary)\r\n".data(using: .utf8) ?? Data())
+        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(fileName)\"\r\n".data(using: .utf8) ?? Data())
+        body.append("Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8) ?? Data())
+        body.append(fileData)
+        body.append("\r\n".data(using: .utf8) ?? Data())
+        body.append("--\(boundary)--\r\n".data(using: .utf8) ?? Data())
+
+        request.httpBody = body
+        return request
+    }
+
+    private static func appendMultipartField(name: String, value: String, boundary: String, to body: inout Data) {
+        body.append("--\(boundary)\r\n".data(using: .utf8) ?? Data())
+        body.append("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n".data(using: .utf8) ?? Data())
+        body.append("\(value)\r\n".data(using: .utf8) ?? Data())
+    }
 }
 
 enum ChatServiceError: LocalizedError, Equatable {
@@ -93,6 +200,8 @@ enum ChatServiceError: LocalizedError, Equatable {
     case invalidResponse
     case httpError(Int)
     case noData
+    case invalidInput(String)
+    case unsupported(String)
 
     var errorDescription: String? {
         switch self {
@@ -104,6 +213,10 @@ enum ChatServiceError: LocalizedError, Equatable {
             return "请求失败，HTTP 状态码：\(statusCode)。"
         case .noData:
             return "服务器没有返回可用数据。"
+        case .invalidInput(let reason):
+            return reason
+        case .unsupported(let reason):
+            return reason
         }
     }
 }
@@ -111,12 +224,15 @@ enum ChatServiceError: LocalizedError, Equatable {
 final class ChatService {
     private let session: URLSession
     private let realtimeContextProvider: RealtimeContextProvider
+    private let memoryStore: ConversationMemoryStore
 
     init(
         session: URLSession? = nil,
-        realtimeContextProvider: RealtimeContextProvider = RealtimeContextProvider()
+        realtimeContextProvider: RealtimeContextProvider = RealtimeContextProvider(),
+        memoryStore: ConversationMemoryStore = ConversationMemoryStore()
     ) {
         self.realtimeContextProvider = realtimeContextProvider
+        self.memoryStore = memoryStore
 
         if let session {
             self.session = session
@@ -139,6 +255,48 @@ final class ChatService {
         message: ChatMessage,
         onEvent: @escaping @Sendable (StreamChunk) -> Void
     ) async throws -> ChatReply {
+        switch config.endpointMode {
+        case .chatCompletions:
+            return try await sendChatCompletions(
+                config: config,
+                history: history,
+                message: message,
+                onEvent: onEvent
+            )
+        case .imageGenerations:
+            return try await sendImageGeneration(
+                config: config,
+                message: message,
+                onEvent: onEvent
+            )
+        case .embeddings:
+            return try await sendEmbeddings(
+                config: config,
+                message: message,
+                onEvent: onEvent
+            )
+        case .models:
+            let models = try await fetchModels(config: config)
+            let text = modelsText(models)
+            onEvent(StreamChunk(rawLine: "", deltaText: text, imageURLs: [], isDone: false))
+            return ChatReply(text: text, imageAttachments: [])
+        case .audioTranscriptions:
+            return try await sendAudioTranscriptions(
+                config: config,
+                message: message,
+                onEvent: onEvent
+            )
+        }
+    }
+
+    private func sendChatCompletions(
+        config: ChatConfig,
+        history: [ChatMessage],
+        message: ChatMessage,
+        onEvent: @escaping @Sendable (StreamChunk) -> Void
+    ) async throws -> ChatReply {
+        await memoryStore.remember(message)
+        let memoryContext = await memoryStore.buildSystemContext()
         let realtimeContext = await realtimeContextProvider.buildSystemContext(
             config: config,
             userPrompt: message.copyableText
@@ -147,7 +305,8 @@ final class ChatService {
             config: config,
             history: history,
             message: message,
-            realtimeSystemContext: realtimeContext
+            realtimeSystemContext: realtimeContext,
+            memorySystemContext: memoryContext
         )
 
         if config.streamEnabled {
@@ -223,6 +382,151 @@ final class ChatService {
         return reply
     }
 
+    private func sendImageGeneration(
+        config: ChatConfig,
+        message: ChatMessage,
+        onEvent: @escaping @Sendable (StreamChunk) -> Void
+    ) async throws -> ChatReply {
+        let prompt = message.copyableText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty else {
+            throw ChatServiceError.invalidInput("生图模式需要输入图片描述（prompt）。")
+        }
+
+        let request = try ChatRequestBuilder.makeImagesGenerationRequest(config: config, prompt: prompt)
+        let (data, response) = try await withRetry { [self] in
+            try await session.data(for: request)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw ChatServiceError.invalidResponse
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw ChatServiceError.httpError(httpResponse.statusCode)
+        }
+
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw ChatServiceError.noData
+        }
+
+        let parsed = StreamParser.extractPayload(from: object)
+        let images = deduplicateImages(
+            parsed.imageURLs.map { ChatImageAttachment(dataURL: $0, mimeType: "image/*", remoteURL: $0) }
+        )
+        guard !images.isEmpty else {
+            throw ChatServiceError.noData
+        }
+
+        let revisedPrompt = object["revised_prompt"] as? String
+        let text: String
+        if let revisedPrompt, !revisedPrompt.isEmpty {
+            text = "生图完成（\(images.count) 张）\n优化提示词：\(revisedPrompt)"
+        } else if !parsed.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            text = parsed.text
+        } else {
+            text = "生图完成（\(images.count) 张）"
+        }
+
+        onEvent(StreamChunk(rawLine: "", deltaText: text, imageURLs: images.map(\.requestURLString), isDone: false))
+        return ChatReply(text: text, imageAttachments: images)
+    }
+
+    private func sendEmbeddings(
+        config: ChatConfig,
+        message: ChatMessage,
+        onEvent: @escaping @Sendable (StreamChunk) -> Void
+    ) async throws -> ChatReply {
+        let input = message.copyableText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !input.isEmpty else {
+            throw ChatServiceError.invalidInput("向量模式需要输入文本内容。")
+        }
+
+        let request = try ChatRequestBuilder.makeEmbeddingsRequest(config: config, input: input)
+        let (data, response) = try await withRetry { [self] in
+            try await session.data(for: request)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw ChatServiceError.invalidResponse
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw ChatServiceError.httpError(httpResponse.statusCode)
+        }
+
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rows = object["data"] as? [[String: Any]],
+              let first = rows.first,
+              let vectorRaw = first["embedding"] as? [Any] else {
+            throw ChatServiceError.noData
+        }
+
+        let vector = vectorRaw.compactMap { value -> Double? in
+            if let number = value as? NSNumber { return number.doubleValue }
+            if let string = value as? String { return Double(string) }
+            return nil
+        }
+        guard !vector.isEmpty else {
+            throw ChatServiceError.noData
+        }
+
+        let preview = vector.prefix(8).map { String(format: "%.6f", $0) }.joined(separator: ", ")
+        let text = """
+        向量生成成功
+        维度：\(vector.count)
+        前 8 维：\(preview)
+        """
+
+        onEvent(StreamChunk(rawLine: "", deltaText: text, imageURLs: [], isDone: false))
+        return ChatReply(text: text, imageAttachments: [])
+    }
+
+    private func sendAudioTranscriptions(
+        config: ChatConfig,
+        message: ChatMessage,
+        onEvent: @escaping @Sendable (StreamChunk) -> Void
+    ) async throws -> ChatReply {
+        guard let file = extractAudioFile(from: message) else {
+            throw ChatServiceError.invalidInput("语音转文字模式需要先附加音频文件（如 mp3/m4a/wav）。")
+        }
+
+        let request = try ChatRequestBuilder.makeAudioTranscriptionsRequest(
+            config: config,
+            fileName: file.fileName,
+            mimeType: file.mimeType,
+            fileData: file.data,
+            prompt: message.content
+        )
+
+        let (data, response) = try await withRetry { [self] in
+            try await session.data(for: request)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw ChatServiceError.invalidResponse
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw ChatServiceError.httpError(httpResponse.statusCode)
+        }
+
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw ChatServiceError.noData
+        }
+
+        let text: String
+        if let direct = object["text"] as? String, !direct.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            text = direct
+        } else if let transcript = object["transcript"] as? String, !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            text = transcript
+        } else if let segments = object["segments"] as? [[String: Any]], !segments.isEmpty {
+            let joined = segments.compactMap { $0["text"] as? String }.joined(separator: "")
+            text = joined.trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            throw ChatServiceError.noData
+        }
+
+        onEvent(StreamChunk(rawLine: "", deltaText: text, imageURLs: [], isDone: false))
+        return ChatReply(text: text, imageAttachments: [])
+    }
+
     func testConnection(config: ChatConfig) async -> String {
         do {
             let ping = ChatMessage(role: .user, content: "ping")
@@ -260,6 +564,59 @@ final class ChatService {
             throw ChatServiceError.noData
         }
         return models
+    }
+
+    private func modelsText(_ models: [String]) -> String {
+        guard !models.isEmpty else {
+            return "当前接口没有返回可用模型。"
+        }
+        let lines = models.prefix(120).map { "• \($0)" }
+        return "模型列表（\(models.count) 个）\n" + lines.joined(separator: "\n")
+    }
+
+    private func extractAudioFile(from message: ChatMessage) -> (fileName: String, mimeType: String, data: Data)? {
+        for file in message.fileAttachments {
+            let mime = file.mimeType.trimmingCharacters(in: .whitespacesAndNewlines)
+            let loweredMime = mime.lowercased()
+            let loweredName = file.fileName.lowercased()
+            let audioLike = loweredMime.hasPrefix("audio/")
+                || loweredName.hasSuffix(".mp3")
+                || loweredName.hasSuffix(".wav")
+                || loweredName.hasSuffix(".m4a")
+                || loweredName.hasSuffix(".aac")
+                || loweredName.hasSuffix(".ogg")
+                || loweredName.hasSuffix(".flac")
+
+            if let b64 = file.binaryBase64, audioLike,
+               let data = Data(base64Encoded: b64),
+               !data.isEmpty {
+                return (file.fileName, mime.isEmpty ? "audio/mpeg" : mime, data)
+            }
+
+            if let decoded = decodeAudioDataURL(file.textContent), audioLike {
+                return (file.fileName, decoded.mimeType, decoded.data)
+            }
+        }
+        return nil
+    }
+
+    private func decodeAudioDataURL(_ input: String) -> (mimeType: String, data: Data)? {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("data:audio/") else { return nil }
+        let parts = trimmed.split(separator: ",", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return nil }
+        let header = parts[0].lowercased()
+        let payload = parts[1]
+
+        let mimeType = header
+            .replacingOccurrences(of: "data:", with: "")
+            .components(separatedBy: ";")
+            .first ?? "audio/mpeg"
+
+        if header.contains(";base64"), let data = Data(base64Encoded: payload), !data.isEmpty {
+            return (mimeType, data)
+        }
+        return nil
     }
 
     private func deduplicateImages(_ attachments: [ChatImageAttachment]) -> [ChatImageAttachment] {

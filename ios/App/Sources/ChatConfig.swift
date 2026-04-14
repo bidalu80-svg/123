@@ -12,13 +12,70 @@ enum CodeThemeMode: String, Codable, CaseIterable {
     case githubLight
 }
 
+enum APIEndpointMode: String, Codable, CaseIterable {
+    case chatCompletions
+    case imageGenerations
+    case audioTranscriptions
+    case embeddings
+    case models
+
+    var title: String {
+        switch self {
+        case .chatCompletions:
+            return "聊天"
+        case .imageGenerations:
+            return "生图"
+        case .audioTranscriptions:
+            return "语音转文字"
+        case .embeddings:
+            return "向量"
+        case .models:
+            return "模型列表"
+        }
+    }
+
+    var shortLabel: String {
+        switch self {
+        case .chatCompletions:
+            return "Chat"
+        case .imageGenerations:
+            return "Image"
+        case .audioTranscriptions:
+            return "Audio"
+        case .embeddings:
+            return "Embedding"
+        case .models:
+            return "Models"
+        }
+    }
+
+    var requiresTextPrompt: Bool {
+        switch self {
+        case .chatCompletions, .imageGenerations, .embeddings:
+            return true
+        case .audioTranscriptions, .models:
+            return false
+        }
+    }
+}
+
 struct ChatConfig: Codable, Equatable {
-    static let completionPath = "/v1/chat/completions"
-    static let modelsPath = "/v1/models"
+    static let defaultChatCompletionsPath = "/v1/chat/completions"
+    static let defaultImagesGenerationsPath = "/v1/images/generations"
+    static let defaultAudioTranscriptionsPath = "/v1/audio/transcriptions"
+    static let defaultEmbeddingsPath = "/v1/embeddings"
+    static let defaultModelsPath = "/v1/models"
 
     var apiURL: String
     var apiKey: String
     var model: String
+    var endpointMode: APIEndpointMode
+    var chatCompletionsPath: String
+    var imagesGenerationsPath: String
+    var audioTranscriptionsPath: String
+    var embeddingsPath: String
+    var modelsPath: String
+    var imageGenerationSize: String
     var timeout: Double
     var streamEnabled: Bool
     var themeMode: AppThemeMode
@@ -36,6 +93,13 @@ struct ChatConfig: Codable, Equatable {
         apiURL: "https://xxx.com",
         apiKey: "",
         model: "gpt-5.4-pro",
+        endpointMode: .chatCompletions,
+        chatCompletionsPath: ChatConfig.defaultChatCompletionsPath,
+        imagesGenerationsPath: ChatConfig.defaultImagesGenerationsPath,
+        audioTranscriptionsPath: ChatConfig.defaultAudioTranscriptionsPath,
+        embeddingsPath: ChatConfig.defaultEmbeddingsPath,
+        modelsPath: ChatConfig.defaultModelsPath,
+        imageGenerationSize: "1024x1024",
         timeout: 30,
         streamEnabled: true,
         themeMode: .system,
@@ -54,6 +118,13 @@ struct ChatConfig: Codable, Equatable {
         apiURL: String,
         apiKey: String,
         model: String,
+        endpointMode: APIEndpointMode = .chatCompletions,
+        chatCompletionsPath: String = ChatConfig.defaultChatCompletionsPath,
+        imagesGenerationsPath: String = ChatConfig.defaultImagesGenerationsPath,
+        audioTranscriptionsPath: String = ChatConfig.defaultAudioTranscriptionsPath,
+        embeddingsPath: String = ChatConfig.defaultEmbeddingsPath,
+        modelsPath: String = ChatConfig.defaultModelsPath,
+        imageGenerationSize: String = "1024x1024",
         timeout: Double,
         streamEnabled: Bool,
         themeMode: AppThemeMode = .system,
@@ -70,6 +141,13 @@ struct ChatConfig: Codable, Equatable {
         self.apiURL = apiURL
         self.apiKey = apiKey
         self.model = model
+        self.endpointMode = endpointMode
+        self.chatCompletionsPath = chatCompletionsPath
+        self.imagesGenerationsPath = imagesGenerationsPath
+        self.audioTranscriptionsPath = audioTranscriptionsPath
+        self.embeddingsPath = embeddingsPath
+        self.modelsPath = modelsPath
+        self.imageGenerationSize = imageGenerationSize
         self.timeout = timeout
         self.streamEnabled = streamEnabled
         self.themeMode = themeMode
@@ -89,6 +167,13 @@ struct ChatConfig: Codable, Equatable {
         apiURL = try c.decode(String.self, forKey: .apiURL)
         apiKey = try c.decode(String.self, forKey: .apiKey)
         model = try c.decode(String.self, forKey: .model)
+        endpointMode = try c.decodeIfPresent(APIEndpointMode.self, forKey: .endpointMode) ?? .chatCompletions
+        chatCompletionsPath = try c.decodeIfPresent(String.self, forKey: .chatCompletionsPath) ?? ChatConfig.defaultChatCompletionsPath
+        imagesGenerationsPath = try c.decodeIfPresent(String.self, forKey: .imagesGenerationsPath) ?? ChatConfig.defaultImagesGenerationsPath
+        audioTranscriptionsPath = try c.decodeIfPresent(String.self, forKey: .audioTranscriptionsPath) ?? ChatConfig.defaultAudioTranscriptionsPath
+        embeddingsPath = try c.decodeIfPresent(String.self, forKey: .embeddingsPath) ?? ChatConfig.defaultEmbeddingsPath
+        modelsPath = try c.decodeIfPresent(String.self, forKey: .modelsPath) ?? ChatConfig.defaultModelsPath
+        imageGenerationSize = try c.decodeIfPresent(String.self, forKey: .imageGenerationSize) ?? "1024x1024"
         timeout = try c.decode(Double.self, forKey: .timeout)
         streamEnabled = try c.decode(Bool.self, forKey: .streamEnabled)
         themeMode = try c.decodeIfPresent(AppThemeMode.self, forKey: .themeMode) ?? .system
@@ -107,12 +192,43 @@ struct ChatConfig: Codable, Equatable {
         ChatConfigStore.normalizedBaseURL(apiURL)
     }
 
+    var chatCompletionsURLString: String {
+        ChatConfigStore.endpointURL(apiURL, path: chatCompletionsPath, fallback: ChatConfig.defaultChatCompletionsPath)
+    }
+
+    var imagesGenerationsURLString: String {
+        ChatConfigStore.endpointURL(apiURL, path: imagesGenerationsPath, fallback: ChatConfig.defaultImagesGenerationsPath)
+    }
+
+    var audioTranscriptionsURLString: String {
+        ChatConfigStore.endpointURL(apiURL, path: audioTranscriptionsPath, fallback: ChatConfig.defaultAudioTranscriptionsPath)
+    }
+
+    var embeddingsURLString: String {
+        ChatConfigStore.endpointURL(apiURL, path: embeddingsPath, fallback: ChatConfig.defaultEmbeddingsPath)
+    }
+
+    var activeEndpointURLString: String {
+        switch endpointMode {
+        case .chatCompletions:
+            return chatCompletionsURLString
+        case .imageGenerations:
+            return imagesGenerationsURLString
+        case .audioTranscriptions:
+            return audioTranscriptionsURLString
+        case .embeddings:
+            return embeddingsURLString
+        case .models:
+            return modelsURLString
+        }
+    }
+
     var completionURLString: String {
-        ChatConfigStore.completionsURL(apiURL)
+        chatCompletionsURLString
     }
 
     var modelsURLString: String {
-        ChatConfigStore.modelsURL(apiURL)
+        ChatConfigStore.endpointURL(apiURL, path: modelsPath, fallback: ChatConfig.defaultModelsPath)
     }
 
     var siteDisplayName: String {
@@ -139,6 +255,13 @@ enum ChatConfigStore {
             apiURL: normalizedBaseURL(bundleURL),
             apiKey: "",
             model: bundleModel,
+            endpointMode: ChatConfig.default.endpointMode,
+            chatCompletionsPath: ChatConfig.default.chatCompletionsPath,
+            imagesGenerationsPath: ChatConfig.default.imagesGenerationsPath,
+            audioTranscriptionsPath: ChatConfig.default.audioTranscriptionsPath,
+            embeddingsPath: ChatConfig.default.embeddingsPath,
+            modelsPath: ChatConfig.default.modelsPath,
+            imageGenerationSize: ChatConfig.default.imageGenerationSize,
             timeout: ChatConfig.default.timeout,
             streamEnabled: ChatConfig.default.streamEnabled,
             themeMode: ChatConfig.default.themeMode,
@@ -182,12 +305,13 @@ enum ChatConfigStore {
 
         if let path = components.percentEncodedPath.removingPercentEncoding {
             let lowered = path.lowercased()
-            if lowered.hasSuffix(ChatConfig.completionPath) {
-                let cut = String(path.dropLast(ChatConfig.completionPath.count))
-                components.percentEncodedPath = cut.isEmpty ? "" : cut
-            } else if lowered.hasSuffix(ChatConfig.modelsPath) {
-                let cut = String(path.dropLast(ChatConfig.modelsPath.count))
-                components.percentEncodedPath = cut.isEmpty ? "" : cut
+            for endpoint in endpointSuffixCandidates() {
+                let lowerEndpoint = endpoint.lowercased()
+                if lowered.hasSuffix(lowerEndpoint) {
+                    let cut = String(path.dropLast(endpoint.count))
+                    components.percentEncodedPath = cut.isEmpty ? "" : cut
+                    break
+                }
             }
         }
 
@@ -195,16 +319,38 @@ enum ChatConfigStore {
         return normalized.hasSuffix("/") ? String(normalized.dropLast()) : normalized
     }
 
-    static func completionsURL(_ raw: String) -> String {
+    static func normalizeEndpointPath(_ raw: String, fallback: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let base = trimmed.isEmpty ? fallback : trimmed
+        if base.hasPrefix("/") {
+            return base
+        }
+        return "/\(base)"
+    }
+
+    static func endpointURL(_ raw: String, path: String, fallback: String) -> String {
         let base = normalizedBaseURL(raw)
         guard !base.isEmpty else { return "" }
-        return "\(base)\(ChatConfig.completionPath)"
+        let normalizedPath = normalizeEndpointPath(path, fallback: fallback)
+        return "\(base)\(normalizedPath)"
+    }
+
+    static func completionsURL(_ raw: String) -> String {
+        endpointURL(raw, path: ChatConfig.defaultChatCompletionsPath, fallback: ChatConfig.defaultChatCompletionsPath)
     }
 
     static func modelsURL(_ raw: String) -> String {
-        let base = normalizedBaseURL(raw)
-        guard !base.isEmpty else { return "" }
-        return "\(base)\(ChatConfig.modelsPath)"
+        endpointURL(raw, path: ChatConfig.defaultModelsPath, fallback: ChatConfig.defaultModelsPath)
+    }
+
+    private static func endpointSuffixCandidates() -> [String] {
+        [
+            ChatConfig.defaultChatCompletionsPath,
+            ChatConfig.defaultImagesGenerationsPath,
+            ChatConfig.defaultAudioTranscriptionsPath,
+            ChatConfig.defaultEmbeddingsPath,
+            ChatConfig.defaultModelsPath
+        ]
     }
 
     private static func normalize(_ config: ChatConfig) -> ChatConfig {
@@ -212,6 +358,15 @@ enum ChatConfigStore {
             apiURL: normalizedBaseURL(config.apiURL),
             apiKey: config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines),
             model: config.model.trimmingCharacters(in: .whitespacesAndNewlines),
+            endpointMode: config.endpointMode,
+            chatCompletionsPath: normalizeEndpointPath(config.chatCompletionsPath, fallback: ChatConfig.defaultChatCompletionsPath),
+            imagesGenerationsPath: normalizeEndpointPath(config.imagesGenerationsPath, fallback: ChatConfig.defaultImagesGenerationsPath),
+            audioTranscriptionsPath: normalizeEndpointPath(config.audioTranscriptionsPath, fallback: ChatConfig.defaultAudioTranscriptionsPath),
+            embeddingsPath: normalizeEndpointPath(config.embeddingsPath, fallback: ChatConfig.defaultEmbeddingsPath),
+            modelsPath: normalizeEndpointPath(config.modelsPath, fallback: ChatConfig.defaultModelsPath),
+            imageGenerationSize: config.imageGenerationSize.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? ChatConfig.default.imageGenerationSize
+                : config.imageGenerationSize.trimmingCharacters(in: .whitespacesAndNewlines),
             timeout: min(max(config.timeout, 5), 120),
             streamEnabled: config.streamEnabled,
             themeMode: config.themeMode,

@@ -154,6 +154,7 @@ actor EmbeddedCPythonRuntime {
 import io
 import sys
 import traceback
+import types
 
 _MAX_OUT = 12000
 
@@ -167,6 +168,28 @@ sys.stdout = _buf
 sys.stderr = _buf
 sys.stdin = io.StringIO(\(stdin))
 try:
+    # Pythonista compatibility: provide a lightweight "notification" shim.
+    _notification = types.ModuleType("notification")
+    def _notification_schedule(message="", delay=0, sound_name=None, action_url=None, title=""):
+        _msg = str(message or "")
+        _title = str(title or "")
+        _delay = str(delay or 0)
+        _prefix = "[提醒]"
+        if _title:
+            _prefix = _prefix + " " + _title
+        if _msg:
+            _prefix = _prefix + " " + _msg
+        print(_prefix + " (兼容模式，delay=" + _delay + "s)")
+        return {"scheduled": True, "message": _msg, "delay": delay}
+    def _notification_cancel_all():
+        return None
+    _notification.schedule = _notification_schedule
+    _notification.cancel_all = _notification_cancel_all
+    _notification.cancel = _notification_cancel_all
+    _notification.set_badge = lambda *_args, **_kwargs: None
+    _notification.get_scheduled = lambda: []
+    sys.modules.setdefault("notification", _notification)
+
     _globals = {"__name__": "__main__"}
     exec(compile(\(code), "<chatapp>", "exec"), _globals, _globals)
 except SystemExit as e:

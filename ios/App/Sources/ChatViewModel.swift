@@ -89,6 +89,9 @@ final class ChatViewModel: ObservableObject {
 
     var canSend: Bool {
         let text = draftMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        if config.endpointMode == .models {
+            return !isSending
+        }
         return !isSending && (!text.isEmpty || !draftImageAttachments.isEmpty || draftFileAttachment != nil)
     }
 
@@ -100,7 +103,8 @@ final class ChatViewModel: ObservableObject {
         let text = draftMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         let images = draftImageAttachments
         let file = draftFileAttachment
-        guard !text.isEmpty || !images.isEmpty || file != nil else { return }
+        let hasPayload = !text.isEmpty || !images.isEmpty || file != nil
+        if config.endpointMode != .models, !hasPayload { return }
         guard !isSending else { return }
         guard isNetworkReachable else {
             errorMessage = "当前网络不可用，请检查网络后重试。"
@@ -110,7 +114,7 @@ final class ChatViewModel: ObservableObject {
         }
 
         errorMessage = ""
-        statusMessage = "正在发送请求…"
+        statusMessage = "正在请求\(config.endpointMode.title)…"
         isSending = true
         if config.soundEffectsEnabled {
             SoundEffectPlayer.playSend()
@@ -124,7 +128,7 @@ final class ChatViewModel: ObservableObject {
 
         let userMessage = ChatMessage(
             role: .user,
-            content: text,
+            content: text.isEmpty && config.endpointMode == .models ? "列出可用模型" : text,
             imageAttachments: images,
             fileAttachments: file.map { [$0] } ?? []
         )
@@ -147,7 +151,7 @@ final class ChatViewModel: ObservableObject {
             id: placeholderID,
             role: .assistant,
             content: "",
-            isStreaming: config.streamEnabled
+            isStreaming: config.streamEnabled && config.endpointMode == .chatCompletions
         )
         appendMessageToCurrentSession(placeholder)
         persistSessions()
@@ -171,8 +175,8 @@ final class ChatViewModel: ObservableObject {
         do {
             let reply = try await task.value
             finishStreamingMessage(id: placeholderID, reply: reply)
-            statusMessage = "消息发送成功"
-            appendLog("聊天测试成功：收到完整回复。")
+            statusMessage = "\(config.endpointMode.title)请求成功"
+            appendLog("接口测试成功：\(config.endpointMode.title)已返回结果。")
         } catch is CancellationError {
             finishCancellation(id: placeholderID)
         } catch {
@@ -224,7 +228,7 @@ final class ChatViewModel: ObservableObject {
             id: placeholderID,
             role: .assistant,
             content: "",
-            isStreaming: config.streamEnabled
+            isStreaming: config.streamEnabled && config.endpointMode == .chatCompletions
         )
         appendMessageToCurrentSession(placeholder)
         persistSessions()
@@ -418,7 +422,17 @@ final class ChatViewModel: ObservableObject {
         draftFileAttachment = ChatFileAttachment(
             fileName: name,
             mimeType: mimeType,
-            textContent: text
+            textContent: text,
+            binaryBase64: nil
+        )
+    }
+
+    func setDraftBinaryFile(name: String, mimeType: String, textPreview: String, data: Data) {
+        draftFileAttachment = ChatFileAttachment(
+            fileName: name,
+            mimeType: mimeType,
+            textContent: textPreview,
+            binaryBase64: data.base64EncodedString()
         )
     }
 
@@ -626,6 +640,15 @@ final class ChatViewModel: ObservableObject {
             apiURL: ChatConfigStore.normalizedBaseURL(input.apiURL),
             apiKey: input.apiKey.trimmingCharacters(in: .whitespacesAndNewlines),
             model: input.model.trimmingCharacters(in: .whitespacesAndNewlines),
+            endpointMode: input.endpointMode,
+            chatCompletionsPath: ChatConfigStore.normalizeEndpointPath(input.chatCompletionsPath, fallback: ChatConfig.defaultChatCompletionsPath),
+            imagesGenerationsPath: ChatConfigStore.normalizeEndpointPath(input.imagesGenerationsPath, fallback: ChatConfig.defaultImagesGenerationsPath),
+            audioTranscriptionsPath: ChatConfigStore.normalizeEndpointPath(input.audioTranscriptionsPath, fallback: ChatConfig.defaultAudioTranscriptionsPath),
+            embeddingsPath: ChatConfigStore.normalizeEndpointPath(input.embeddingsPath, fallback: ChatConfig.defaultEmbeddingsPath),
+            modelsPath: ChatConfigStore.normalizeEndpointPath(input.modelsPath, fallback: ChatConfig.defaultModelsPath),
+            imageGenerationSize: input.imageGenerationSize.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? ChatConfig.default.imageGenerationSize
+                : input.imageGenerationSize.trimmingCharacters(in: .whitespacesAndNewlines),
             timeout: min(max(input.timeout, 5), 120),
             streamEnabled: input.streamEnabled,
             themeMode: input.themeMode,

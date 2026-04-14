@@ -33,6 +33,8 @@ struct ChatScreen: View {
     @State private var recentThumbnails: [String: UIImage] = [:]
     @State private var sidebarAnimationLock = false
     @FocusState private var isComposerFocused: Bool
+    @StateObject private var speechToText = SpeechToTextService(localeIdentifier: "zh-CN")
+    @State private var speechDraftPrefix = ""
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -97,6 +99,12 @@ struct ChatScreen: View {
                 }
             }
         }
+        .onChange(of: speechToText.transcript) { _, newValue in
+            applySpeechTranscript(newValue)
+        }
+        .onDisappear {
+            speechToText.stopRecording()
+        }
         .photosPicker(
             isPresented: $showPhotoPicker,
             selection: $selectedPhotoItems,
@@ -120,12 +128,7 @@ struct ChatScreen: View {
         .fileImporter(
             isPresented: $showFileImporter,
             allowedContentTypes: [
-                .plainText,
-                .sourceCode,
-                .json,
-                .xml,
-                .commaSeparatedText,
-                .text
+                .item
             ],
             allowsMultipleSelection: false
         ) { result in
@@ -192,6 +195,22 @@ struct ChatScreen: View {
                 Spacer(minLength: 0)
 
                 Menu {
+                    Section("接口模式") {
+                        ForEach(APIEndpointMode.allCases, id: \.self) { mode in
+                            Button {
+                                viewModel.config.endpointMode = mode
+                            } label: {
+                                if viewModel.config.endpointMode == mode {
+                                    Label(mode.title, systemImage: "checkmark")
+                                } else {
+                                    Text(mode.title)
+                                }
+                            }
+                        }
+                    }
+
+                    Divider()
+
                     Button(viewModel.isLoadingModels ? "拉取中…" : "拉取模型列表") {
                         Task { await viewModel.refreshAvailableModels() }
                     }
@@ -215,7 +234,7 @@ struct ChatScreen: View {
                         Circle()
                             .fill(viewModel.isCurrentModelAvailable ? Color.green : Color.red)
                             .frame(width: 7, height: 7)
-                        Text(modelVendorSubtitle(viewModel.config.model, apiURL: viewModel.config.normalizedBaseURL))
+                        Text("\(viewModel.config.endpointMode.shortLabel) · \(modelVendorSubtitle(viewModel.config.model, apiURL: viewModel.config.normalizedBaseURL))")
                             .font(.system(size: 12, weight: .semibold))
                             .lineLimit(1)
                         Image(systemName: "chevron.down")
@@ -299,9 +318,9 @@ struct ChatScreen: View {
                                 apiKey: viewModel.config.apiKey,
                                 apiBaseURL: viewModel.config.normalizedBaseURL,
                                 showsAssistantActionBar: message.id == latestAssistantMessageID && !message.isStreaming,
-                                onRegenerate: {
+                                onRegenerate: viewModel.config.endpointMode == .chatCompletions ? {
                                     Task { await viewModel.regenerateLastAssistantReply() }
-                                }
+                                } : nil
                             )
                                 .id(message.id)
                         }
@@ -400,20 +419,28 @@ struct ChatScreen: View {
             textInputArea
 
             Button {
-                pasteClipboardIntoDraft(sendAfterPaste: false)
+                if speechToText.isRecording {
+                    stopVoiceTranscription()
+                } else {
+                    Task { await startVoiceTranscription() }
+                }
             } label: {
-                Image(systemName: "doc.on.clipboard")
+                Image(systemName: speechToText.isRecording ? "waveform.circle.fill" : "mic.fill")
                     .font(.system(size: 16, weight: .regular))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(speechToText.isRecording ? Color.red : .secondary)
                     .frame(width: 26, height: 26)
             }
             .buttonStyle(.plain)
             .contextMenu {
-                Button("粘贴到输入框", systemImage: "doc.on.clipboard") {
-                    pasteClipboardIntoDraft(sendAfterPaste: false)
+                Button(speechToText.isRecording ? "停止语音输入" : "开始语音输入", systemImage: speechToText.isRecording ? "stop.circle" : "mic") {
+                    if speechToText.isRecording {
+                        stopVoiceTranscription()
+                    } else {
+                        Task { await startVoiceTranscription() }
+                    }
                 }
-                Button("粘贴并发送", systemImage: "paperplane") {
-                    pasteClipboardIntoDraft(sendAfterPaste: true)
+                Button("清空识别文本", systemImage: "text.badge.xmark") {
+                    speechToText.clearTranscript()
                 }
                 if viewModel.isSending {
                     Button("停止生成", systemImage: "stop.circle") {
@@ -426,6 +453,9 @@ struct ChatScreen: View {
                 if viewModel.isSending {
                     viewModel.stopGenerating()
                 } else {
+                    if speechToText.isRecording {
+                        stopVoiceTranscription()
+                    }
                     Task { await viewModel.sendCurrentMessage() }
                 }
             } label: {
@@ -613,7 +643,7 @@ struct ChatScreen: View {
                     quickToolRow(icon: "camera", title: "拍照发送", subtitle: "打开相机立即拍摄") {
                         startCameraFromAttachmentSheet()
                     }
-                    quickToolRow(icon: "doc.text", title: "发送文件", subtitle: "上传文本和代码文件") {
+                    quickToolRow(icon: "doc.text", title: "发送文件", subtitle: "上传任意单文件（自动解码）") {
                         showAttachmentSheet = false
                         showFileImporter = true
                     }
@@ -725,6 +755,33 @@ struct ChatScreen: View {
         if lowered.contains("grok") || lowered.contains("xai") {
             return "xAI"
         }
+        if lowered.contains("minimax") || lowered.hasPrefix("abab") {
+            return "MiniMax"
+        }
+        if lowered.contains("glm") || lowered.contains("zhipu") {
+            return "Zhipu"
+        }
+        if lowered.contains("baichuan") {
+            return "Baichuan"
+        }
+        if lowered.contains("yi-") || lowered.contains("lingyi") || lowered.contains("01-ai") {
+            return "01.AI"
+        }
+        if lowered.contains("command-r") || lowered.contains("cohere") {
+            return "Cohere"
+        }
+        if lowered.contains("sonar") || lowered.contains("perplexity") {
+            return "Perplexity"
+        }
+        if lowered.contains("groq") {
+            return "Groq"
+        }
+        if lowered.contains("together") {
+            return "Together"
+        }
+        if lowered.contains("fireworks") {
+            return "Fireworks"
+        }
         if lowered.contains("llama") {
             return "Meta"
         }
@@ -767,6 +824,33 @@ struct ChatScreen: View {
         }
         if host.contains("x.ai") || host.contains("xai") || host.contains("grok") {
             return "xAI"
+        }
+        if host.contains("minimax") || host.contains("abab") {
+            return "MiniMax"
+        }
+        if host.contains("zhipu") || host.contains("bigmodel") || host.contains("glm") {
+            return "Zhipu"
+        }
+        if host.contains("baichuan") {
+            return "Baichuan"
+        }
+        if host.contains("01.ai") || host.contains("lingyi") || host.contains("yi") {
+            return "01.AI"
+        }
+        if host.contains("cohere") {
+            return "Cohere"
+        }
+        if host.contains("perplexity") || host.contains("sonar") {
+            return "Perplexity"
+        }
+        if host.contains("groq") {
+            return "Groq"
+        }
+        if host.contains("together") {
+            return "Together"
+        }
+        if host.contains("fireworks") {
+            return "Fireworks"
         }
         if host.contains("meta") || host.contains("llama") {
             return "Meta"
@@ -1033,6 +1117,33 @@ struct ChatScreen: View {
         }
     }
 
+    private func startVoiceTranscription() async {
+        speechDraftPrefix = viewModel.draftMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            try await speechToText.startRecording()
+            viewModel.statusMessage = "正在语音转文本（中文）…"
+            isComposerFocused = true
+        } catch {
+            viewModel.errorMessage = "语音识别启动失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func stopVoiceTranscription() {
+        speechToText.stopRecording()
+        viewModel.statusMessage = "语音识别已停止"
+    }
+
+    private func applySpeechTranscript(_ transcript: String) {
+        let cleaned = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard speechToText.isRecording || !cleaned.isEmpty else { return }
+        let base = speechDraftPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.isEmpty {
+            viewModel.draftMessage = base
+            return
+        }
+        viewModel.draftMessage = base.isEmpty ? cleaned : "\(base)\n\(cleaned)"
+    }
+
     private func ensureRecentPhotoAssets() {
         let current = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         switch current {
@@ -1119,6 +1230,10 @@ struct ChatScreen: View {
             viewModel.errorMessage = "文件读取失败：\(error.localizedDescription)"
         case .success(let urls):
             guard let url = urls.first else { return }
+            if (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+                viewModel.errorMessage = "请选择单个文件，暂不支持文件夹。"
+                return
+            }
             let accessed = url.startAccessingSecurityScopedResource()
             defer {
                 if accessed {
@@ -1128,22 +1243,131 @@ struct ChatScreen: View {
 
             do {
                 let data = try Data(contentsOf: url)
-                guard data.count <= 1024 * 1024 else {
-                    viewModel.errorMessage = "文件过大，请选择 1MB 以内文本/代码文件。"
-                    return
-                }
-
-                guard let content = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .unicode) else {
-                    viewModel.errorMessage = "当前仅支持 UTF 文本/代码文件。"
+                let maxBytes = 5 * 1024 * 1024
+                guard data.count <= maxBytes else {
+                    viewModel.errorMessage = "文件过大，请选择 5MB 以内的单文件。"
                     return
                 }
 
                 let mimeType = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "text/plain"
-                viewModel.setDraftFile(name: url.lastPathComponent, mimeType: mimeType, text: content)
+                let loweredMime = mimeType.lowercased()
+                let loweredExt = url.pathExtension.lowercased()
+                let isAudioFile = loweredMime.hasPrefix("audio/")
+                    || ["mp3", "wav", "m4a", "aac", "ogg", "flac"].contains(loweredExt)
+
+                if isAudioFile {
+                    let preview = "已附加音频文件（\(mimeType)，\(formattedByteSize(data.count))）。当前在“语音转文字”模式可直接转写。"
+                    viewModel.setDraftBinaryFile(
+                        name: url.lastPathComponent,
+                        mimeType: loweredMime.hasPrefix("audio/") ? mimeType : "audio/\(loweredExt)",
+                        textPreview: preview,
+                        data: data
+                    )
+                    viewModel.statusMessage = "已附加音频：\(url.lastPathComponent)"
+                    return
+                }
+
+                if let decoded = decodeFileText(data) {
+                    let content = normalizeImportedText(decoded)
+                    viewModel.setDraftFile(name: url.lastPathComponent, mimeType: mimeType, text: content)
+                } else {
+                    let content = makeBinaryPreview(data: data)
+                    viewModel.setDraftFile(name: url.lastPathComponent, mimeType: mimeType, text: content)
+                }
+                viewModel.statusMessage = "已附加文件：\(url.lastPathComponent)"
             } catch {
                 viewModel.errorMessage = "文件读取失败：\(error.localizedDescription)"
             }
         }
+    }
+
+    private func decodeFileText(_ data: Data) -> String? {
+        var converted: NSString?
+        var usedLossy = ObjCBool(false)
+        _ = NSString.stringEncoding(
+            for: data,
+            encodingOptions: nil,
+            convertedString: &converted,
+            usedLossyConversion: &usedLossy
+        )
+        if let converted {
+            let text = (converted as String).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty {
+                return converted as String
+            }
+        }
+
+        var encodings: [String.Encoding] = [
+            .utf8,
+            .utf16,
+            .utf16BigEndian,
+            .utf16LittleEndian,
+            .utf32,
+            .utf32BigEndian,
+            .utf32LittleEndian,
+            .ascii,
+            .isoLatin1,
+            .windowsCP1252
+        ]
+
+        let ianaNames = ["GB18030", "GBK", "GB2312", "Big5", "Shift_JIS", "EUC-JP", "EUC-KR"]
+        for name in ianaNames {
+            let cfEncoding = CFStringConvertIANACharSetNameToEncoding(name as CFString)
+            if cfEncoding == kCFStringEncodingInvalidId { continue }
+            let raw = CFStringConvertEncodingToNSStringEncoding(cfEncoding)
+            encodings.append(String.Encoding(rawValue: raw))
+        }
+
+        for encoding in encodings {
+            guard let text = String(data: data, encoding: encoding) else { continue }
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                return text
+            }
+        }
+
+        return nil
+    }
+
+    private func normalizeImportedText(_ raw: String) -> String {
+        let normalized = raw.replacingOccurrences(of: "\r\n", with: "\n")
+        let maxCharacters = 180_000
+        if normalized.count <= maxCharacters {
+            return normalized
+        }
+        return String(normalized.prefix(maxCharacters)) + "\n\n[文件内容过长，已截断展示前 \(maxCharacters) 个字符]"
+    }
+
+    private func makeBinaryPreview(data: Data) -> String {
+        let maxBytes = 4096
+        let prefix = data.prefix(maxBytes)
+        var lines: [String] = []
+        lines.append("[文件不是可直接解码的纯文本，已转为十六进制预览]")
+
+        let bytes = Array(prefix)
+        var offset = 0
+        while offset < bytes.count {
+            let chunk = Array(bytes[offset..<min(offset + 16, bytes.count)])
+            let hex = chunk.map { String(format: "%02X", $0) }.joined(separator: " ")
+            let ascii = chunk.map { byte -> String in
+                if (32...126).contains(Int(byte)) {
+                    return String(UnicodeScalar(Int(byte))!)
+                }
+                return "."
+            }.joined()
+            let paddedHex = hex.count >= 47 ? hex : hex + String(repeating: " ", count: 47 - hex.count)
+            lines.append(String(format: "%04X  %@  %@", offset, paddedHex, ascii))
+            offset += 16
+        }
+
+        if data.count > maxBytes {
+            lines.append("... [仅展示前 \(maxBytes) 字节]")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func formattedByteSize(_ bytes: Int) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
     }
 
     private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool) {

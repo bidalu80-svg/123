@@ -8,6 +8,24 @@ struct SettingsScreen: View {
         Form {
             Section("接口配置") {
                 VStack(alignment: .leading, spacing: 8) {
+                    Text("发送接口模式")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Picker("发送接口模式", selection: $viewModel.config.endpointMode) {
+                        ForEach(APIEndpointMode.allCases, id: \.self) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.menu)
+
+                    Text("当前请求：\(viewModel.config.activeEndpointURLString)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
                     Text("站点地址（用于拼接接口，示例：https://xxx.com）")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -29,10 +47,42 @@ struct SettingsScreen: View {
                         .buttonStyle(.bordered)
 
                         Spacer()
-                        Text("实际请求：\(viewModel.config.completionURLString)")
+                        Text("Chat：\(viewModel.config.chatCompletionsURLString)")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("接口路径（支持按需自定义）")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    TextField("/v1/chat/completions", text: $viewModel.config.chatCompletionsPath)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+
+                    TextField("/v1/images/generations", text: $viewModel.config.imagesGenerationsPath)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+
+                    TextField("/v1/audio/transcriptions", text: $viewModel.config.audioTranscriptionsPath)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+
+                    TextField("/v1/embeddings", text: $viewModel.config.embeddingsPath)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+
+                    TextField("/v1/models", text: $viewModel.config.modelsPath)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+
+                    if viewModel.config.endpointMode == .imageGenerations {
+                        TextField("生图尺寸（如 1024x1024）", text: $viewModel.config.imageGenerationSize)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
                     }
                 }
 
@@ -57,7 +107,7 @@ struct SettingsScreen: View {
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("模型名称（用于发送聊天请求）")
+                    Text("模型名称（用于当前接口请求）")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
@@ -86,7 +136,7 @@ struct SettingsScreen: View {
                         .disabled(viewModel.isLoadingModels)
 
                         Spacer()
-                        Text("模型接口：\(viewModel.config.modelsURLString)")
+                        Text("Models：\(viewModel.config.modelsURLString)")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -167,6 +217,7 @@ struct SettingsScreen: View {
             Section("状态") {
                 statusRow("保存策略", value: "自动保存已开启")
                 statusRow("当前状态", value: viewModel.statusMessage)
+                statusRow("当前接口", value: viewModel.config.endpointMode.title)
                 statusRow("当前模型", value: viewModel.config.model)
                 statusRow("流式模式", value: viewModel.config.streamEnabled ? "开启" : "关闭")
             }

@@ -86,6 +86,57 @@ final class ChatServiceTests: XCTestCase {
         XCTAssertEqual(messages[1]["content"] as? String, "当前日期时间：2026-04-13 18:20:00")
     }
 
+    func testBuildRequestIncludesCrossSessionMemoryContext() throws {
+        let config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
+        let requestMessage = ChatMessage(role: .user, content: "你好")
+
+        let request = try ChatRequestBuilder.makeRequest(
+            config: config,
+            history: [],
+            message: requestMessage,
+            realtimeSystemContext: nil,
+            memorySystemContext: "以下是用户跨会话记忆：\n• 我喜欢简洁回答"
+        )
+
+        let payload = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+        let messages = try XCTUnwrap(json["messages"] as? [[String: Any]])
+
+        XCTAssertEqual(messages.count, 3)
+        XCTAssertEqual(messages[1]["role"] as? String, "system")
+        XCTAssertEqual(messages[1]["content"] as? String, "以下是用户跨会话记忆：\n• 我喜欢简洁回答")
+    }
+
+    func testBuildImagesGenerationRequestUsesConfiguredEndpoint() throws {
+        var config = ChatConfig(apiURL: "https://example.com", apiKey: "token-123", model: "gpt-image", timeout: 30, streamEnabled: false)
+        config.imagesGenerationsPath = "/v1/images/generations"
+        config.imageGenerationSize = "1024x1024"
+
+        let request = try ChatRequestBuilder.makeImagesGenerationRequest(config: config, prompt: "a cat")
+        let payload = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+
+        XCTAssertEqual(request.url?.absoluteString, "https://example.com/v1/images/generations")
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer token-123")
+        XCTAssertEqual(json["model"] as? String, "gpt-image")
+        XCTAssertEqual(json["prompt"] as? String, "a cat")
+        XCTAssertEqual(json["size"] as? String, "1024x1024")
+    }
+
+    func testBuildEmbeddingsRequestUsesConfiguredEndpoint() throws {
+        var config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "text-embedding", timeout: 30, streamEnabled: false)
+        config.embeddingsPath = "/v1/embeddings"
+
+        let request = try ChatRequestBuilder.makeEmbeddingsRequest(config: config, input: "hello world")
+        let payload = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+
+        XCTAssertEqual(request.url?.absoluteString, "https://example.com/v1/embeddings")
+        XCTAssertEqual(json["model"] as? String, "text-embedding")
+        XCTAssertEqual(json["input"] as? String, "hello world")
+    }
+
     func testResponseCleanerRemovesBareImageLinks() {
         let raw = "结论如下\nhttps://example.com/generated-image.png\n请查看"
 

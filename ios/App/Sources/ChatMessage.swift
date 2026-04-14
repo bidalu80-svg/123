@@ -56,49 +56,116 @@ struct ChatFileAttachment: Identifiable, Codable, Equatable {
     var fileName: String
     var mimeType: String
     var textContent: String
+    var binaryBase64: String?
 
     init(
         id: UUID = UUID(),
         fileName: String,
         mimeType: String,
-        textContent: String
+        textContent: String,
+        binaryBase64: String? = nil
     ) {
         self.id = id
         self.fileName = fileName
         self.mimeType = mimeType
         self.textContent = textContent
+        self.binaryBase64 = binaryBase64
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        fileName = try container.decodeIfPresent(String.self, forKey: .fileName) ?? "attachment.txt"
+        mimeType = try container.decodeIfPresent(String.self, forKey: .mimeType) ?? "application/octet-stream"
+        textContent = try container.decodeIfPresent(String.self, forKey: .textContent) ?? ""
+        binaryBase64 = try container.decodeIfPresent(String.self, forKey: .binaryBase64)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(fileName, forKey: .fileName)
+        try container.encode(mimeType, forKey: .mimeType)
+        try container.encode(textContent, forKey: .textContent)
+        try container.encodeIfPresent(binaryBase64, forKey: .binaryBase64)
     }
 
     var codeLanguageHint: String? {
         let ext = (fileName as NSString).pathExtension.lowercased()
+        let lowerName = fileName.lowercased()
         switch ext {
         case "swift":
             return "swift"
         case "py":
             return "python"
+        case "c":
+            return "c"
+        case "h", "hpp", "hh", "hxx":
+            return "cpp"
+        case "cpp", "cc", "cxx":
+            return "cpp"
+        case "cs":
+            return "csharp"
+        case "go":
+            return "go"
+        case "rs":
+            return "rust"
         case "js":
             return "javascript"
+        case "jsx":
+            return "jsx"
         case "ts":
             return "typescript"
+        case "tsx":
+            return "tsx"
         case "java":
             return "java"
         case "kt":
             return "kotlin"
+        case "kts":
+            return "kotlin"
+        case "php":
+            return "php"
+        case "rb":
+            return "ruby"
+        case "lua":
+            return "lua"
+        case "r":
+            return "r"
+        case "scala":
+            return "scala"
+        case "dart":
+            return "dart"
+        case "sql":
+            return "sql"
+        case "sh", "zsh":
+            return "bash"
+        case "bat", "cmd":
+            return "bat"
+        case "ps1":
+            return "powershell"
         case "json":
             return "json"
         case "xml":
             return "xml"
+        case "toml":
+            return "toml"
+        case "ini", "cfg", "conf":
+            return "ini"
         case "md":
             return "markdown"
         case "html":
             return "html"
+        case "vue":
+            return "vue"
         case "css":
             return "css"
-        case "sh":
-            return "bash"
         case "yaml", "yml":
             return "yaml"
         default:
+            if lowerName == "dockerfile" {
+                return "dockerfile"
+            }
             return nil
         }
     }
@@ -110,12 +177,26 @@ struct ChatFileAttachment: Identifiable, Codable, Equatable {
     var promptBlock: String {
         let safeName = fileName.isEmpty ? "untitled.txt" : fileName
         let language = codeLanguageHint ?? "text"
+        if binaryBase64 != nil {
+            return """
+            [FILE: \(safeName)]
+            [二进制文件，MIME: \(mimeType)，已作为附件上传]
+            """
+        }
         return """
         [FILE: \(safeName)]
         ```\(language)
         \(previewText)
         ```
         """
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case fileName
+        case mimeType
+        case textContent
+        case binaryBase64
     }
 }
 

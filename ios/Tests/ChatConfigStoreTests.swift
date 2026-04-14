@@ -9,6 +9,13 @@ final class ChatConfigStoreTests: XCTestCase {
         )
     }
 
+    func testNormalizeBaseURLRemovesImagesPath() {
+        XCTAssertEqual(
+            ChatConfigStore.normalizedBaseURL("https://example.com/v1/images/generations"),
+            "https://example.com"
+        )
+    }
+
     func testCompletionsURLBuildsEndpointFromBase() {
         XCTAssertEqual(
             ChatConfigStore.completionsURL("https://api.example.com"),
@@ -38,5 +45,7 @@ final class ChatConfigStoreTests: XCTestCase {
         XCTAssertTrue(config.marketContextEnabled)
         XCTAssertTrue(config.hotNewsContextEnabled)
         XCTAssertEqual(config.hotNewsCount, 6)
+        XCTAssertEqual(config.endpointMode, .chatCompletions)
+        XCTAssertEqual(config.imagesGenerationsPath, "/v1/images/generations")
     }
 }

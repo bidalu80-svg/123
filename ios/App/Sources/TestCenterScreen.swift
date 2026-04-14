@@ -30,6 +30,7 @@ struct TestCenterScreen: View {
                 Text("接口测试：验证站点、鉴权和服务器状态码。")
                 Text("拉取模型测试：从 /v1/models 获取可用模型，并可在配置页选择。")
                 Text("流式测试：验证 data: 分片、停止能力、代码块流式渲染。")
+                Text("接口模式：可在配置页或顶部菜单切换 Chat / Image / Audio / Embedding / Models。")
                 Text("UI 测试：验证会话侧栏、附件发送、复制和清空交互。")
             }
 

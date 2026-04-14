@@ -47,10 +47,24 @@ final class RemoteImageLoader: ObservableObject {
         svgText = nil
         failed = false
 
-        guard let normalized = Self.normalizeURL(rawURL, baseURL: baseURL) else {
-            failed = true
+        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if await loadContent(rawURL: rawURL, apiKey: trimmedKey, baseURL: baseURL, depth: 0, visited: Set<String>()) {
             return
         }
+        failed = true
+    }
+
+    private func loadContent(
+        rawURL: String,
+        apiKey: String,
+        baseURL: String,
+        depth: Int,
+        visited: Set<String>
+    ) async -> Bool {
+        guard depth <= 3 else { return false }
+        guard let normalized = Self.normalizeURL(rawURL, baseURL: baseURL) else { return false }
+        var seen = visited
+        guard seen.insert(normalized).inserted else { return false }
 
         if normalized.hasPrefix("data:"),
            let decoded = Self.decodeDataURL(normalized) {
@@ -58,47 +72,41 @@ final class RemoteImageLoader: ObservableObject {
                let text = String(data: decoded.data, encoding: .utf8),
                text.contains("<svg") {
                 svgText = text
-                return
+                return true
             }
             if let uiImage = UIImage(data: decoded.data) {
                 image = uiImage
-                return
+                return true
             }
         }
 
-        guard let url = URL(string: normalized) else {
-            failed = true
-            return
+        guard let url = URL(string: normalized) else { return false }
+
+        var attempts: [String?] = [nil]
+        if !apiKey.isEmpty {
+            attempts.append(apiKey)
         }
 
-        do {
-            let (plainData, plainResponse) = try await fetch(url: url, apiKey: nil)
-            if Self.isSuccessResponse(plainResponse),
-               let resolved = Self.resolveDisplayContent(data: plainData, response: plainResponse) {
-                applyResolved(resolved)
-                return
+        for token in attempts {
+            do {
+                let (data, response) = try await fetch(url: url, apiKey: token)
+                guard Self.isSuccessResponse(response) else { continue }
+
+                if let resolved = Self.resolveDisplayContent(data: data, response: response) {
+                    applyResolved(resolved)
+                    return true
+                }
+
+                if let nextRaw = Self.extractNestedImageReference(data: data, response: response),
+                   await loadContent(rawURL: nextRaw, apiKey: apiKey, baseURL: baseURL, depth: depth + 1, visited: seen) {
+                    return true
+                }
+            } catch {
+                continue
             }
-        } catch {
-            // fall through to auth retry
         }
 
-        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedKey.isEmpty else {
-            failed = true
-            return
-        }
-
-        do {
-            let (authData, authResponse) = try await fetch(url: url, apiKey: trimmedKey)
-            if Self.isSuccessResponse(authResponse),
-               let resolved = Self.resolveDisplayContent(data: authData, response: authResponse) {
-                applyResolved(resolved)
-                return
-            }
-            failed = true
-        } catch {
-            failed = true
-        }
+        return false
     }
 
     private func fetch(url: URL, apiKey: String?) async throws -> (Data, URLResponse) {
@@ -106,7 +114,10 @@ final class RemoteImageLoader: ObservableObject {
         request.setValue("image/*,*/*;q=0.8", forHTTPHeaderField: "Accept")
         if let apiKey, !apiKey.isEmpty {
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+            request.setValue(apiKey, forHTTPHeaderField: "api-key")
         }
+        request.setValue("Mozilla/5.0 ChatApp/1.0", forHTTPHeaderField: "User-Agent")
         return try await URLSession.shared.data(for: request)
     }
 
@@ -144,6 +155,88 @@ final class RemoteImageLoader: ObservableObject {
         return nil
     }
 
+    private static func extractNestedImageReference(data: Data, response: URLResponse) -> String? {
+        let mimeType = (response as? HTTPURLResponse)?
+            .value(forHTTPHeaderField: "Content-Type")?
+            .lowercased() ?? ""
+
+        if mimeType.contains("json"),
+           let object = try? JSONSerialization.jsonObject(with: data),
+           let candidate = scanImageReference(in: object) {
+            return candidate
+        }
+
+        if let text = String(data: data, encoding: .utf8) {
+            if let direct = MessageContentParser.extractInlineImageURLs(from: text).first {
+                return direct
+            }
+            if let maybeURL = text
+                .split(whereSeparator: \.isWhitespace)
+                .map(String.init)
+                .map({ $0.trimmingCharacters(in: CharacterSet(charactersIn: "\"'<>")) })
+                .first(where: { value in
+                    value.hasPrefix("http://")
+                        || value.hasPrefix("https://")
+                        || value.hasPrefix("/")
+                        || value.hasPrefix("data:image")
+                }) {
+                return maybeURL
+            }
+        }
+
+        return nil
+    }
+
+    private static func scanImageReference(in node: Any) -> String? {
+        if let text = node as? String {
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.hasPrefix("data:image")
+                || trimmed.hasPrefix("http://")
+                || trimmed.hasPrefix("https://")
+                || trimmed.hasPrefix("/") {
+                return trimmed
+            }
+            return MessageContentParser.extractInlineImageURLs(from: trimmed).first
+        }
+
+        if let dict = node as? [String: Any] {
+            if let imageURL = dict["image_url"] as? [String: Any] {
+                if let b64 = imageURL["b64_json"] as? String, !b64.isEmpty {
+                    return "data:image/png;base64,\(b64)"
+                }
+                if let url = imageURL["url"] as? String, !url.isEmpty {
+                    return url
+                }
+            }
+
+            if let imageURL = dict["image_url"] as? String, !imageURL.isEmpty {
+                return imageURL
+            }
+            if let url = dict["url"] as? String, !url.isEmpty {
+                return url
+            }
+            if let b64 = dict["b64_json"] as? String, !b64.isEmpty {
+                return "data:image/png;base64,\(b64)"
+            }
+
+            for value in dict.values {
+                if let candidate = scanImageReference(in: value) {
+                    return candidate
+                }
+            }
+        }
+
+        if let array = node as? [Any] {
+            for item in array {
+                if let candidate = scanImageReference(in: item) {
+                    return candidate
+                }
+            }
+        }
+
+        return nil
+    }
+
     private static func isSuccessResponse(_ response: URLResponse) -> Bool {
         guard let http = response as? HTTPURLResponse else { return false }
         return (200...299).contains(http.statusCode)
@@ -174,24 +267,37 @@ final class RemoteImageLoader: ObservableObject {
         cleaned = cleaned.trimmingCharacters(in: CharacterSet(charactersIn: "<>\"'"))
         cleaned = cleaned.replacingOccurrences(of: "\\/", with: "/")
         cleaned = cleaned.replacingOccurrences(of: "&amp;", with: "&")
+        cleaned = cleaned.replacingOccurrences(of: "\\u0026", with: "&", options: .caseInsensitive)
+        cleaned = cleaned.replacingOccurrences(of: "\\u003d", with: "=", options: .caseInsensitive)
+        cleaned = cleaned.replacingOccurrences(of: "\\u003f", with: "?", options: .caseInsensitive)
+        cleaned = cleaned.replacingOccurrences(of: "\\u002b", with: "+", options: .caseInsensitive)
+        cleaned = cleaned.replacingOccurrences(of: "\\u0025", with: "%", options: .caseInsensitive)
 
         if cleaned.hasPrefix("//") {
             cleaned = "https:\(cleaned)"
         }
 
-        if cleaned.hasPrefix("/") {
-            let base = baseURL
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            if !base.isEmpty {
-                cleaned = "\(base)\(cleaned)"
-            }
-        }
-
         if cleaned.hasPrefix("http://") || cleaned.hasPrefix("https://") || cleaned.hasPrefix("data:") {
             return cleaned
         }
+
+        let normalizedBase = normalizeBaseURL(baseURL)
+        guard let base = URL(string: normalizedBase) else { return nil }
+        if let resolved = URL(string: cleaned, relativeTo: base)?.absoluteURL,
+           let scheme = resolved.scheme?.lowercased(),
+           scheme == "http" || scheme == "https" {
+            return resolved.absoluteString
+        }
         return nil
+    }
+
+    private static func normalizeBaseURL(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "" }
+        if trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") {
+            return trimmed
+        }
+        return "https://\(trimmed)"
     }
 }
 
