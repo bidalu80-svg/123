@@ -342,16 +342,31 @@ struct ChatScreen: View {
             Button {
                 viewModel.setPrivateMode(!viewModel.isPrivateMode)
             } label: {
-                Image("PrivateModeIcon")
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: 36, height: 36)
-                    .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-                    .opacity(viewModel.isPrivateMode ? 1 : 0.72)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 11, style: .continuous)
-                            .stroke(Color.black.opacity(viewModel.isPrivateMode ? 0 : 0.1), lineWidth: 0.8)
-                    }
+                ZStack {
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .fill(
+                            viewModel.isPrivateMode
+                                ? Color(red: 0.14, green: 0.21, blue: 0.38)
+                                : Color(.secondarySystemBackground)
+                        )
+
+                    Image("PrivateModeIcon")
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 30, height: 30)
+                        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        .opacity(viewModel.isPrivateMode ? 1 : 0.72)
+                }
+                .frame(width: 36, height: 36)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .stroke(
+                            viewModel.isPrivateMode
+                                ? Color(red: 0.29, green: 0.44, blue: 0.78)
+                                : Color.black.opacity(0.1),
+                            lineWidth: 0.9
+                        )
+                }
             }
             .buttonStyle(.plain)
             .accessibilityLabel(viewModel.isPrivateMode ? "关闭私密聊天" : "开启私密聊天")
@@ -448,6 +463,14 @@ struct ChatScreen: View {
                 if shouldShowCenterScrollDownButton {
                     scrollDownButton(proxy: proxy)
                         .padding(.bottom, 12)
+                }
+
+                if shouldShowPrivateModeCenterNotice {
+                    privateModeCenterNotice
+                        .padding(.horizontal, 30)
+                        .padding(.bottom, 30)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                        .allowsHitTesting(false)
                 }
             }
         }
@@ -556,7 +579,13 @@ struct ChatScreen: View {
     }
 
     private var textInputArea: some View {
-        TextField(composerPlaceholderText, text: $viewModel.draftMessage, axis: .vertical)
+        TextField(
+            "",
+            text: $viewModel.draftMessage,
+            prompt: Text(composerPlaceholderText)
+                .foregroundColor(composerPlaceholderColor),
+            axis: .vertical
+        )
             .lineLimit(1...6)
             .submitLabel(.send)
             .focused($isComposerFocused)
@@ -567,6 +596,10 @@ struct ChatScreen: View {
             .font(.system(size: 15))
             .foregroundStyle(viewModel.isPrivateMode ? Color.white : Color.primary)
             .frame(maxWidth: .infinity, minHeight: 18, alignment: .leading)
+    }
+
+    private var composerPlaceholderColor: Color {
+        viewModel.isPrivateMode ? Color.white.opacity(0.88) : Color.secondary
     }
 
     private var composerPlaceholderText: String {
@@ -804,6 +837,29 @@ struct ChatScreen: View {
 
     private var shouldShowCenterScrollDownButton: Bool {
         shouldShowScrollJumpButtons && !isPinnedToBottom
+    }
+
+    private var shouldShowPrivateModeCenterNotice: Bool {
+        viewModel.isPrivateMode && viewModel.messages.isEmpty
+    }
+
+    private var privateModeCenterNotice: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "ghost")
+                .font(.system(size: 32, weight: .regular))
+                .foregroundStyle(Color.secondary.opacity(0.85))
+
+            Text("私密聊天")
+                .font(.system(size: 26, weight: .semibold))
+                .foregroundStyle(.primary)
+
+            Text("此聊天不会出现在历史记录中，并将被彻底删除")
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .lineSpacing(2)
+        }
+        .frame(maxWidth: 320)
     }
 
     private var latestAssistantMessageID: UUID? {
