@@ -211,7 +211,7 @@ enum MessageContentParser {
     private static func cleanMarkdownForDisplay(_ raw: String) -> String {
         var text = raw
         text = text.replacingOccurrences(of: "(?m)^\\s{0,3}#{1,6}\\s*", with: "", options: .regularExpression)
-        text = text.replacingOccurrences(of: "(?m)^\\s*[-*•]\\s+", with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?m)^\\s*[-*•]\\s+", with: "• ", options: .regularExpression)
         text = text.replacingOccurrences(of: "(?m)^\\s*\\d+[\\.)、]\\s+", with: "• ", options: .regularExpression)
         text = text.replacingOccurrences(of: "(?m)^\\s*>\\s?", with: "", options: .regularExpression)
         text = text.replacingOccurrences(of: "(?m)^\\s*([-*_])\\1{2,}\\s*$", with: "", options: .regularExpression)
@@ -220,8 +220,56 @@ enum MessageContentParser {
         text = text.replacingOccurrences(of: "`", with: "")
         text = text.replacingOccurrences(of: "\r\n", with: "\n")
         text = text.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
+        text = autoBulletizePlainLineGroups(text)
         text = expandGitHubRepositoryLinks(in: text)
         return text
+    }
+
+    private static func autoBulletizePlainLineGroups(_ raw: String) -> String {
+        let lines = raw.components(separatedBy: "\n")
+        guard lines.count >= 3 else { return raw }
+
+        var result: [String] = []
+        var buffer: [String] = []
+
+        func flushBuffer() {
+            guard !buffer.isEmpty else { return }
+            let meaningful = buffer.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+            if meaningful.count >= 3,
+               meaningful.allSatisfy({ line in
+                   let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                   if trimmed.hasPrefix("•") || trimmed.hasPrefix("-") || trimmed.hasPrefix("*") { return false }
+                   if trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") { return false }
+                   if trimmed.count > 28 { return false }
+                   return true
+               }) {
+                for line in buffer {
+                    let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if trimmed.isEmpty {
+                        result.append(line)
+                    } else {
+                        result.append("• \(trimmed)")
+                    }
+                }
+            } else {
+                result.append(contentsOf: buffer)
+            }
+            buffer = []
+        }
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                flushBuffer()
+                result.append(line)
+            } else {
+                buffer.append(line)
+            }
+        }
+        flushBuffer()
+
+        return result.joined(separator: "\n")
     }
 
     private static func expandGitHubRepositoryLinks(in raw: String) -> String {
