@@ -251,7 +251,7 @@ struct ChatScreen: View {
                         Circle()
                             .fill(viewModel.isCurrentModelAvailable ? Color.green : Color.red)
                             .frame(width: 7, height: 7)
-                        Text("\(viewModel.config.endpointMode.shortLabel) · \(modelVendorSubtitle(viewModel.config.model, apiURL: viewModel.config.normalizedBaseURL))")
+                        Text(modelVendorSubtitle(viewModel.config.model, apiURL: viewModel.config.normalizedBaseURL))
                             .font(.system(size: 12, weight: .semibold))
                             .lineLimit(1)
                         Image(systemName: "chevron.down")
