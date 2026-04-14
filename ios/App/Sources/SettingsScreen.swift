@@ -18,11 +18,6 @@ struct SettingsScreen: View {
                         }
                     }
                     .pickerStyle(.menu)
-
-                    Text("当前请求：\(viewModel.config.activeEndpointURLString)")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -45,44 +40,6 @@ struct SettingsScreen: View {
                             viewModel.config.apiURL = ""
                         }
                         .buttonStyle(.bordered)
-
-                        Spacer()
-                        Text("Chat：\(viewModel.config.chatCompletionsURLString)")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("接口路径（支持按需自定义）")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    TextField("/v1/chat/completions", text: $viewModel.config.chatCompletionsPath)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-
-                    TextField("/v1/images/generations", text: $viewModel.config.imagesGenerationsPath)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-
-                    TextField("/v1/audio/transcriptions", text: $viewModel.config.audioTranscriptionsPath)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-
-                    TextField("/v1/embeddings", text: $viewModel.config.embeddingsPath)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-
-                    TextField("/v1/models", text: $viewModel.config.modelsPath)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-
-                    if viewModel.config.endpointMode == .imageGenerations {
-                        TextField("生图尺寸（如 1024x1024）", text: $viewModel.config.imageGenerationSize)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
                     }
                 }
 
@@ -134,12 +91,6 @@ struct SettingsScreen: View {
                         .tint(.blue)
                         .foregroundStyle(.white)
                         .disabled(viewModel.isLoadingModels)
-
-                        Spacer()
-                        Text("Models：\(viewModel.config.modelsURLString)")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
                     }
                 }
             }
