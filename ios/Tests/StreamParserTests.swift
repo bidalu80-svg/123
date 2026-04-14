@@ -56,6 +56,14 @@ final class StreamParserTests: XCTestCase {
         XCTAssertEqual(chunk?.imageURLs, ["data:image/png;base64,abc123=="])
     }
 
+    func testParseTextContentExtractsAVIFBareImageURL() {
+        let line = #"{"choices":[{"message":{"content":"请看图：\nhttps://cdn.example.com/out/final.avif"}}]}"#
+        let chunk = StreamParser.parse(line: line)
+
+        XCTAssertEqual(chunk?.isDone, false)
+        XCTAssertEqual(chunk?.imageURLs, ["https://cdn.example.com/out/final.avif"])
+    }
+
     func testExtractPayloadSupportsImageDataArray() {
         let payload: [String: Any] = [
             "data": [

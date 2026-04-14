@@ -30,7 +30,28 @@ struct ChatImageAttachment: Identifiable, Codable, Equatable {
         guard dataURL.hasPrefix("data:") else { return nil }
         let components = dataURL.split(separator: ",", maxSplits: 1).map(String.init)
         guard components.count == 2 else { return nil }
-        return Data(base64Encoded: components[1])
+        return Self.decodeBase64Payload(components[1])
+    }
+
+    static func decodeBase64Payload(_ raw: String) -> Data? {
+        let compact = raw
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\r", with: "")
+            .replacingOccurrences(of: "\n", with: "")
+            .replacingOccurrences(of: " ", with: "")
+
+        if compact.isEmpty { return nil }
+
+        var normalized = compact
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+
+        let remainder = normalized.count % 4
+        if remainder != 0 {
+            normalized += String(repeating: "=", count: 4 - remainder)
+        }
+
+        return Data(base64Encoded: normalized, options: .ignoreUnknownCharacters)
     }
 
     var renderURLString: String? {

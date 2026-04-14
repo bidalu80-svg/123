@@ -18,6 +18,9 @@ struct RemoteImageView: View {
             } else if let svgText = loader.svgText {
                 SVGWebView(svgText: svgText)
                     .frame(minWidth: 120, minHeight: 120)
+            } else if let webDataURL = loader.webDataURL {
+                DataImageWebView(dataURL: webDataURL)
+                    .frame(minWidth: 120, minHeight: 120)
             } else if loader.failed {
                 Text("图片加载失败")
                     .font(.caption)
@@ -40,11 +43,13 @@ struct RemoteImageView: View {
 final class RemoteImageLoader: ObservableObject {
     @Published var image: UIImage?
     @Published var svgText: String?
+    @Published var webDataURL: String?
     @Published var failed = false
 
     func load(rawURL: String, apiKey: String, baseURL: String) async {
         image = nil
         svgText = nil
+        webDataURL = nil
         failed = false
 
         let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -76,6 +81,10 @@ final class RemoteImageLoader: ObservableObject {
             }
             if let uiImage = UIImage(data: decoded.data) {
                 image = uiImage
+                return true
+            }
+            if let dataURL = Self.makeWebDataURL(data: decoded.data, mimeType: decoded.mimeType) {
+                webDataURL = dataURL
                 return true
             }
         }
@@ -127,18 +136,19 @@ final class RemoteImageLoader: ObservableObject {
             image = uiImage
         case .svg(let text):
             svgText = text
+        case .webDataURL(let dataURL):
+            webDataURL = dataURL
         }
     }
 
     private enum DisplayContent {
         case raster(UIImage)
         case svg(String)
+        case webDataURL(String)
     }
 
     private static func resolveDisplayContent(data: Data, response: URLResponse) -> DisplayContent? {
-        let mimeType = (response as? HTTPURLResponse)?
-            .value(forHTTPHeaderField: "Content-Type")?
-            .lowercased() ?? ""
+        let mimeType = httpMimeType(from: response)
 
         if mimeType.contains("svg"),
            let text = String(data: data, encoding: .utf8),
@@ -151,6 +161,10 @@ final class RemoteImageLoader: ObservableObject {
         if let text = String(data: data, encoding: .utf8),
            text.contains("<svg") {
             return .svg(text)
+        }
+
+        if let dataURL = makeWebDataURL(data: data, mimeType: mimeType) {
+            return .webDataURL(dataURL)
         }
         return nil
     }
@@ -253,12 +267,96 @@ final class RemoteImageLoader: ObservableObject {
             .components(separatedBy: ";")
             .first ?? "application/octet-stream"
 
-        if header.contains(";base64"), let data = Data(base64Encoded: payload) {
+        if header.contains(";base64"), let data = ChatImageAttachment.decodeBase64Payload(payload) {
             return (mimeType, data)
         }
         if let decoded = payload.removingPercentEncoding?.data(using: .utf8) {
             return (mimeType, decoded)
         }
+        return nil
+    }
+
+    private static func makeWebDataURL(data: Data, mimeType: String) -> String? {
+        if data.isEmpty || data.count > 24 * 1024 * 1024 { return nil }
+
+        let normalizedMime = normalizeMIMEType(mimeType)
+        let resolvedMime = normalizedMime.hasPrefix("image/")
+            ? normalizedMime
+            : sniffImageMIMEType(data: data)
+
+        guard let resolvedMime, resolvedMime.hasPrefix("image/") else { return nil }
+        return "data:\(resolvedMime);base64,\(data.base64EncodedString())"
+    }
+
+    private static func normalizeMIMEType(_ raw: String) -> String {
+        raw
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .split(separator: ";", maxSplits: 1)
+            .first
+            .map(String.init) ?? ""
+    }
+
+    private static func httpMimeType(from response: URLResponse) -> String {
+        let raw = (response as? HTTPURLResponse)?
+            .value(forHTTPHeaderField: "Content-Type") ?? ""
+        return normalizeMIMEType(raw)
+    }
+
+    private static func sniffImageMIMEType(data: Data) -> String? {
+        let bytes = [UInt8](data.prefix(16))
+        guard !bytes.isEmpty else { return nil }
+
+        if bytes.count >= 4 {
+            if bytes[0] == 0x89, bytes[1] == 0x50, bytes[2] == 0x4E, bytes[3] == 0x47 {
+                return "image/png"
+            }
+            if bytes[0] == 0xFF, bytes[1] == 0xD8, bytes[2] == 0xFF {
+                return "image/jpeg"
+            }
+            if bytes[0] == 0x47, bytes[1] == 0x49, bytes[2] == 0x46, bytes[3] == 0x38 {
+                return "image/gif"
+            }
+            if bytes[0] == 0x42, bytes[1] == 0x4D {
+                return "image/bmp"
+            }
+            if bytes[0] == 0x00, bytes[1] == 0x00, bytes[2] == 0x01, bytes[3] == 0x00 {
+                return "image/x-icon"
+            }
+            if bytes[0] == 0x49, bytes[1] == 0x49, bytes[2] == 0x2A, bytes[3] == 0x00 {
+                return "image/tiff"
+            }
+            if bytes[0] == 0x4D, bytes[1] == 0x4D, bytes[2] == 0x00, bytes[3] == 0x2A {
+                return "image/tiff"
+            }
+        }
+
+        if bytes.count >= 12,
+           bytes[0] == 0x52, bytes[1] == 0x49, bytes[2] == 0x46, bytes[3] == 0x46,
+           bytes[8] == 0x57, bytes[9] == 0x45, bytes[10] == 0x42, bytes[11] == 0x50 {
+            return "image/webp"
+        }
+
+        if data.count >= 12 {
+            let box = data.subdata(in: 4..<8)
+            let brand = data.subdata(in: 8..<12)
+            if let boxName = String(data: box, encoding: .ascii),
+               boxName == "ftyp",
+               let brandName = String(data: brand, encoding: .ascii)?.lowercased() {
+                if brandName.hasPrefix("avif") || brandName.hasPrefix("avis") {
+                    return "image/avif"
+                }
+                if brandName.hasPrefix("heic")
+                    || brandName.hasPrefix("heix")
+                    || brandName.hasPrefix("hevc")
+                    || brandName.hasPrefix("hevx")
+                    || brandName.hasPrefix("mif1")
+                    || brandName.hasPrefix("msf1") {
+                    return "image/heic"
+                }
+            }
+        }
+
         return nil
     }
 
@@ -320,5 +418,22 @@ private struct SVGWebView: UIViewRepresentable {
         </body></html>
         """
         webView.loadHTMLString(html, baseURL: nil)
+    }
+}
+
+private struct DataImageWebView: UIViewRepresentable {
+    let dataURL: String
+
+    func makeUIView(context: Context) -> WKWebView {
+        let webView = WKWebView(frame: .zero)
+        webView.isOpaque = false
+        webView.backgroundColor = .clear
+        webView.scrollView.isScrollEnabled = false
+        return webView
+    }
+
+    func updateUIView(_ webView: WKWebView, context: Context) {
+        guard let url = URL(string: dataURL) else { return }
+        webView.load(URLRequest(url: url))
     }
 }

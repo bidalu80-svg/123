@@ -65,6 +65,22 @@ final class ChatServiceTests: XCTestCase {
         XCTAssertEqual((content[2]["image_url"] as? [String: String])?["url"], attachments[1].requestURLString)
     }
 
+    func testChatImageAttachmentDecodeSupportsURLSafeBase64WithoutPadding() {
+        let original = Data([0x89, 0x50, 0x4E, 0x47, 0x00, 0xFE, 0x2F, 0x10])
+        let compact = original.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        let brokenLines = "\(compact.prefix(5))\n\(compact.dropFirst(5))"
+
+        let attachment = ChatImageAttachment(
+            dataURL: "data:image/png;base64,\(brokenLines)",
+            mimeType: "image/png"
+        )
+
+        XCTAssertEqual(attachment.decodedImageData, original)
+    }
+
     func testBuildRequestIncludesRealtimeSystemContext() throws {
         let config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
         let requestMessage = ChatMessage(role: .user, content: "现在几点")

@@ -183,9 +183,16 @@ enum MessageContentParser {
     private static func isLikelyImageURL(_ rawURL: String) -> Bool {
         let cleaned = rawURL.lowercased()
         if cleaned.hasPrefix("data:image") { return true }
-        let imageSuffixes = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".heic", ".heif", ".svg"]
+        let imageSuffixes = [
+            ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp",
+            ".heic", ".heif", ".svg", ".avif", ".apng", ".tif", ".tiff", ".ico", ".jxl"
+        ]
         if imageSuffixes.contains(where: { cleaned.contains($0) }) { return true }
-        let indicators = ["/images/", "/image/", "/img/", "/v1/images", "image=", "format=png", "format=jpg", "b64_json", "generated-image", "/files/"]
+        let indicators = [
+            "/images/", "/image/", "/img/", "/v1/images", "image=", "mime=image/",
+            "format=png", "format=jpg", "format=jpeg", "format=webp", "format=avif",
+            "b64_json", "generated-image", "/files/"
+        ]
         return indicators.contains(where: { cleaned.contains($0) })
     }
 
