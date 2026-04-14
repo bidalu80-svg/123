@@ -312,13 +312,14 @@ struct ChatScreen: View {
                             .id(scrollTopAnchor)
 
                         ForEach(viewModel.messages) { message in
+                            let isLatestAssistant = message.id == latestAssistantMessageID
                             MessageBubbleView(
                                 message: message,
                                 codeThemeMode: viewModel.config.codeThemeMode,
                                 apiKey: viewModel.config.apiKey,
                                 apiBaseURL: viewModel.config.normalizedBaseURL,
-                                showsAssistantActionBar: message.id == latestAssistantMessageID && !message.isStreaming,
-                                onRegenerate: viewModel.config.endpointMode == .chatCompletions ? {
+                                showsAssistantActionBar: message.role == .assistant && !message.isStreaming,
+                                onRegenerate: (isLatestAssistant && viewModel.config.endpointMode == .chatCompletions) ? {
                                     Task { await viewModel.regenerateLastAssistantReply() }
                                 } : nil
                             )
