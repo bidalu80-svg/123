@@ -2,6 +2,9 @@ import Foundation
 #if canImport(UIKit)
 import UIKit
 #endif
+#if canImport(AuthenticationServices)
+import AuthenticationServices
+#endif
 #if canImport(GoogleSignIn)
 import GoogleSignIn
 #endif
@@ -45,6 +48,17 @@ final class AuthViewModel: ObservableObject {
             return false
         }
         return true
+    }
+
+    var hasAuthEndpoint: Bool {
+        !AuthSessionStore.normalizedBaseURL(baseURL).isEmpty
+    }
+
+    var canUseGoogleSignIn: Bool {
+        guard let rawClientID = Bundle.main.object(forInfoDictionaryKey: "GOOGLE_CLIENT_ID") as? String else {
+            return false
+        }
+        return !rawClientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     func saveBaseURL() {
@@ -159,6 +173,37 @@ final class AuthViewModel: ObservableObject {
         #endif
     }
 
+    func submitAppleSignIn() async {
+        guard !isSubmitting else { return }
+        let endpoint = AuthSessionStore.normalizedBaseURL(baseURL)
+        guard !endpoint.isEmpty else {
+            errorMessage = "请先填写认证服务地址。"
+            return
+        }
+
+        errorMessage = ""
+        isSubmitting = true
+        defer { isSubmitting = false }
+
+        #if canImport(AuthenticationServices)
+        do {
+            let token = try await AppleSignInCoordinator.shared.requestIdentityToken()
+            let session = try await service.loginWithApple(baseURL: endpoint, idToken: token)
+            AuthSessionStore.saveBaseURL(endpoint)
+            AuthSessionStore.saveSession(session)
+            self.session = session
+            self.phone = session.user.phone
+            self.password = ""
+            self.confirmPassword = ""
+            self.statusMessage = "Apple 登录成功"
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        #else
+        errorMessage = "当前系统不支持 Apple 登录。"
+        #endif
+    }
+
     func logout() async {
         guard let session else {
             AuthSessionStore.clearSession()
@@ -196,3 +241,90 @@ final class AuthViewModel: ObservableObject {
         #endif
     }
 }
+
+#if canImport(AuthenticationServices) && canImport(UIKit)
+private final class AppleSignInCoordinator: NSObject {
+    static let shared = AppleSignInCoordinator()
+
+    private var continuation: CheckedContinuation<String, Error>?
+
+    enum AppleSignInError: LocalizedError {
+        case unavailable
+        case cancelled
+        case invalidCredential
+        case missingIdentityToken
+
+        var errorDescription: String? {
+            switch self {
+            case .unavailable:
+                return "当前设备不支持 Apple 登录。"
+            case .cancelled:
+                return "已取消 Apple 登录。"
+            case .invalidCredential:
+                return "Apple 返回了无效登录凭证。"
+            case .missingIdentityToken:
+                return "Apple 未返回可用身份令牌。"
+            }
+        }
+    }
+
+    func requestIdentityToken() async throws -> String {
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
+            guard self.continuation == nil else {
+                continuation.resume(throwing: AppleSignInError.unavailable)
+                return
+            }
+
+            self.continuation = continuation
+            let request = ASAuthorizationAppleIDProvider().createRequest()
+            request.requestedScopes = [.fullName, .email]
+
+            let controller = ASAuthorizationController(authorizationRequests: [request])
+            controller.delegate = self
+            controller.presentationContextProvider = self
+            controller.performRequests()
+        }
+    }
+}
+
+extension AppleSignInCoordinator: ASAuthorizationControllerDelegate {
+    func authorizationController(controller: ASAuthorizationController, didCompleteWithAuthorization authorization: ASAuthorization) {
+        guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential else {
+            continuation?.resume(throwing: AppleSignInError.invalidCredential)
+            continuation = nil
+            return
+        }
+
+        guard let tokenData = credential.identityToken,
+              let token = String(data: tokenData, encoding: .utf8),
+              !token.isEmpty else {
+            continuation?.resume(throwing: AppleSignInError.missingIdentityToken)
+            continuation = nil
+            return
+        }
+
+        continuation?.resume(returning: token)
+        continuation = nil
+    }
+
+    func authorizationController(controller: ASAuthorizationController, didCompleteWithError error: Error) {
+        if let authError = error as? ASAuthorizationError, authError.code == .canceled {
+            continuation?.resume(throwing: AppleSignInError.cancelled)
+            continuation = nil
+            return
+        }
+        continuation?.resume(throwing: error)
+        continuation = nil
+    }
+}
+
+extension AppleSignInCoordinator: ASAuthorizationControllerPresentationContextProviding {
+    func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
+        let scenes = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .filter { $0.activationState == .foregroundActive || $0.activationState == .foregroundInactive }
+        let windows = scenes.flatMap { $0.windows }
+        return windows.first(where: { $0.isKeyWindow }) ?? windows.first ?? UIWindow(frame: .zero)
+    }
+}
+#endif

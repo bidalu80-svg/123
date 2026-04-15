@@ -74,22 +74,24 @@ struct AuthScreen: View {
                 .disabled(!authViewModel.canSubmit || authViewModel.isSubmitting)
 
                 capsuleActionButton(
-                    title: authViewModel.isSubmitting && authViewModel.mode == .register ? "注册中…" : "注册使用",
-                    systemIcon: "person.badge.plus.fill",
+                    title: authViewModel.isSubmitting ? "Apple 登录中…" : "Apple ID 登录",
+                    systemIcon: "apple.logo",
                     highlighted: false
                 ) {
-                    Task { await authViewModel.submit(as: .register) }
+                    Task { await authViewModel.submitAppleSignIn() }
                 }
-                .disabled(!authViewModel.canSubmit || authViewModel.isSubmitting)
+                .disabled(!authViewModel.hasAuthEndpoint || authViewModel.isSubmitting)
 
-                capsuleActionButton(
-                    title: authViewModel.isSubmitting ? "Google 登录中…" : "Google 账号登录",
-                    systemIcon: "globe",
-                    highlighted: false
-                ) {
-                    Task { await authViewModel.submitGoogleSignIn() }
+                if authViewModel.canUseGoogleSignIn {
+                    capsuleActionButton(
+                        title: authViewModel.isSubmitting ? "Google 登录中…" : "Google 账号登录",
+                        systemIcon: "globe",
+                        highlighted: false
+                    ) {
+                        Task { await authViewModel.submitGoogleSignIn() }
+                    }
+                    .disabled(!authViewModel.hasAuthEndpoint || authViewModel.isSubmitting)
                 }
-                .disabled(AuthSessionStore.normalizedBaseURL(authViewModel.baseURL).isEmpty || authViewModel.isSubmitting)
             }
             .padding(.top, 4)
 

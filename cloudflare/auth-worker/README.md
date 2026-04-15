@@ -5,6 +5,7 @@
 - 账号/手机号 + 密码登录
 - 账号/手机号 + 密码注册（无短信验证码）
 - Google 账号一键注册/登录（首次登录自动建号）
+- Apple ID 一键注册/登录（首次登录自动建号）
 - 管理员保留账号直接登录：`blank / 888888`
 - 登录失败次数限制（防爆破）
 - 注册频率限制（防无限刷号）
@@ -52,7 +53,7 @@ wrangler secret put AUTH_PEPPER
 wrangler secret put REGISTRATION_ENABLED
 ```
 
-填 `false` 可关闭公开注册（仅已有账号可登录；Google 首次建号也会被禁止）。
+填 `false` 可关闭公开注册（仅已有账号可登录；Google/Apple 首次建号也会被禁止）。
 
 2. 邀请码注册（启用后注册必须携带邀请码）：
 
@@ -67,6 +68,15 @@ wrangler secret put GOOGLE_CLIENT_ID
 ```
 
 填写你的 Google OAuth Client ID，用于校验 Google `id_token` 的 `aud`。
+
+4. Apple 登录受众校验（建议配置）：
+
+```bash
+wrangler secret put APPLE_ALLOWED_AUDIENCES
+```
+
+填写允许的 `aud`（逗号分隔），通常是 iOS 包名或 Service ID。  
+示例：`com.chatapp.ios,com.yourcompany.yourapp`
 
 ## 5) 部署 Worker
 
@@ -91,6 +101,7 @@ wrangler deploy
 - `POST /auth/send-code`
 - `POST /auth/register`
 - `POST /auth/google`
+- `POST /auth/apple`
 - `POST /auth/login`
 - `POST /auth/logout`
 
@@ -107,5 +118,17 @@ wrangler deploy
 ```
 
 服务端会校验 token，首次登录自动创建账号（`google:<sub>`），随后签发与普通登录一致的会话 token。
+
+## Apple 登录请求体
+
+`POST /auth/apple`
+
+```json
+{
+  "idToken": "APPLE_ID_TOKEN"
+}
+```
+
+服务端会校验 Apple 签名和声明，首次登录自动创建账号（`apple:<sub>`），随后签发与普通登录一致的会话 token。
 
 请求/响应格式已经与 iOS 端 `AuthService.swift` 对齐。

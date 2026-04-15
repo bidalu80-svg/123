@@ -4,6 +4,7 @@ interface Env {
   REGISTRATION_ENABLED?: string;
   REGISTRATION_INVITE_CODE?: string;
   GOOGLE_CLIENT_ID?: string;
+  APPLE_ALLOWED_AUDIENCES?: string;
   SMS_PROVIDER?: string;
   TWILIO_ACCOUNT_SID?: string;
   TWILIO_AUTH_TOKEN?: string;
@@ -26,6 +27,7 @@ const REGISTER_SUCCESS_WINDOW_MS = 24 * 60 * 60 * 1000;
 const REGISTER_SUCCESS_IP_LIMIT = 3;
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const PASSWORD_PBKDF2_ITERATIONS = 100_000;
+const APPLE_JWKS_URL = "https://appleid.apple.com/auth/keys";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -160,7 +162,7 @@ async function recordAuthAttempt(
   env: Env,
   account: string,
   ip: string,
-  action: "login" | "register" | "google_login",
+  action: "login" | "register" | "google_login" | "apple_login",
   success: boolean
 ): Promise<void> {
   await env.DB.prepare(
@@ -174,7 +176,7 @@ async function recordAuthAttempt(
 async function countAuthAttempts(
   env: Env,
   options: {
-    action: "login" | "register" | "google_login";
+    action: "login" | "register" | "google_login" | "apple_login";
     sinceISO: string;
     account?: string;
     ip?: string;
@@ -216,6 +218,10 @@ async function recordRegisterAttempt(env: Env, account: string, ip: string, succ
 
 async function recordGoogleLoginAttempt(env: Env, account: string, ip: string, success: boolean): Promise<void> {
   await recordAuthAttempt(env, account, ip, "google_login", success);
+}
+
+async function recordAppleLoginAttempt(env: Env, account: string, ip: string, success: boolean): Promise<void> {
+  await recordAuthAttempt(env, account, ip, "apple_login", success);
 }
 
 async function isLoginLocked(env: Env, account: string): Promise<boolean> {
@@ -278,6 +284,166 @@ interface GoogleTokenInfo {
   email_verified?: string;
   exp?: string;
   name?: string;
+}
+
+interface AppleTokenHeader {
+  alg?: string;
+  kid?: string;
+}
+
+interface AppleTokenPayload {
+  iss?: string;
+  aud?: string;
+  exp?: number | string;
+  iat?: number | string;
+  sub?: string;
+  email?: string;
+  email_verified?: boolean | string;
+}
+
+interface AppleJWKSResponse {
+  keys?: JsonWebKey[];
+}
+
+let appleKeyCache: { keys: JsonWebKey[]; expiresAtMs: number } | null = null;
+
+function parseMaxAgeSeconds(cacheControlHeader: string | null): number {
+  if (!cacheControlHeader) return 900;
+  const match = cacheControlHeader.match(/max-age=(\d+)/i);
+  if (!match) return 900;
+  const value = Number(match[1]);
+  return Number.isFinite(value) && value > 0 ? value : 900;
+}
+
+function base64URLToUint8Array(input: string): Uint8Array {
+  const normalized = input
+    .replace(/-/g, "+")
+    .replace(/_/g, "/")
+    .padEnd(Math.ceil(input.length / 4) * 4, "=");
+  const binary = atob(normalized);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function decodeJWTPart<T>(part: string): T {
+  const bytes = base64URLToUint8Array(part);
+  const text = new TextDecoder().decode(bytes);
+  return JSON.parse(text) as T;
+}
+
+function parseAppleAllowedAudiences(env: Env): string[] {
+  const raw = (env.APPLE_ALLOWED_AUDIENCES || "").trim();
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => !!item);
+}
+
+async function loadApplePublicKeys(): Promise<JsonWebKey[]> {
+  if (appleKeyCache && Date.now() < appleKeyCache.expiresAtMs && appleKeyCache.keys.length > 0) {
+    return appleKeyCache.keys;
+  }
+
+  const response = await fetch(APPLE_JWKS_URL, { method: "GET" });
+  if (!response.ok) {
+    throw new Error("Apple 公钥获取失败。");
+  }
+
+  const payload = (await response.json()) as AppleJWKSResponse;
+  const keys = Array.isArray(payload.keys) ? payload.keys.filter((item) => item && item.kty === "RSA") : [];
+  if (!keys.length) {
+    throw new Error("Apple 公钥为空。");
+  }
+
+  const ttlSeconds = parseMaxAgeSeconds(response.headers.get("cache-control"));
+  appleKeyCache = {
+    keys,
+    expiresAtMs: Date.now() + ttlSeconds * 1000,
+  };
+  return keys;
+}
+
+async function verifyAppleIDToken(env: Env, idToken: string): Promise<AppleTokenPayload> {
+  const parts = idToken.split(".");
+  if (parts.length !== 3) {
+    throw new Error("Apple 登录凭证格式无效。");
+  }
+
+  const [headerPart, payloadPart, signaturePart] = parts;
+  const header = decodeJWTPart<AppleTokenHeader>(headerPart);
+  const payload = decodeJWTPart<AppleTokenPayload>(payloadPart);
+  const signingInput = `${headerPart}.${payloadPart}`;
+  const signature = base64URLToUint8Array(signaturePart);
+
+  if (header.alg !== "RS256") {
+    throw new Error("Apple 登录凭证算法无效。");
+  }
+
+  const issuer = (payload.iss || "").trim();
+  if (issuer !== "https://appleid.apple.com") {
+    throw new Error("Apple 登录凭证签发方无效。");
+  }
+
+  const subject = (payload.sub || "").trim();
+  if (!subject) {
+    throw new Error("Apple 登录凭证缺少 sub。");
+  }
+
+  const exp = Number(payload.exp || 0);
+  if (!Number.isFinite(exp) || exp * 1000 <= Date.now()) {
+    throw new Error("Apple 登录凭证已过期。");
+  }
+
+  const tokenAudience = (payload.aud || "").trim();
+  const allowedAudiences = parseAppleAllowedAudiences(env);
+  if (allowedAudiences.length > 0) {
+    if (!allowedAudiences.includes(tokenAudience)) {
+      throw new Error("Apple 登录凭证受众不匹配。");
+    }
+  } else if (!tokenAudience) {
+    throw new Error("Apple 登录凭证缺少受众。");
+  }
+
+  const keys = await loadApplePublicKeys();
+  const candidateKeys = header.kid
+    ? keys.filter((item) => item.kid === header.kid)
+    : keys;
+  if (!candidateKeys.length) {
+    throw new Error("Apple 登录凭证缺少匹配公钥。");
+  }
+
+  const data = encoder.encode(signingInput);
+  let verified = false;
+  for (const key of candidateKeys) {
+    try {
+      const publicKey = await crypto.subtle.importKey(
+        "jwk",
+        key,
+        { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+        false,
+        ["verify"]
+      );
+      verified = await crypto.subtle.verify(
+        "RSASSA-PKCS1-v1_5",
+        publicKey,
+        signature,
+        data
+      );
+      if (verified) break;
+    } catch {
+      // Try next key.
+    }
+  }
+
+  if (!verified) {
+    throw new Error("Apple 登录凭证签名验证失败。");
+  }
+
+  return payload;
 }
 
 async function verifyGoogleIDToken(env: Env, idToken: string): Promise<GoogleTokenInfo> {
@@ -377,6 +543,8 @@ export default {
             adminAccount: ADMIN_USERNAME,
             registrationOpen: isRegistrationOpen(env),
             googleLoginEnabled: !!(env.GOOGLE_CLIENT_ID || "").trim(),
+            appleLoginEnabled: true,
+            appleAudienceEnforced: parseAppleAllowedAudiences(env).length > 0,
           },
         });
       }
@@ -555,6 +723,101 @@ export default {
             user: {
               ...session.user,
               phone: email || session.user.phone,
+              createdAt: user.created_at,
+            },
+          },
+        });
+      }
+
+      if (request.method === "POST" && path === "/auth/apple") {
+        const body = await parseJSON(request);
+        const idToken = typeof body.idToken === "string" ? body.idToken.trim() : "";
+        const ip = getClientIP(request);
+
+        if (!idToken || idToken.length > 4096) {
+          await recordAppleLoginAttempt(env, "apple:unknown", ip, false);
+          return errorResponse("缺少有效的 Apple idToken。", 400);
+        }
+
+        let tokenInfo: AppleTokenPayload;
+        try {
+          tokenInfo = await verifyAppleIDToken(env, idToken);
+        } catch (error) {
+          await recordAppleLoginAttempt(env, "apple:unknown", ip, false);
+          const message = error instanceof Error ? error.message : "Apple 登录失败。";
+          return errorResponse(message, 401);
+        }
+
+        const subject = (tokenInfo.sub || "").trim();
+        const account = `apple:${subject}`;
+        const createdAt = nowISO();
+        const tokenEmail = (tokenInfo.email || "").trim().toLowerCase();
+
+        let user = await env.DB.prepare(
+          `SELECT id, created_at
+           FROM users
+           WHERE phone = ?
+           LIMIT 1`
+        )
+          .bind(account)
+          .first<{ id: string; created_at: string }>();
+
+        if (!user) {
+          if (!isRegistrationOpen(env)) {
+            await recordAppleLoginAttempt(env, account, ip, false);
+            return errorResponse("当前已关闭公开注册。", 403);
+          }
+
+          const registerThrottleMessage = await getRegisterThrottleMessage(env, account, ip);
+          if (registerThrottleMessage) {
+            await recordAppleLoginAttempt(env, account, ip, false);
+            return errorResponse(registerThrottleMessage, 429);
+          }
+
+          const userId = crypto.randomUUID();
+          const passwordSalt = randomToken(16);
+          const randomPassword = randomToken(32);
+          const passwordHash = await pbkdf2Hex(randomPassword, passwordSalt, PASSWORD_PBKDF2_ITERATIONS);
+
+          try {
+            await env.DB.prepare(
+              `INSERT INTO users (id, phone, password_hash, password_salt, password_iterations, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)`
+            )
+              .bind(userId, account, passwordHash, passwordSalt, PASSWORD_PBKDF2_ITERATIONS, createdAt)
+              .run();
+            await recordRegisterAttempt(env, account, ip, true);
+            user = { id: userId, created_at: createdAt };
+          } catch (error) {
+            if (isUniqueConstraintError(error)) {
+              user = await env.DB.prepare(
+                `SELECT id, created_at
+                 FROM users
+                 WHERE phone = ?
+                 LIMIT 1`
+              )
+                .bind(account)
+                .first<{ id: string; created_at: string }>();
+            } else {
+              throw error;
+            }
+          }
+        }
+
+        if (!user) {
+          await recordAppleLoginAttempt(env, account, ip, false);
+          return errorResponse("Apple 账号绑定失败，请稍后重试。", 500);
+        }
+
+        await recordAppleLoginAttempt(env, account, ip, true);
+        const session = await createSession(env, { id: user.id, account });
+        return ok({
+          message: "Apple 登录成功",
+          data: {
+            ...session,
+            user: {
+              ...session.user,
+              phone: tokenEmail || session.user.phone,
               createdAt: user.created_at,
             },
           },
