@@ -137,7 +137,7 @@ struct AuthScreen: View {
                     .padding(.horizontal, 4)
             }
 
-            Text("管理员账号：blank    密码：888888")
+            Text("管理员账号由系统内部维护")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.white.opacity(0.56))
                 .padding(.top, 2)
