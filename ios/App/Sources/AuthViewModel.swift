@@ -1,4 +1,10 @@
 import Foundation
+#if canImport(UIKit)
+import UIKit
+#endif
+#if canImport(GoogleSignIn)
+import GoogleSignIn
+#endif
 
 @MainActor
 final class AuthViewModel: ObservableObject {
@@ -102,6 +108,57 @@ final class AuthViewModel: ObservableObject {
         await submit()
     }
 
+    func submitGoogleSignIn() async {
+        guard !isSubmitting else { return }
+        let endpoint = AuthSessionStore.normalizedBaseURL(baseURL)
+        guard !endpoint.isEmpty else {
+            errorMessage = "请先填写认证服务地址。"
+            return
+        }
+
+        errorMessage = ""
+        isSubmitting = true
+        defer { isSubmitting = false }
+
+        #if canImport(GoogleSignIn)
+        guard let rawClientID = Bundle.main.object(forInfoDictionaryKey: "GOOGLE_CLIENT_ID") as? String else {
+            errorMessage = "缺少 GOOGLE_CLIENT_ID 配置。"
+            return
+        }
+        let clientID = rawClientID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clientID.isEmpty else {
+            errorMessage = "GOOGLE_CLIENT_ID 为空。"
+            return
+        }
+
+        guard let presenter = topPresentingViewController() else {
+            errorMessage = "无法打开 Google 登录页面。"
+            return
+        }
+
+        do {
+            GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: clientID)
+            let result = try await GIDSignIn.sharedInstance.signIn(withPresenting: presenter)
+            guard let idToken = result.user.idToken?.tokenString, !idToken.isEmpty else {
+                throw AuthServiceError.server("Google 未返回可用登录凭证。")
+            }
+
+            let session = try await service.loginWithGoogle(baseURL: endpoint, idToken: idToken)
+            AuthSessionStore.saveBaseURL(endpoint)
+            AuthSessionStore.saveSession(session)
+            self.session = session
+            self.phone = session.user.phone
+            self.password = ""
+            self.confirmPassword = ""
+            self.statusMessage = "Google 登录成功"
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        #else
+        errorMessage = "当前构建未集成 GoogleSignIn SDK。"
+        #endif
+    }
+
     func logout() async {
         guard let session else {
             AuthSessionStore.clearSession()
@@ -118,5 +175,24 @@ final class AuthViewModel: ObservableObject {
         self.password = ""
         self.confirmPassword = ""
         self.statusMessage = "已退出登录"
+    }
+
+    private func topPresentingViewController() -> UIViewController? {
+        #if canImport(UIKit)
+        let scenes = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .filter { $0.activationState == .foregroundActive || $0.activationState == .foregroundInactive }
+
+        let windows = scenes.flatMap { $0.windows }
+        let keyWindow = windows.first(where: { $0.isKeyWindow }) ?? windows.first
+
+        var controller = keyWindow?.rootViewController
+        while let presented = controller?.presentedViewController {
+            controller = presented
+        }
+        return controller
+        #else
+        return nil
+        #endif
     }
 }

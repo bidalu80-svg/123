@@ -81,6 +81,15 @@ struct AuthScreen: View {
                     Task { await authViewModel.submit(as: .register) }
                 }
                 .disabled(!authViewModel.canSubmit || authViewModel.isSubmitting)
+
+                capsuleActionButton(
+                    title: authViewModel.isSubmitting ? "Google 登录中…" : "Google 账号登录",
+                    systemIcon: "globe",
+                    highlighted: false
+                ) {
+                    Task { await authViewModel.submitGoogleSignIn() }
+                }
+                .disabled(AuthSessionStore.normalizedBaseURL(authViewModel.baseURL).isEmpty || authViewModel.isSubmitting)
             }
             .padding(.top, 4)
 

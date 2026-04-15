@@ -15,6 +15,7 @@ struct MessageBubbleView: View {
     @State private var actionFeedback: String?
     @State private var copiedCodeToken: String?
     @State private var runningCodeToken: String?
+    @State private var pythonRunTasks: [String: Task<Void, Never>] = [:]
     @State private var codeRunOutputs: [String: String] = [:]
     @State private var codeRunErrors: [String: String] = [:]
     @State private var activeHTMLPreview: HTMLPreviewPayload?
@@ -46,6 +47,9 @@ struct MessageBubbleView: View {
         }
         .sheet(item: $pendingPythonRun) { payload in
             pythonInputSheet(payload: payload)
+        }
+        .onDisappear {
+            cancelAllPythonRuns()
         }
     }
 
@@ -315,14 +319,17 @@ struct MessageBubbleView: View {
                     .foregroundStyle(.secondary)
                 Spacer()
                 if canRunPython {
-                    Button(isRunning ? "运行中…" : "运行") {
-                        requestPythonRun(content, token: copyToken)
+                    Button(isRunning ? "结束运行" : "运行") {
+                        if isRunning {
+                            stopPythonRun(token: copyToken)
+                        } else {
+                            requestPythonRun(content, token: copyToken)
+                        }
                     }
                     .font(.caption2)
                     .buttonStyle(.borderedProminent)
-                    .tint(Color(red: 0.08, green: 0.08, blue: 0.1))
+                    .tint(isRunning ? .red : Color(red: 0.08, green: 0.08, blue: 0.1))
                     .foregroundStyle(.white)
-                    .disabled(isRunning)
                 }
                 if canRunHTML {
                     Button("运行网页") {
@@ -442,13 +449,23 @@ struct MessageBubbleView: View {
     }
 
     private func runPythonCode(_ code: String, token: String, stdin: String?) {
+        pythonRunTasks[token]?.cancel()
         runningCodeToken = token
         codeRunErrors[token] = nil
+        codeRunOutputs[token] = nil
 
-        Task {
+        let task = Task {
+            defer {
+                Task { @MainActor in
+                    pythonRunTasks[token] = nil
+                }
+            }
+
             do {
                 let result = try await PythonExecutionService.shared.runPython(code: code, stdin: stdin)
+                try Task.checkCancellation()
                 await MainActor.run {
+                    guard runningCodeToken == token else { return }
                     let rendered: String
                     if result.exitCode == 0 {
                         rendered = result.output
@@ -459,8 +476,19 @@ struct MessageBubbleView: View {
                     runningCodeToken = nil
                     feedback(.success, "代码运行完成")
                 }
+            } catch is CancellationError {
+                await MainActor.run {
+                    if runningCodeToken == token {
+                        runningCodeToken = nil
+                    }
+                    if codeRunErrors[token] == nil {
+                        codeRunErrors[token] = "运行已结束。"
+                    }
+                    feedback(.light, "已结束运行")
+                }
             } catch {
                 await MainActor.run {
+                    guard runningCodeToken == token else { return }
                     codeRunOutputs[token] = nil
                     codeRunErrors[token] = error.localizedDescription
                     runningCodeToken = nil
@@ -468,6 +496,27 @@ struct MessageBubbleView: View {
                 }
             }
         }
+        pythonRunTasks[token] = task
+    }
+
+    private func stopPythonRun(token: String) {
+        pythonRunTasks[token]?.cancel()
+        pythonRunTasks[token] = nil
+        if runningCodeToken == token {
+            runningCodeToken = nil
+        }
+        codeRunErrors[token] = "运行已结束。"
+        PythonExecutionService.shared.disableEmbeddedRuntimeForCurrentLaunch()
+        feedback(.light, "已结束运行")
+    }
+
+    private func cancelAllPythonRuns() {
+        guard !pythonRunTasks.isEmpty else { return }
+        for task in pythonRunTasks.values {
+            task.cancel()
+        }
+        pythonRunTasks.removeAll()
+        runningCodeToken = nil
     }
 
     private func needsInteractiveInput(_ code: String) -> Bool {

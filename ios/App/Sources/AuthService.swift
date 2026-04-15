@@ -106,6 +106,29 @@ final class AuthService {
         )
     }
 
+    func loginWithGoogle(baseURL: String, idToken: String) async throws -> AuthSession {
+        let token = idToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else {
+            throw AuthServiceError.server("Google 登录凭证为空。")
+        }
+
+        let payload: [String: Any] = [
+            "idToken": token
+        ]
+
+        let object = try await sendRequest(
+            baseURL: baseURL,
+            path: "/auth/google",
+            method: "POST",
+            body: payload,
+            bearerToken: nil
+        )
+        guard let session = parseSession(from: object) else {
+            throw AuthServiceError.invalidResponse
+        }
+        return session
+    }
+
     static func normalizedAccount(_ raw: String) -> String {
         raw.trimmingCharacters(in: .whitespacesAndNewlines)
     }

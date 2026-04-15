@@ -22,6 +22,8 @@ jobs:
       IOS_PROVISIONING_PROFILE_SPECIFIER: ${{ secrets.IOS_PROVISIONING_PROFILE_SPECIFIER }}
       IOS_BUNDLE_ID: ${{ secrets.IOS_BUNDLE_ID }}
       IOS_EXPORT_METHOD: ${{ secrets.IOS_EXPORT_METHOD }}
+      GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+      GOOGLE_REVERSED_CLIENT_ID: ${{ secrets.GOOGLE_REVERSED_CLIENT_ID }}
       KEYCHAIN_NAME: build.keychain
     steps:
       - name: Checkout repository
@@ -162,6 +164,8 @@ jobs:
             -scheme ChatApp \
             -configuration Debug \
             -destination "platform=iOS Simulator,name=$SIM_NAME" \
+            GOOGLE_CLIENT_ID="${GOOGLE_CLIENT_ID:-}" \
+            GOOGLE_REVERSED_CLIENT_ID="${GOOGLE_REVERSED_CLIENT_ID:-}" \
             test
 
       - name: Override bundle identifier if provided
@@ -213,6 +217,8 @@ jobs:
             CODE_SIGN_IDENTITY="$IOS_SIGNING_IDENTITY" \
             PROVISIONING_PROFILE_SPECIFIER="$IOS_PROVISIONING_PROFILE_SPECIFIER" \
             PRODUCT_BUNDLE_IDENTIFIER="${IOS_BUNDLE_ID:-com.chatapp.ios}" \
+            GOOGLE_CLIENT_ID="${GOOGLE_CLIENT_ID:-}" \
+            GOOGLE_REVERSED_CLIENT_ID="${GOOGLE_REVERSED_CLIENT_ID:-}" \
             archive
 
       - name: Export IPA

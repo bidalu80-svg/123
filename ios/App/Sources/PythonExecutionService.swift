@@ -25,9 +25,41 @@ enum PythonExecutionError: LocalizedError, Equatable {
 final class PythonExecutionService {
     static let shared = PythonExecutionService()
 
+    private enum EmbeddedRuntimeAttempt {
+        case success(PythonExecutionResult)
+        case unavailable
+        case timedOut
+    }
+
+    private final class EmbeddedRuntimeResumeBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var didResume = false
+        private let continuation: CheckedContinuation<EmbeddedRuntimeAttempt, Never>
+
+        init(continuation: CheckedContinuation<EmbeddedRuntimeAttempt, Never>) {
+            self.continuation = continuation
+        }
+
+        func resumeIfNeeded(with result: EmbeddedRuntimeAttempt) {
+            lock.lock()
+            let shouldResume = !didResume
+            if shouldResume {
+                didResume = true
+            }
+            lock.unlock()
+
+            guard shouldResume else { return }
+            continuation.resume(returning: result)
+        }
+    }
+
     private let maxCodeLength: Int
     private let maxOutputLength: Int
     private let maxLoopSteps: Int
+    private let embeddedRuntimeTimeoutNanoseconds: UInt64
+
+    private let embeddedRuntimeStateLock = NSLock()
+    private var embeddedRuntimeDisabledForCurrentLaunch = false
 
     static func isRunnableSnippet(_ code: String) -> Bool {
         let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -106,11 +138,19 @@ final class PythonExecutionService {
     init(
         maxCodeLength: Int = 12_000,
         maxOutputLength: Int = 20_000,
-        maxLoopSteps: Int = 50_000
+        maxLoopSteps: Int = 50_000,
+        embeddedRuntimeTimeoutSeconds: TimeInterval = 12
     ) {
         self.maxCodeLength = maxCodeLength
         self.maxOutputLength = maxOutputLength
         self.maxLoopSteps = maxLoopSteps
+        self.embeddedRuntimeTimeoutNanoseconds = UInt64(max(3, embeddedRuntimeTimeoutSeconds) * 1_000_000_000)
+    }
+
+    func disableEmbeddedRuntimeForCurrentLaunch() {
+        embeddedRuntimeStateLock.lock()
+        embeddedRuntimeDisabledForCurrentLaunch = true
+        embeddedRuntimeStateLock.unlock()
     }
 
     func runPython(code: String, stdin: String? = nil) async throws -> PythonExecutionResult {
@@ -120,21 +160,49 @@ final class PythonExecutionService {
             return PythonExecutionResult(output: "代码过长（最多 \(maxCodeLength) 字符）", exitCode: 1)
         }
 
-        if let fullPythonResult = await EmbeddedCPythonRuntime.shared.runIfAvailable(code: trimmed, stdin: stdin) {
-            return fullPythonResult
+        var embeddedTimedOut = false
+        if isEmbeddedRuntimeEnabledForCurrentLaunch {
+            let embeddedAttempt = await runEmbeddedRuntimeWithTimeout(code: trimmed, stdin: stdin)
+            switch embeddedAttempt {
+            case .success(let fullPythonResult):
+                return fullPythonResult
+            case .unavailable:
+                break
+            case .timedOut:
+                embeddedTimedOut = true
+                disableEmbeddedRuntimeForCurrentLaunch()
+            }
         }
 
-        let runtimeHint = await EmbeddedCPythonRuntime.shared.statusHint()
+        let runtimeHint: String
+        if isEmbeddedRuntimeEnabledForCurrentLaunch {
+            runtimeHint = await EmbeddedCPythonRuntime.shared.statusHint()
+        } else {
+            runtimeHint = "嵌入 CPython 已在本次启动中临时停用（检测到运行超时）。"
+        }
 
         do {
+            try Task.checkCancellation()
             let interpreter = LocalPythonInterpreter(
                 maxOutputLength: maxOutputLength,
                 maxLoopSteps: maxLoopSteps,
                 stdin: stdin ?? ""
             )
-            return try interpreter.execute(code: trimmed)
+            let fallbackResult = try interpreter.execute(code: trimmed)
+            if embeddedTimedOut {
+                let combined = """
+                \(fallbackResult.output)
+
+                [提示] 本次检测到嵌入 CPython 运行超时，已自动切换到兼容运行器。
+                """
+                return PythonExecutionResult(output: combined, exitCode: fallbackResult.exitCode)
+            }
+            return fallbackResult
         } catch let error as PythonExecutionError {
             var message = error.errorDescription ?? "运行失败"
+            if embeddedTimedOut {
+                message += "\n\n提示：嵌入 CPython 运行超时，已临时切换到兼容运行器。"
+            }
             if shouldSuggestEmbeddedRuntime(for: trimmed) {
                 message += "\n\n提示：\(runtimeHint)"
             }
@@ -162,6 +230,35 @@ final class PythonExecutionService {
             "__main__"
         ]
         return markers.contains { lowered.contains($0) }
+    }
+
+    private var isEmbeddedRuntimeEnabledForCurrentLaunch: Bool {
+        embeddedRuntimeStateLock.lock()
+        let enabled = !embeddedRuntimeDisabledForCurrentLaunch
+        embeddedRuntimeStateLock.unlock()
+        return enabled
+    }
+
+    private func runEmbeddedRuntimeWithTimeout(code: String, stdin: String?) async -> EmbeddedRuntimeAttempt {
+        await withCheckedContinuation { continuation in
+            let resumeBox = EmbeddedRuntimeResumeBox(continuation: continuation)
+            let timeout = embeddedRuntimeTimeoutNanoseconds
+
+            let runTask = Task.detached(priority: .userInitiated) {
+                let result = await EmbeddedCPythonRuntime.shared.runIfAvailable(code: code, stdin: stdin)
+                if let result {
+                    resumeBox.resumeIfNeeded(with: .success(result))
+                } else {
+                    resumeBox.resumeIfNeeded(with: .unavailable)
+                }
+            }
+
+            Task.detached(priority: .utility) {
+                try? await Task.sleep(nanoseconds: timeout)
+                runTask.cancel()
+                resumeBox.resumeIfNeeded(with: .timedOut)
+            }
+        }
     }
 }
 

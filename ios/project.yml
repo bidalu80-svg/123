@@ -1,6 +1,10 @@
 name: ChatAppiOS
 options:
   minimumXcodeGenVersion: 2.38.0
+packages:
+  GoogleSignIn:
+    url: https://github.com/google/GoogleSignIn-iOS
+    from: 7.1.0
 configs:
   Debug: debug
   Release: release
@@ -17,6 +21,8 @@ settings:
     CODE_SIGN_STYLE: Manual
     CHAT_API_URL: "https://xxx.com"
     CHAT_MODEL: "gpt-5.4-pro"
+    GOOGLE_CLIENT_ID: ""
+    GOOGLE_REVERSED_CLIENT_ID: ""
     GENERATE_INFOPLIST_FILE: NO
 targets:
   ChatApp:
@@ -34,6 +40,8 @@ targets:
       - framework: Vendor/Python.xcframework
         embed: true
         codeSign: true
+      - package: GoogleSignIn
+        product: GoogleSignIn
     settings:
       base:
         PRODUCT_NAME: IEXA
