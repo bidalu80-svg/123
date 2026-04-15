@@ -62,7 +62,10 @@ final class AuthService {
             path: "/auth/register",
             method: "POST",
             body: payload,
-            bearerToken: nil
+            bearerToken: nil,
+            extraHeaders: [
+                "X-Device-Install-ID": DeviceInstallIdentity.currentID()
+            ]
         )
         guard let session = parseSession(from: object) else {
             throw AuthServiceError.invalidResponse
@@ -88,7 +91,10 @@ final class AuthService {
             path: "/auth/login",
             method: "POST",
             body: payload,
-            bearerToken: nil
+            bearerToken: nil,
+            extraHeaders: [
+                "X-Device-Install-ID": DeviceInstallIdentity.currentID()
+            ]
         )
         guard let session = parseSession(from: object) else {
             throw AuthServiceError.invalidResponse
@@ -121,7 +127,10 @@ final class AuthService {
             path: "/auth/google",
             method: "POST",
             body: payload,
-            bearerToken: nil
+            bearerToken: nil,
+            extraHeaders: [
+                "X-Device-Install-ID": DeviceInstallIdentity.currentID()
+            ]
         )
         guard let session = parseSession(from: object) else {
             throw AuthServiceError.invalidResponse
@@ -144,7 +153,10 @@ final class AuthService {
             path: "/auth/apple",
             method: "POST",
             body: payload,
-            bearerToken: nil
+            bearerToken: nil,
+            extraHeaders: [
+                "X-Device-Install-ID": DeviceInstallIdentity.currentID()
+            ]
         )
         guard let session = parseSession(from: object) else {
             throw AuthServiceError.invalidResponse
@@ -170,7 +182,8 @@ final class AuthService {
         path: String,
         method: String,
         body: [String: Any],
-        bearerToken: String?
+        bearerToken: String?,
+        extraHeaders: [String: String] = [:]
     ) async throws -> [String: Any] {
         let normalized = AuthSessionStore.normalizedBaseURL(baseURL)
         guard !normalized.isEmpty, let url = URL(string: normalized + path) else {
@@ -182,6 +195,9 @@ final class AuthService {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let bearerToken, !bearerToken.isEmpty {
             request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+        }
+        for (header, value) in extraHeaders where !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            request.setValue(value, forHTTPHeaderField: header)
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 

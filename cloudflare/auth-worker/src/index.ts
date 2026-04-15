@@ -28,6 +28,7 @@ const REGISTER_SUCCESS_IP_LIMIT = 3;
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const PASSWORD_PBKDF2_ITERATIONS = 100_000;
 const APPLE_JWKS_URL = "https://appleid.apple.com/auth/keys";
+const DEVICE_INSTALL_ID_REGEX = /^[A-Za-z0-9._:-]{16,128}$/;
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -128,6 +129,95 @@ function extractBearerToken(request: Request): string {
   const [scheme, token] = value.split(" ");
   if (scheme?.toLowerCase() !== "bearer" || !token) return "";
   return token.trim();
+}
+
+function normalizeDeviceInstallID(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  return raw.trim();
+}
+
+function isDeviceInstallIDValid(value: string): boolean {
+  return DEVICE_INSTALL_ID_REGEX.test(value);
+}
+
+function makeDeviceRegistrationLockID(deviceHash: string): string {
+  return `register-device-lock:${deviceHash}`;
+}
+
+async function hashDeviceInstallIDForRegistration(env: Env, installID: string): Promise<string> {
+  return sha256Hex(`register-device:${installID}:${env.AUTH_PEPPER}`);
+}
+
+async function tryAcquireDeviceRegistrationLock(
+  env: Env,
+  lockID: string,
+  deviceHash: string,
+  ip: string
+): Promise<boolean> {
+  try {
+    await env.DB.prepare(
+      `INSERT INTO auth_attempts (id, phone, action, ip, success, created_at)
+       VALUES (?, ?, 'register_device', ?, 1, ?)`
+    )
+      .bind(lockID, deviceHash, ip, nowISO())
+      .run();
+    return true;
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function releaseDeviceRegistrationLock(env: Env, lockID: string): Promise<void> {
+  await env.DB.prepare(
+    `DELETE FROM auth_attempts
+     WHERE id = ?
+       AND action = 'register_device'`
+  )
+    .bind(lockID)
+    .run();
+}
+
+async function makeAccountDeviceBindingID(env: Env, account: string): Promise<string> {
+  const accountHash = await sha256Hex(`account-device-bind:${account}:${env.AUTH_PEPPER}`);
+  return `account-device-bind:${accountHash}`;
+}
+
+async function ensureAccountDeviceBinding(
+  env: Env,
+  account: string,
+  deviceHash: string
+): Promise<boolean> {
+  const bindingID = await makeAccountDeviceBindingID(env, account);
+  try {
+    await env.DB.prepare(
+      `INSERT INTO auth_attempts (id, phone, action, ip, success, created_at)
+       VALUES (?, ?, 'account_device_bind', ?, 1, ?)`
+    )
+      .bind(bindingID, account, deviceHash, nowISO())
+      .run();
+    return true;
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) {
+      throw error;
+    }
+  }
+
+  const row = await env.DB.prepare(
+    `SELECT ip
+     FROM auth_attempts
+     WHERE id = ?
+       AND action = 'account_device_bind'
+       AND success = 1
+     LIMIT 1`
+  )
+    .bind(bindingID)
+    .first<{ ip: string | null }>();
+
+  const boundDeviceHash = (row?.ip || "").trim();
+  return !!boundDeviceHash && boundDeviceHash === deviceHash;
 }
 
 async function createSession(
@@ -545,6 +635,7 @@ export default {
             googleLoginEnabled: !!(env.GOOGLE_CLIENT_ID || "").trim(),
             appleLoginEnabled: true,
             appleAudienceEnforced: parseAppleAllowedAudiences(env).length > 0,
+            accountDeviceBindingEnabled: true,
           },
         });
       }
@@ -558,10 +649,16 @@ export default {
         const account = normalizeAccount(body.phone ?? body.account);
         const password = typeof body.password === "string" ? body.password : "";
         const ip = getClientIP(request);
+        const deviceInstallID = normalizeDeviceInstallID(request.headers.get("x-device-install-id"));
 
         if (!isRegistrationOpen(env)) {
           await recordRegisterAttempt(env, account || "unknown", ip, false);
           return errorResponse("当前已关闭公开注册。", 403);
+        }
+
+        if (!isDeviceInstallIDValid(deviceInstallID)) {
+          await recordRegisterAttempt(env, account || "unknown", ip, false);
+          return errorResponse("当前设备注册标识无效，请更新到最新版后重试。", 400);
         }
 
         if (!isAccountValid(account)) {
@@ -586,62 +683,89 @@ export default {
           }
         }
 
-        const registerThrottleMessage = await getRegisterThrottleMessage(env, account, ip);
-        if (registerThrottleMessage) {
+        const deviceHash = await hashDeviceInstallIDForRegistration(env, deviceInstallID);
+        const deviceLockID = makeDeviceRegistrationLockID(deviceHash);
+        const lockAcquired = await tryAcquireDeviceRegistrationLock(env, deviceLockID, deviceHash, ip);
+        if (!lockAcquired) {
           await recordRegisterAttempt(env, account, ip, false);
-          return errorResponse(registerThrottleMessage, 429);
+          return errorResponse("该设备已注册过账号，请直接登录已有账号。", 403);
         }
 
-        const userExists = await env.DB.prepare("SELECT id FROM users WHERE phone = ? LIMIT 1")
-          .bind(account)
-          .first();
-        if (userExists) {
-          await recordRegisterAttempt(env, account, ip, false);
-          return errorResponse("该账号已注册，请直接登录。");
-        }
-
-        const userId = crypto.randomUUID();
-        const createdAt = nowISO();
-        const passwordSalt = randomToken(16);
-        const passwordHash = await pbkdf2Hex(password, passwordSalt, PASSWORD_PBKDF2_ITERATIONS);
-
+        let shouldReleaseDeviceLock = true;
         try {
-          await env.DB.prepare(
-            `INSERT INTO users (id, phone, password_hash, password_salt, password_iterations, created_at)
-             VALUES (?, ?, ?, ?, ?, ?)`
-          )
-            .bind(userId, account, passwordHash, passwordSalt, PASSWORD_PBKDF2_ITERATIONS, createdAt)
-            .run();
-        } catch (error) {
-          if (isUniqueConstraintError(error)) {
+          const registerThrottleMessage = await getRegisterThrottleMessage(env, account, ip);
+          if (registerThrottleMessage) {
+            await recordRegisterAttempt(env, account, ip, false);
+            return errorResponse(registerThrottleMessage, 429);
+          }
+
+          const userExists = await env.DB.prepare("SELECT id FROM users WHERE phone = ? LIMIT 1")
+            .bind(account)
+            .first();
+          if (userExists) {
             await recordRegisterAttempt(env, account, ip, false);
             return errorResponse("该账号已注册，请直接登录。");
           }
-          throw error;
-        }
 
-        await recordRegisterAttempt(env, account, ip, true);
-        const session = await createSession(env, { id: userId, account });
-        return ok({
-          message: "注册成功",
-          data: {
-            ...session,
-            user: {
-              ...session.user,
-              createdAt,
+          const userId = crypto.randomUUID();
+          const createdAt = nowISO();
+          const passwordSalt = randomToken(16);
+          const passwordHash = await pbkdf2Hex(password, passwordSalt, PASSWORD_PBKDF2_ITERATIONS);
+
+          try {
+            await env.DB.prepare(
+              `INSERT INTO users (id, phone, password_hash, password_salt, password_iterations, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)`
+            )
+              .bind(userId, account, passwordHash, passwordSalt, PASSWORD_PBKDF2_ITERATIONS, createdAt)
+              .run();
+          } catch (error) {
+            if (isUniqueConstraintError(error)) {
+              await recordRegisterAttempt(env, account, ip, false);
+              return errorResponse("该账号已注册，请直接登录。");
+            }
+            throw error;
+          }
+
+          shouldReleaseDeviceLock = false;
+          const canBindDevice = await ensureAccountDeviceBinding(env, account, deviceHash);
+          if (!canBindDevice) {
+            await recordRegisterAttempt(env, account, ip, false);
+            return errorResponse("该账号已绑定其他设备，无法在当前设备完成注册。", 403);
+          }
+
+          await recordRegisterAttempt(env, account, ip, true);
+          const session = await createSession(env, { id: userId, account });
+          return ok({
+            message: "注册成功",
+            data: {
+              ...session,
+              user: {
+                ...session.user,
+                createdAt,
+              },
             },
-          },
-        });
+          });
+        } finally {
+          if (shouldReleaseDeviceLock) {
+            await releaseDeviceRegistrationLock(env, deviceLockID);
+          }
+        }
       }
 
       if (request.method === "POST" && path === "/auth/google") {
         const body = await parseJSON(request);
         const idToken = typeof body.idToken === "string" ? body.idToken.trim() : "";
         const ip = getClientIP(request);
+        const deviceInstallID = normalizeDeviceInstallID(request.headers.get("x-device-install-id"));
 
         if (!idToken || idToken.length > 4096) {
           await recordGoogleLoginAttempt(env, "google:unknown", ip, false);
           return errorResponse("缺少有效的 Google idToken。", 400);
+        }
+        if (!isDeviceInstallIDValid(deviceInstallID)) {
+          await recordGoogleLoginAttempt(env, "google:unknown", ip, false);
+          return errorResponse("当前设备标识无效，请更新到最新版后重试。", 400);
         }
 
         let tokenInfo: GoogleTokenInfo;
@@ -657,6 +781,7 @@ export default {
         const email = (tokenInfo.email || "").trim().toLowerCase();
         const account = `google:${subject}`;
         const createdAt = nowISO();
+        const deviceHash = await hashDeviceInstallIDForRegistration(env, deviceInstallID);
 
         let user = await env.DB.prepare(
           `SELECT id, created_at
@@ -714,6 +839,12 @@ export default {
           return errorResponse("Google 账号绑定失败，请稍后重试。", 500);
         }
 
+        const canBindDevice = await ensureAccountDeviceBinding(env, account, deviceHash);
+        if (!canBindDevice) {
+          await recordGoogleLoginAttempt(env, account, ip, false);
+          return errorResponse("该账号已绑定其他设备，无法在当前设备登录。", 403);
+        }
+
         await recordGoogleLoginAttempt(env, account, ip, true);
         const session = await createSession(env, { id: user.id, account });
         return ok({
@@ -733,10 +864,15 @@ export default {
         const body = await parseJSON(request);
         const idToken = typeof body.idToken === "string" ? body.idToken.trim() : "";
         const ip = getClientIP(request);
+        const deviceInstallID = normalizeDeviceInstallID(request.headers.get("x-device-install-id"));
 
         if (!idToken || idToken.length > 4096) {
           await recordAppleLoginAttempt(env, "apple:unknown", ip, false);
           return errorResponse("缺少有效的 Apple idToken。", 400);
+        }
+        if (!isDeviceInstallIDValid(deviceInstallID)) {
+          await recordAppleLoginAttempt(env, "apple:unknown", ip, false);
+          return errorResponse("当前设备标识无效，请更新到最新版后重试。", 400);
         }
 
         let tokenInfo: AppleTokenPayload;
@@ -752,6 +888,7 @@ export default {
         const account = `apple:${subject}`;
         const createdAt = nowISO();
         const tokenEmail = (tokenInfo.email || "").trim().toLowerCase();
+        const deviceHash = await hashDeviceInstallIDForRegistration(env, deviceInstallID);
 
         let user = await env.DB.prepare(
           `SELECT id, created_at
@@ -809,6 +946,12 @@ export default {
           return errorResponse("Apple 账号绑定失败，请稍后重试。", 500);
         }
 
+        const canBindDevice = await ensureAccountDeviceBinding(env, account, deviceHash);
+        if (!canBindDevice) {
+          await recordAppleLoginAttempt(env, account, ip, false);
+          return errorResponse("该账号已绑定其他设备，无法在当前设备登录。", 403);
+        }
+
         await recordAppleLoginAttempt(env, account, ip, true);
         const session = await createSession(env, { id: user.id, account });
         return ok({
@@ -829,12 +972,22 @@ export default {
         const account = normalizeAccount(body.phone ?? body.account);
         const password = typeof body.password === "string" ? body.password : "";
         const ip = getClientIP(request);
+        const deviceInstallID = normalizeDeviceInstallID(request.headers.get("x-device-install-id"));
 
         if (!isAccountValid(account)) return errorResponse("账号格式无效。");
         if (!isPasswordValid(password)) return errorResponse("密码至少 6 位。");
+        if (!isDeviceInstallIDValid(deviceInstallID)) {
+          return errorResponse("当前设备标识无效，请更新到最新版后重试。", 400);
+        }
+        const deviceHash = await hashDeviceInstallIDForRegistration(env, deviceInstallID);
 
         if (account === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
           const admin = await ensureAdminUser(env);
+          const canBindDevice = await ensureAccountDeviceBinding(env, account, deviceHash);
+          if (!canBindDevice) {
+            await recordLoginAttempt(env, account, ip, false);
+            return errorResponse("该账号已绑定其他设备，无法在当前设备登录。", 403);
+          }
           await recordLoginAttempt(env, account, ip, true);
           const session = await createSession(env, { id: admin.id, account });
           return ok({
@@ -878,6 +1031,12 @@ export default {
         if (hash !== user.password_hash) {
           await recordLoginAttempt(env, account, ip, false);
           return errorResponse("账号或密码错误。", 401);
+        }
+
+        const canBindDevice = await ensureAccountDeviceBinding(env, account, deviceHash);
+        if (!canBindDevice) {
+          await recordLoginAttempt(env, account, ip, false);
+          return errorResponse("该账号已绑定其他设备，无法在当前设备登录。", 403);
         }
 
         await recordLoginAttempt(env, account, ip, true);
