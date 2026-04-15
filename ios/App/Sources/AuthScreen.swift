@@ -400,21 +400,37 @@ private struct LoopTypewriterText: View {
 
         return TimelineView(.animation(minimumInterval: 1.0 / 28.0, paused: false)) { timeline in
             let t = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: cycle)
-            let visibleCount: Int
-
-            if t < holdAtStart {
-                visibleCount = 0
-            } else if t < holdAtStart + typeDuration {
-                let progress = (t - holdAtStart) / typeDuration
-                visibleCount = min(count, max(0, Int(progress * Double(count))))
-            } else if t < holdAtStart + typeDuration + holdAtEnd {
-                visibleCount = count
-            } else {
-                let eraseProgress = (t - holdAtStart - typeDuration - holdAtEnd) / eraseDuration
-                visibleCount = max(0, min(count, count - Int(eraseProgress * Double(count))))
-            }
-
+            let visibleCount = visibleCharacterCount(
+                at: t,
+                count: count,
+                holdAtStart: holdAtStart,
+                typeDuration: typeDuration,
+                holdAtEnd: holdAtEnd,
+                eraseDuration: eraseDuration
+            )
             Text(String(chars.prefix(visibleCount)))
         }
+    }
+
+    private func visibleCharacterCount(
+        at time: Double,
+        count: Int,
+        holdAtStart: Double,
+        typeDuration: Double,
+        holdAtEnd: Double,
+        eraseDuration: Double
+    ) -> Int {
+        if time < holdAtStart {
+            return 0
+        }
+        if time < holdAtStart + typeDuration {
+            let progress = (time - holdAtStart) / typeDuration
+            return min(count, max(0, Int(progress * Double(count))))
+        }
+        if time < holdAtStart + typeDuration + holdAtEnd {
+            return count
+        }
+        let eraseProgress = (time - holdAtStart - typeDuration - holdAtEnd) / eraseDuration
+        return max(0, min(count, count - Int(eraseProgress * Double(count))))
     }
 }
