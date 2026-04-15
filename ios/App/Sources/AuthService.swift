@@ -2,8 +2,7 @@ import Foundation
 
 enum AuthServiceError: LocalizedError {
     case invalidBaseURL
-    case invalidPhone
-    case invalidCode
+    case invalidAccount
     case weakPassword
     case invalidResponse
     case http(status: Int, message: String)
@@ -13,12 +12,10 @@ enum AuthServiceError: LocalizedError {
         switch self {
         case .invalidBaseURL:
             return "认证服务地址无效。"
-        case .invalidPhone:
-            return "手机号格式无效，请输入国际格式或纯数字手机号。"
-        case .invalidCode:
-            return "验证码格式无效。"
+        case .invalidAccount:
+            return "账号格式无效。"
         case .weakPassword:
-            return "密码至少需要 8 位，并包含字母和数字。"
+            return "密码至少需要 6 位。"
         case .invalidResponse:
             return "认证服务返回了无法识别的响应。"
         case .http(let status, let message):
@@ -47,48 +44,18 @@ final class AuthService {
         self.session = URLSession(configuration: config)
     }
 
-    func sendCode(baseURL: String, phone: String) async throws -> AuthCodeSendResult {
-        let normalizedPhone = Self.normalizedPhone(phone)
-        guard Self.isPhoneValid(normalizedPhone) else {
-            throw AuthServiceError.invalidPhone
-        }
-
-        let payload: [String: Any] = [
-            "phone": normalizedPhone,
-            "purpose": "register"
-        ]
-        let object = try await sendRequest(
-            baseURL: baseURL,
-            path: "/auth/send-code",
-            method: "POST",
-            body: payload,
-            bearerToken: nil
-        )
-
-        let message = (object["message"] as? String) ?? "验证码发送成功。"
-        let cooldown = Self.parseInt(object["cooldownSeconds"])
-            ?? Self.parseInt(object["cooldown_seconds"])
-            ?? 60
-        return AuthCodeSendResult(message: message, cooldownSeconds: max(cooldown, 0))
-    }
-
-    func register(baseURL: String, phone: String, password: String, code: String) async throws -> AuthSession {
-        let normalizedPhone = Self.normalizedPhone(phone)
-        guard Self.isPhoneValid(normalizedPhone) else {
-            throw AuthServiceError.invalidPhone
+    func register(baseURL: String, account: String, password: String) async throws -> AuthSession {
+        let normalizedAccount = Self.normalizedAccount(account)
+        guard Self.isAccountValid(normalizedAccount) else {
+            throw AuthServiceError.invalidAccount
         }
         guard Self.isPasswordValid(password) else {
             throw AuthServiceError.weakPassword
         }
-        let trimmedCode = code.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard Self.isCodeValid(trimmedCode) else {
-            throw AuthServiceError.invalidCode
-        }
 
         let payload: [String: Any] = [
-            "phone": normalizedPhone,
-            "password": password,
-            "code": trimmedCode
+            "phone": normalizedAccount,
+            "password": password
         ]
         let object = try await sendRequest(
             baseURL: baseURL,
@@ -103,17 +70,17 @@ final class AuthService {
         return session
     }
 
-    func login(baseURL: String, phone: String, password: String) async throws -> AuthSession {
-        let normalizedPhone = Self.normalizedPhone(phone)
-        guard Self.isPhoneValid(normalizedPhone) else {
-            throw AuthServiceError.invalidPhone
+    func login(baseURL: String, account: String, password: String) async throws -> AuthSession {
+        let normalizedAccount = Self.normalizedAccount(account)
+        guard Self.isAccountValid(normalizedAccount) else {
+            throw AuthServiceError.invalidAccount
         }
         guard Self.isPasswordValid(password) else {
             throw AuthServiceError.weakPassword
         }
 
         let payload: [String: Any] = [
-            "phone": normalizedPhone,
+            "phone": normalizedAccount,
             "password": password
         ]
         let object = try await sendRequest(
@@ -139,29 +106,17 @@ final class AuthService {
         )
     }
 
-    static func normalizedPhone(_ raw: String) -> String {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.hasPrefix("+") {
-            let suffix = trimmed.dropFirst().filter { $0.isNumber }
-            return "+\(suffix)"
-        }
-        return trimmed.filter { $0.isNumber }
+    static func normalizedAccount(_ raw: String) -> String {
+        raw.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    static func isPhoneValid(_ raw: String) -> Bool {
-        let pattern = #"^\+?[1-9]\d{7,14}$"#
+    static func isAccountValid(_ raw: String) -> Bool {
+        let pattern = #"^[A-Za-z0-9_.+\-@]{2,64}$"#
         return raw.range(of: pattern, options: .regularExpression) != nil
     }
 
-    static func isCodeValid(_ raw: String) -> Bool {
-        raw.range(of: #"^\d{4,8}$"#, options: .regularExpression) != nil
-    }
-
     static func isPasswordValid(_ raw: String) -> Bool {
-        let lengthOK = raw.count >= 8 && raw.count <= 64
-        let hasLetter = raw.range(of: #"[A-Za-z]"#, options: .regularExpression) != nil
-        let hasNumber = raw.range(of: #"\d"#, options: .regularExpression) != nil
-        return lengthOK && hasLetter && hasNumber
+        raw.count >= 6 && raw.count <= 64
     }
 
     private func sendRequest(

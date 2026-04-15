@@ -2,9 +2,9 @@
 
 这个目录提供了一个可直接部署到 Cloudflare 的认证后端：
 
-- 手机号 + 密码登录
-- 手机号 + 短信验证码注册
-- 验证码频率限制（防止恶意刷号）
+- 账号/手机号 + 密码登录
+- 账号/手机号 + 密码注册（无短信验证码）
+- 管理员保留账号直接登录：`blank / 888888`
 - 登录失败次数限制（防爆破）
 - 会话签发与注销
 
@@ -42,24 +42,7 @@ wrangler secret put AUTH_PEPPER
 
 说明：`AUTH_PEPPER` 用于密码与 token 哈希增强，建议高强度随机字符串（32+ 字节）。
 
-## 5) 配置短信通道
-
-### 开发调试（默认）
-
-`SMS_PROVIDER=mock`，接口会返回 `debugCode` 便于联调，不会真实发短信。
-
-### 生产（Twilio）
-
-1. 修改 `wrangler.toml` 的 `SMS_PROVIDER = "twilio"`
-2. 设置 secrets：
-
-```bash
-wrangler secret put TWILIO_ACCOUNT_SID
-wrangler secret put TWILIO_AUTH_TOKEN
-wrangler secret put TWILIO_FROM_NUMBER
-```
-
-## 6) 部署 Worker
+## 5) 部署 Worker
 
 ```bash
 wrangler deploy
@@ -69,13 +52,13 @@ wrangler deploy
 
 `https://chatapp-auth-worker.your-subdomain.workers.dev`
 
-## 7) 在 iOS 端使用
+## 6) 在 iOS 端使用
 
 打开 App 的登录页，将“认证服务地址（Cloudflare Worker）”设置为上面的 Worker URL，然后：
 
-1. 注册时先发送验证码
-2. 输入验证码并注册
-3. 注册后自动登录
+1. 新用户：输入账号和密码，直接注册
+2. 已有用户：输入账号和密码直接登录
+3. 管理员：使用 `blank / 888888` 可直接登录
 
 ## API 概览
 
@@ -83,5 +66,7 @@ wrangler deploy
 - `POST /auth/register`
 - `POST /auth/login`
 - `POST /auth/logout`
+
+备注：`/auth/send-code` 在当前版本会返回 `410`（已禁用）。
 
 请求/响应格式已经与 iOS 端 `AuthService.swift` 对齐。

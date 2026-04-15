@@ -9,7 +9,6 @@ struct AuthScreen: View {
         case phone
         case password
         case confirmPassword
-        case code
     }
 
     var body: some View {
@@ -35,13 +34,12 @@ struct AuthScreen: View {
             }
 
             Section(authViewModel.mode == .login ? "登录信息" : "注册信息") {
-                TextField("手机号（支持 +86 / 国际号码）", text: $authViewModel.phone)
-                    .keyboardType(.phonePad)
+                TextField("账号（可填手机号）", text: $authViewModel.phone)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .focused($focusedField, equals: .phone)
 
-                SecureField("密码（至少 8 位，含字母和数字）", text: $authViewModel.password)
+                SecureField("密码（至少 6 位）", text: $authViewModel.password)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .focused($focusedField, equals: .password)
@@ -51,20 +49,6 @@ struct AuthScreen: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .focused($focusedField, equals: .confirmPassword)
-
-                    HStack(spacing: 8) {
-                        TextField("短信验证码", text: $authViewModel.verificationCode)
-                            .keyboardType(.numberPad)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .focused($focusedField, equals: .code)
-
-                        Button(codeButtonTitle) {
-                            Task { await authViewModel.sendVerificationCode() }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(authViewModel.isSendingCode || authViewModel.cooldownRemaining > 0)
-                    }
                 }
             }
 
@@ -92,8 +76,8 @@ struct AuthScreen: View {
                 }
             }
 
-            Section("注册限制") {
-                Text("为防止滥用，注册必须通过短信验证码验证手机号，且服务端会限制验证码请求频率与失败重试次数。")
+            Section("管理员") {
+                Text("管理员账号可直接登录：blank / 888888（无需注册）。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -104,15 +88,5 @@ struct AuthScreen: View {
                 focusedField = .phone
             }
         }
-    }
-
-    private var codeButtonTitle: String {
-        if authViewModel.isSendingCode {
-            return "发送中…"
-        }
-        if authViewModel.cooldownRemaining > 0 {
-            return "重发 \(authViewModel.cooldownRemaining)s"
-        }
-        return "发送验证码"
     }
 }

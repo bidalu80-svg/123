@@ -178,7 +178,7 @@ struct SettingsScreen: View {
 
             Section("账号") {
                 statusRow("登录状态", value: authViewModel.isAuthenticated ? "已登录" : "未登录")
-                statusRow("手机号", value: authViewModel.currentUserPhone)
+                statusRow("当前账号", value: authViewModel.currentUserPhone)
 
                 if authViewModel.isAuthenticated {
                     Button("退出登录", role: .destructive) {
