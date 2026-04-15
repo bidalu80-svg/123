@@ -38,10 +38,6 @@ final class AuthViewModel: ObservableObject {
         guard !endpoint.isEmpty, AuthService.isAccountValid(normalizedAccount), AuthService.isPasswordValid(password) else {
             return false
         }
-
-        if mode == .register {
-            guard password == confirmPassword else { return false }
-        }
         return true
     }
 
@@ -71,11 +67,6 @@ final class AuthViewModel: ObservableObject {
             return
         }
 
-        if mode == .register, password != confirmPassword {
-            errorMessage = "两次输入的密码不一致。"
-            return
-        }
-
         errorMessage = ""
         isSubmitting = true
         defer { isSubmitting = false }
@@ -101,6 +92,14 @@ final class AuthViewModel: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    func submit(as mode: AuthMode) async {
+        self.mode = mode
+        if mode == .register {
+            confirmPassword = password
+        }
+        await submit()
     }
 
     func logout() async {
