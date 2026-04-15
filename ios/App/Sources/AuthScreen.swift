@@ -2,12 +2,6 @@ import SwiftUI
 
 struct AuthScreen: View {
     @EnvironmentObject private var authViewModel: AuthViewModel
-    @FocusState private var focusedField: Field?
-
-    enum Field {
-        case account
-        case password
-    }
 
     var body: some View {
         GeometryReader { proxy in
@@ -57,41 +51,15 @@ struct AuthScreen: View {
 
     private var authPanel: some View {
         VStack(spacing: 11) {
-            credentialField(icon: "person.crop.circle.fill", placeholder: "账号（可填手机号）", text: $authViewModel.phone)
-                .focused($focusedField, equals: .account)
-
-            secureCredentialField(icon: "lock.fill", placeholder: "密码（至少 6 位）", text: $authViewModel.password)
-                .focused($focusedField, equals: .password)
-
             VStack(spacing: 12) {
-                capsuleActionButton(
-                    title: authViewModel.isSubmitting && authViewModel.mode == .login ? "登录中…" : "登录使用",
-                    systemIcon: "person.fill",
-                    highlighted: true
-                ) {
-                    Task { await authViewModel.submit(as: .login) }
-                }
-                .disabled(!authViewModel.canSubmit || authViewModel.isSubmitting)
-
                 capsuleActionButton(
                     title: authViewModel.isSubmitting ? "Apple 登录中…" : "Apple ID 登录",
                     systemIcon: "apple.logo",
-                    highlighted: false
+                    highlighted: true
                 ) {
                     Task { await authViewModel.submitAppleSignIn() }
                 }
                 .disabled(!authViewModel.hasAuthEndpoint || authViewModel.isSubmitting)
-
-                if authViewModel.canUseGoogleSignIn {
-                    capsuleActionButton(
-                        title: authViewModel.isSubmitting ? "Google 登录中…" : "Google 账号登录",
-                        systemIcon: "globe",
-                        highlighted: false
-                    ) {
-                        Task { await authViewModel.submitGoogleSignIn() }
-                    }
-                    .disabled(!authViewModel.hasAuthEndpoint || authViewModel.isSubmitting)
-                }
             }
             .padding(.top, 4)
 
@@ -113,7 +81,7 @@ struct AuthScreen: View {
 
             VStack(spacing: 5) {
                 Text("IEXA 为你提供简洁高效的智能助手体验")
-                Text("支持聊天、图像与代码能力，登录后即可开始使用")
+                Text("使用 Apple ID 一键登录，立即开始使用")
             }
             .font(.system(size: 13, weight: .medium))
             .foregroundStyle(.white.opacity(0.56))
@@ -145,56 +113,6 @@ struct AuthScreen: View {
                 .blur(radius: 6)
                 .opacity(0.5)
         }
-    }
-
-    private func credentialField(icon: String, placeholder: String, text: Binding<String>) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: icon)
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(.white.opacity(0.8))
-                .frame(width: 24)
-
-            TextField(placeholder, text: text)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(.white.opacity(0.94))
-        }
-        .padding(.horizontal, 14)
-        .frame(height: 46)
-        .background(
-            RoundedRectangle(cornerRadius: 17, style: .continuous)
-                .fill(Color.white.opacity(0.11))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 17, style: .continuous)
-                        .stroke(Color.white.opacity(0.1), lineWidth: 1)
-                )
-        )
-    }
-
-    private func secureCredentialField(icon: String, placeholder: String, text: Binding<String>) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: icon)
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(.white.opacity(0.8))
-                .frame(width: 24)
-
-            SecureField(placeholder, text: text)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(.white.opacity(0.94))
-        }
-        .padding(.horizontal, 14)
-        .frame(height: 46)
-        .background(
-            RoundedRectangle(cornerRadius: 17, style: .continuous)
-                .fill(Color.white.opacity(0.11))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 17, style: .continuous)
-                        .stroke(Color.white.opacity(0.1), lineWidth: 1)
-                )
-        )
     }
 
     private func capsuleActionButton(
