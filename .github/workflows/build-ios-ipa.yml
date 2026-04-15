@@ -116,6 +116,12 @@ jobs:
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
           PROFILE_PLIST="$(security cms -D -i "$PROFILE_PATH")"
           UUID=$(/usr/libexec/PlistBuddy -c 'Print UUID' /dev/stdin <<< "$PROFILE_PLIST")
+          APPLE_SIGNIN_ENTITLEMENT=$(/usr/libexec/PlistBuddy -c 'Print Entitlements:com.apple.developer.applesignin:0' /dev/stdin <<< "$PROFILE_PLIST" 2>/dev/null || true)
+          if [ -z "${APPLE_SIGNIN_ENTITLEMENT:-}" ]; then
+            echo "::warning::Provisioning profile does not include 'Sign In with Apple' entitlement. Apple ID login may fail at runtime (ASAuthorizationError 1000)."
+          else
+            echo "APPLE_SIGNIN_ENTITLEMENT=$APPLE_SIGNIN_ENTITLEMENT" >> $GITHUB_ENV
+          fi
           cp "$PROFILE_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
           echo "PROFILE_UUID=$UUID" >> $GITHUB_ENV
           # Auto-detect export method from profile when IOS_EXPORT_METHOD secret is not configured.

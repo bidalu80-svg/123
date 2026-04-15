@@ -308,11 +308,51 @@ extension AppleSignInCoordinator: ASAuthorizationControllerDelegate {
     }
 
     func authorizationController(controller: ASAuthorizationController, didCompleteWithError error: Error) {
-        if let authError = error as? ASAuthorizationError, authError.code == .canceled {
-            continuation?.resume(throwing: AppleSignInError.cancelled)
+        if let authError = error as? ASAuthorizationError {
+            let mappedError: Error
+            switch authError.code {
+            case .canceled:
+                mappedError = AppleSignInError.cancelled
+            case .unknown:
+                mappedError = NSError(
+                    domain: "AppleSignIn",
+                    code: Int(authError.code.rawValue),
+                    userInfo: [
+                        NSLocalizedDescriptionKey: """
+                        Apple 登录初始化失败（错误 1000）。
+                        请确认：
+                        1) Apple Developer 的 App ID 已开启 Sign in with Apple；
+                        2) 当前 Provisioning Profile 已重新生成并包含该能力；
+                        3) App 使用了包含此能力的签名重新安装。
+                        """
+                    ]
+                )
+            case .notHandled:
+                mappedError = NSError(
+                    domain: "AppleSignIn",
+                    code: Int(authError.code.rawValue),
+                    userInfo: [NSLocalizedDescriptionKey: "Apple 登录请求未被系统处理，请稍后重试。"]
+                )
+            case .invalidResponse:
+                mappedError = NSError(
+                    domain: "AppleSignIn",
+                    code: Int(authError.code.rawValue),
+                    userInfo: [NSLocalizedDescriptionKey: "Apple 登录返回无效响应，请稍后重试。"]
+                )
+            case .failed:
+                mappedError = NSError(
+                    domain: "AppleSignIn",
+                    code: Int(authError.code.rawValue),
+                    userInfo: [NSLocalizedDescriptionKey: "Apple 登录失败，请稍后重试。"]
+                )
+            @unknown default:
+                mappedError = authError
+            }
+            continuation?.resume(throwing: mappedError)
             continuation = nil
             return
         }
+
         continuation?.resume(throwing: error)
         continuation = nil
     }
