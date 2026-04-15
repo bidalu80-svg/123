@@ -112,9 +112,35 @@ jobs:
       - name: Install provisioning profile
         run: |
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-          UUID=$(/usr/libexec/PlistBuddy -c 'Print UUID' /dev/stdin <<< "$(security cms -D -i "$PROFILE_PATH")")
+          PROFILE_PLIST="$(security cms -D -i "$PROFILE_PATH")"
+          UUID=$(/usr/libexec/PlistBuddy -c 'Print UUID' /dev/stdin <<< "$PROFILE_PLIST")
           cp "$PROFILE_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
           echo "PROFILE_UUID=$UUID" >> $GITHUB_ENV
+          # Auto-detect export method from profile when IOS_EXPORT_METHOD secret is not configured.
+          if [ -z "${IOS_EXPORT_METHOD:-}" ]; then
+            GET_TASK_ALLOW=$(/usr/libexec/PlistBuddy -c 'Print Entitlements:get-task-allow' /dev/stdin <<< "$PROFILE_PLIST" 2>/dev/null || echo "false")
+            PROVISIONS_ALL_DEVICES=$(/usr/libexec/PlistBuddy -c 'Print ProvisionsAllDevices' /dev/stdin <<< "$PROFILE_PLIST" 2>/dev/null || echo "false")
+            if /usr/libexec/PlistBuddy -c 'Print ProvisionedDevices:0' /dev/stdin <<< "$PROFILE_PLIST" >/dev/null 2>&1; then
+              HAS_PROVISIONED_DEVICES=true
+            else
+              HAS_PROVISIONED_DEVICES=false
+            fi
+
+            if [ "$GET_TASK_ALLOW" = "true" ]; then
+              DETECTED_EXPORT_METHOD="development"
+            elif [ "$PROVISIONS_ALL_DEVICES" = "true" ]; then
+              DETECTED_EXPORT_METHOD="enterprise"
+            elif [ "$HAS_PROVISIONED_DEVICES" = "true" ]; then
+              # "ad-hoc" is deprecated in Xcode 16+, prefer release-testing.
+              DETECTED_EXPORT_METHOD="release-testing"
+            else
+              DETECTED_EXPORT_METHOD="app-store-connect"
+            fi
+
+            echo "IOS_EFFECTIVE_EXPORT_METHOD=$DETECTED_EXPORT_METHOD" >> $GITHUB_ENV
+          else
+            echo "IOS_EFFECTIVE_EXPORT_METHOD=$IOS_EXPORT_METHOD" >> $GITHUB_ENV
+          fi
 
       - name: Generate Xcode project
         working-directory: ios
@@ -147,13 +173,14 @@ jobs:
       - name: Create export options
         working-directory: ios
         run: |
+          EFFECTIVE_EXPORT_METHOD="${IOS_EFFECTIVE_EXPORT_METHOD:-${IOS_EXPORT_METHOD:-release-testing}}"
           cat > ExportOptions.plist <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
             <key>method</key>
-            <string>${IOS_EXPORT_METHOD:-ad-hoc}</string>
+            <string>${EFFECTIVE_EXPORT_METHOD}</string>
             <key>provisioningProfiles</key>
             <dict>
               <key>${IOS_BUNDLE_ID:-com.chatapp.ios}</key>
