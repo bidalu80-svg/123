@@ -2,8 +2,7 @@ import SwiftUI
 
 struct AboutScreen: View {
     private var appVersionText: String {
-        let shortVersion = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "1.0"
-        return "v\(shortVersion)"
+        "v1.0"
     }
 
     var body: some View {
