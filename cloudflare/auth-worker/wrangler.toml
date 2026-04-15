@@ -1,0 +1,11 @@
+name = "chatapp-auth-worker-v2"
+main = "src/index.ts"
+compatibility_date = "2026-04-15"
+
+[vars]
+SMS_PROVIDER = "mock"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "chatapp-auth"
+database_id = "1b359013-d792-4593-b2b8-ecc20160704a"

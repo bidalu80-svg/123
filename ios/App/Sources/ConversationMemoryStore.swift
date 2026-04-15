@@ -1,7 +1,32 @@
 import Foundation
 
+struct ConversationMemoryItem: Codable, Equatable, Identifiable {
+    var id: UUID
+    var text: String
+    var updatedAt: Date
+
+    init(id: UUID = UUID(), text: String, updatedAt: Date = Date()) {
+        self.id = id
+        self.text = text
+        self.updatedAt = updatedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case text
+        case updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        text = try container.decode(String.self, forKey: .text)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+    }
+}
+
 actor ConversationMemoryStore {
-    private struct MemoryEntry: Codable, Equatable {
+    private struct LegacyMemoryEntry: Codable, Equatable {
         var text: String
         var updatedAt: Date
     }
@@ -13,7 +38,7 @@ actor ConversationMemoryStore {
     private let maxContextItems: Int
 
     private var loaded = false
-    private var entries: [MemoryEntry] = []
+    private var entries: [ConversationMemoryItem] = []
 
     init(
         defaults: UserDefaults = .standard,
@@ -45,7 +70,7 @@ actor ConversationMemoryStore {
                 entries[index].updatedAt = Date()
                 changed = true
             } else {
-                entries.append(MemoryEntry(text: candidate, updatedAt: Date()))
+                entries.append(ConversationMemoryItem(text: candidate, updatedAt: Date()))
                 changed = true
             }
         }
@@ -80,15 +105,53 @@ actor ConversationMemoryStore {
         defaults.removeObject(forKey: storeKey)
     }
 
+    func listEntries() -> [ConversationMemoryItem] {
+        loadIfNeeded()
+        return entries.sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    func removeEntry(id: UUID) {
+        loadIfNeeded()
+        let before = entries.count
+        entries.removeAll { $0.id == id }
+        if entries.count != before {
+            persist()
+        }
+    }
+
+    func removeEntries(ids: [UUID]) {
+        loadIfNeeded()
+        let deleting = Set(ids)
+        guard !deleting.isEmpty else { return }
+        let before = entries.count
+        entries.removeAll { deleting.contains($0.id) }
+        if entries.count != before {
+            persist()
+        }
+    }
+
     private func loadIfNeeded() {
         guard !loaded else { return }
         loaded = true
-        guard let data = defaults.data(forKey: storeKey),
-              let decoded = try? JSONDecoder().decode([MemoryEntry].self, from: data) else {
+        guard let data = defaults.data(forKey: storeKey) else {
             entries = []
             return
         }
-        entries = decoded.sorted { $0.updatedAt > $1.updatedAt }
+
+        if let decoded = try? JSONDecoder().decode([ConversationMemoryItem].self, from: data) {
+            entries = deduplicatedEntries(decoded).sorted { $0.updatedAt > $1.updatedAt }
+            return
+        }
+
+        // Backward compatibility for historical storage format without stable IDs.
+        if let legacy = try? JSONDecoder().decode([LegacyMemoryEntry].self, from: data) {
+            entries = deduplicatedEntries(legacy.map { ConversationMemoryItem(text: $0.text, updatedAt: $0.updatedAt) })
+                .sorted { $0.updatedAt > $1.updatedAt }
+            persist()
+            return
+        }
+
+        entries = []
     }
 
     private func persist() {
@@ -179,5 +242,19 @@ actor ConversationMemoryStore {
             result.append(value)
         }
         return result
+    }
+
+    private func deduplicatedEntries(_ values: [ConversationMemoryItem]) -> [ConversationMemoryItem] {
+        var deduped: [String: ConversationMemoryItem] = [:]
+        for item in values {
+            let key = normalize(item.text)
+            guard !key.isEmpty else { continue }
+            if let old = deduped[key] {
+                deduped[key] = old.updatedAt >= item.updatedAt ? old : item
+            } else {
+                deduped[key] = item
+            }
+        }
+        return Array(deduped.values)
     }
 }

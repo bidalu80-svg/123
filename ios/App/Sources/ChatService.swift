@@ -645,6 +645,22 @@ final class ChatService {
         return models
     }
 
+    func loadMemoryEntries() async -> [ConversationMemoryItem] {
+        await memoryStore.listEntries()
+    }
+
+    func clearAllMemoryEntries() async {
+        await memoryStore.reset()
+    }
+
+    func removeMemoryEntry(id: UUID) async {
+        await memoryStore.removeEntry(id: id)
+    }
+
+    func removeMemoryEntries(ids: [UUID]) async {
+        await memoryStore.removeEntries(ids: ids)
+    }
+
     private func modelsText(_ models: [String]) -> String {
         guard !models.isEmpty else {
             return "当前接口没有返回可用模型。"

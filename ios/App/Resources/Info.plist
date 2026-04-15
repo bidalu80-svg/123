@@ -24,6 +24,8 @@
     <string>$(CHAT_API_URL)</string>
     <key>CHAT_MODEL</key>
     <string>$(CHAT_MODEL)</string>
+    <key>AUTH_API_URL</key>
+    <string>https://chatapp-auth-worker-v2.bidalu9.workers.dev</string>
     <key>NSPhotoLibraryUsageDescription</key>
     <string>用于从相册选择图片并发送给 IEXA。</string>
     <key>NSPhotoLibraryAddUsageDescription</key>

@@ -7,23 +7,48 @@ actor EmbeddedCPythonRuntime {
     private typealias PyIsInitializedFn = @convention(c) () -> Int32
     private typealias PyInitializeFn = @convention(c) () -> Void
     private typealias PyRunSimpleStringFn = @convention(c) (UnsafePointer<CChar>?) -> Int32
+    private typealias PyGILStateEnsureFn = @convention(c) () -> Int32
+    private typealias PyGILStateReleaseFn = @convention(c) (Int32) -> Void
 
     private var handle: UnsafeMutableRawPointer?
     private var pyIsInitialized: PyIsInitializedFn?
     private var pyInitialize: PyInitializeFn?
     private var pyRunSimpleString: PyRunSimpleStringFn?
+    private var pyGILStateEnsure: PyGILStateEnsureFn?
+    private var pyGILStateRelease: PyGILStateReleaseFn?
     private var prepared = false
     private var cachedStatusHint = "未检测到嵌入 CPython 运行时，当前使用兼容模式。"
+    private let runtimeQueue = DispatchQueue(label: "chatapp.embedded-python.runtime")
 
     func runIfAvailable(code: String, stdin: String?) -> PythonExecutionResult? {
-        guard prepareIfNeeded() else { return nil }
-        guard let pyRunSimpleString else {
+        runOnRuntimeQueue {
+            runIfAvailableLocked(code: code, stdin: stdin)
+        }
+    }
+
+    func statusHint() -> String {
+        runOnRuntimeQueue {
+            _ = prepareIfNeededLocked()
+            return cachedStatusHint
+        }
+    }
+
+    // CPython C API is thread-sensitive. We execute all embedded-runtime calls
+    // on one serial queue and acquire/release the GIL around each execution.
+    // This prevents thread-state mismatches that can surface on subsequent runs.
+    private func runOnRuntimeQueue<T>(_ block: () -> T) -> T {
+        runtimeQueue.sync(execute: block)
+    }
+
+    private func runIfAvailableLocked(code: String, stdin: String?) -> PythonExecutionResult? {
+        guard prepareIfNeededLocked() else { return nil }
+        guard let pyRunSimpleString, let pyGILStateEnsure, let pyGILStateRelease else {
             cachedStatusHint = "嵌入 CPython 已加载，但缺少运行入口符号。"
             return nil
         }
 
         do {
-            try ensureInitialized()
+            try ensureInitializedLocked()
 
             let outputURL = FileManager.default.temporaryDirectory
                 .appendingPathComponent("py-out-\(UUID().uuidString).txt")
@@ -41,7 +66,10 @@ actor EmbeddedCPythonRuntime {
                 exitPath: exitURL.path
             )
 
+            let gilState = pyGILStateEnsure()
             let rc = script.withCString { pyRunSimpleString($0) }
+            pyGILStateRelease(gilState)
+
             if rc != 0 {
                 return PythonExecutionResult(
                     output: "CPython 执行失败（初始化或脚本桥接失败，rc=\(rc)）。",
@@ -60,14 +88,12 @@ actor EmbeddedCPythonRuntime {
         }
     }
 
-    func statusHint() -> String {
-        _ = prepareIfNeeded()
-        return cachedStatusHint
-    }
-
-    private func prepareIfNeeded() -> Bool {
+    private func prepareIfNeededLocked() -> Bool {
         if prepared {
-            return handle != nil && pyRunSimpleString != nil
+            return handle != nil
+                && pyRunSimpleString != nil
+                && pyGILStateEnsure != nil
+                && pyGILStateRelease != nil
         }
         prepared = true
 
@@ -78,8 +104,14 @@ actor EmbeddedCPythonRuntime {
             pyIsInitialized = loadSymbol("Py_IsInitialized", as: PyIsInitializedFn.self)
             pyInitialize = loadSymbol("Py_Initialize", as: PyInitializeFn.self)
             pyRunSimpleString = loadSymbol("PyRun_SimpleString", as: PyRunSimpleStringFn.self)
+            pyGILStateEnsure = loadSymbol("PyGILState_Ensure", as: PyGILStateEnsureFn.self)
+            pyGILStateRelease = loadSymbol("PyGILState_Release", as: PyGILStateReleaseFn.self)
 
-            if pyIsInitialized != nil, pyInitialize != nil, pyRunSimpleString != nil {
+            if pyIsInitialized != nil,
+               pyInitialize != nil,
+               pyRunSimpleString != nil,
+               pyGILStateEnsure != nil,
+               pyGILStateRelease != nil {
                 cachedStatusHint = "已启用嵌入 CPython 运行时。"
                 configurePythonEnvironment()
                 return true
@@ -89,13 +121,15 @@ actor EmbeddedCPythonRuntime {
             pyIsInitialized = nil
             pyInitialize = nil
             pyRunSimpleString = nil
+            pyGILStateEnsure = nil
+            pyGILStateRelease = nil
         }
 
         cachedStatusHint = "未检测到嵌入 CPython（Python.framework 未集成到 App）。"
         return false
     }
 
-    private func ensureInitialized() throws {
+    private func ensureInitializedLocked() throws {
         guard let pyIsInitialized, let pyInitialize else {
             throw NSError(domain: "EmbeddedCPython", code: 1001, userInfo: [NSLocalizedDescriptionKey: "CPython 符号缺失"])
         }

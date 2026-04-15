@@ -3,6 +3,7 @@ import UIKit
 
 struct SettingsScreen: View {
     @EnvironmentObject private var viewModel: ChatViewModel
+    @EnvironmentObject private var authViewModel: AuthViewModel
 
     var body: some View {
         Form {
@@ -162,6 +163,27 @@ struct SettingsScreen: View {
 
                 Button("重置配置", role: .destructive) {
                     viewModel.resetConfig()
+                }
+            }
+
+            Section("应用") {
+                NavigationLink("记忆管理") {
+                    MemoryManagementScreen()
+                }
+
+                NavigationLink("关于 IEXA") {
+                    AboutScreen()
+                }
+            }
+
+            Section("账号") {
+                statusRow("登录状态", value: authViewModel.isAuthenticated ? "已登录" : "未登录")
+                statusRow("手机号", value: authViewModel.currentUserPhone)
+
+                if authViewModel.isAuthenticated {
+                    Button("退出登录", role: .destructive) {
+                        Task { await authViewModel.logout() }
+                    }
                 }
             }
 

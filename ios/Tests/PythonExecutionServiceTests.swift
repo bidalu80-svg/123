@@ -45,6 +45,18 @@ final class PythonExecutionServiceTests: XCTestCase {
         XCTAssertTrue(result.output.contains("IEXA"))
     }
 
+    func testRunPythonSequentialExecutionsRemainStable() async throws {
+        let service = PythonExecutionService()
+
+        let first = try await service.runPython(code: "print('first run')")
+        let second = try await service.runPython(code: "print('second run')")
+
+        XCTAssertEqual(first.exitCode, 0)
+        XCTAssertEqual(second.exitCode, 0)
+        XCTAssertEqual(first.output, "first run")
+        XCTAssertEqual(second.output, "second run")
+    }
+
     func testRunPythonRejectsEmptyCode() async {
         let service = PythonExecutionService()
 

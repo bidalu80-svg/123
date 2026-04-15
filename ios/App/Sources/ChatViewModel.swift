@@ -35,6 +35,8 @@ final class ChatViewModel: ObservableObject {
     @Published var isCurrentModelAvailable = false
     @Published var isShowingModelStatusRefresh = false
     @Published private(set) var hasValidatedModelList = false
+    @Published var memoryEntries: [ConversationMemoryItem] = []
+    @Published var isLoadingMemoryEntries = false
 
     private let service: ChatService
     private var autoSaveEnabled = false
@@ -68,6 +70,9 @@ final class ChatViewModel: ObservableObject {
         updateCurrentModelAvailability()
         autoSaveEnabled = true
         startNetworkMonitor()
+        Task {
+            await refreshMemoryEntries()
+        }
     }
 
     deinit {
@@ -403,6 +408,34 @@ final class ChatViewModel: ObservableObject {
         draftMessage = "请回复：stream ok"
         appendLog("流式测试：已写入测试消息。")
         await sendCurrentMessage()
+    }
+
+    func refreshMemoryEntries() async {
+        isLoadingMemoryEntries = true
+        defer { isLoadingMemoryEntries = false }
+        memoryEntries = await service.loadMemoryEntries()
+    }
+
+    func clearAllMemoryEntries() async {
+        await service.clearAllMemoryEntries()
+        memoryEntries = []
+        statusMessage = "已清空全部记忆"
+        appendLog("记忆管理：已清空全部跨会话记忆。")
+    }
+
+    func removeMemoryEntry(id: UUID) async {
+        await service.removeMemoryEntry(id: id)
+        memoryEntries.removeAll { $0.id == id }
+        statusMessage = "已删除记忆条目"
+        appendLog("记忆管理：已删除 1 条记忆。")
+    }
+
+    func removeMemoryEntries(ids: [UUID]) async {
+        await service.removeMemoryEntries(ids: ids)
+        let deleting = Set(ids)
+        memoryEntries.removeAll { deleting.contains($0.id) }
+        statusMessage = "已批量删除记忆条目"
+        appendLog("记忆管理：已批量删除 \(ids.count) 条记忆。")
     }
 
 
