@@ -78,15 +78,21 @@ struct AuthScreen: View {
     private var hero: some View {
         VStack(spacing: 8) {
             Text("IEXA")
-                .font(.system(size: 72, weight: .bold, design: .rounded))
+                .font(.custom("AvenirNext-Bold", size: 72))
+                .tracking(3.2)
                 .foregroundStyle(.white.opacity(0.96))
                 .shadow(color: .white.opacity(0.18), radius: 14, x: 0, y: 2)
 
-            Text("Understand the Universe_")
-                .font(.system(size: 22, weight: .regular, design: .monospaced))
-                .minimumScaleFactor(0.6)
-                .lineLimit(1)
-                .foregroundStyle(.white.opacity(0.78))
+            LoopTypewriterText(
+                fullText: "目前的你，尚未发掘_",
+                typingSpeed: 7.5,
+                holdAtEnd: 1.0,
+                holdAtStart: 0.35
+            )
+            .font(.system(size: 22, weight: .regular, design: .monospaced))
+            .minimumScaleFactor(0.6)
+            .lineLimit(1)
+            .foregroundStyle(.white.opacity(0.78))
         }
         .frame(maxWidth: .infinity)
     }
@@ -120,12 +126,6 @@ struct AuthScreen: View {
             }
             .padding(.top, 4)
 
-            Text("最近登录账号：\(authViewModel.phone.isEmpty ? "blank" : authViewModel.phone)")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.white.opacity(0.5))
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.top, 2)
-
             if !authViewModel.statusMessage.isEmpty {
                 Text(authViewModel.statusMessage)
                     .font(.system(size: 15, weight: .medium))
@@ -142,15 +142,14 @@ struct AuthScreen: View {
                     .padding(.horizontal, 4)
             }
 
-            Text("管理员账号由系统内部维护")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.white.opacity(0.56))
-                .padding(.top, 2)
-
-            Text("其他选项")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.72))
-                .padding(.top, 2)
+            VStack(spacing: 5) {
+                Text("IEXA 为你提供简洁高效的智能助手体验")
+                Text("支持聊天、图像与代码能力，登录后即可开始使用")
+            }
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(.white.opacity(0.56))
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.top, 4)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 14)
@@ -261,7 +260,11 @@ struct AuthScreen: View {
             )
             .overlay {
                 if highlighted {
-                    RotatingGoldCapsuleRing(lineWidth: 1.45, degreesPerSecond: 16)
+                    OrbitingCapsuleStroke(
+                        lineWidth: 1.45,
+                        cyclesPerSecond: 0.06,
+                        segmentFraction: 0.16
+                    )
                         .padding(-1.2)
                 }
             }
@@ -367,32 +370,93 @@ private struct GalaxyStarField: View {
     }
 }
 
-private struct RotatingGoldCapsuleRing: View {
+private struct OrbitingCapsuleStroke: View {
     let lineWidth: CGFloat
-    let degreesPerSecond: Double
+    let cyclesPerSecond: Double
+    let segmentFraction: Double
+
+    private let goldGradient = LinearGradient(
+        colors: [
+            Color(red: 0.99, green: 0.86, blue: 0.52),
+            Color(red: 0.94, green: 0.69, blue: 0.28),
+            Color(red: 0.79, green: 0.45, blue: 0.12)
+        ],
+        startPoint: .leading,
+        endPoint: .trailing
+    )
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { timeline in
             let elapsed = timeline.date.timeIntervalSinceReferenceDate
-            let angle = elapsed * degreesPerSecond
+            let start = wrapped(elapsed * cyclesPerSecond)
+            let end = start + max(0.02, min(segmentFraction, 0.35))
+            let style = StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round)
 
+            ZStack {
+                movingSegment(from: start, to: end, style: style)
+                    .blendMode(.plusLighter)
+                    .shadow(color: Color(red: 0.96, green: 0.72, blue: 0.28).opacity(0.45), radius: 3, x: 0, y: 0)
+
+                Capsule(style: .continuous)
+                    .stroke(Color(red: 0.86, green: 0.53, blue: 0.22).opacity(0.16), lineWidth: lineWidth * 0.72)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func movingSegment(from start: Double, to end: Double, style: StrokeStyle) -> some View {
+        if end <= 1 {
             Capsule(style: .continuous)
-                .stroke(
-                    AngularGradient(
-                        colors: [
-                            Color(red: 0.98, green: 0.82, blue: 0.40),
-                            Color(red: 0.89, green: 0.57, blue: 0.20),
-                            Color(red: 0.76, green: 0.43, blue: 0.12),
-                            Color(red: 0.90, green: 0.66, blue: 0.24),
-                            Color(red: 0.98, green: 0.82, blue: 0.40)
-                        ],
-                        center: .center
-                    ),
-                    lineWidth: lineWidth
-                )
-                .rotationEffect(.degrees(angle))
-                .blendMode(.plusLighter)
-                .opacity(0.92)
+                .trim(from: start, to: end)
+                .stroke(goldGradient, style: style)
+        } else {
+            ZStack {
+                Capsule(style: .continuous)
+                    .trim(from: start, to: 1)
+                    .stroke(goldGradient, style: style)
+                Capsule(style: .continuous)
+                    .trim(from: 0, to: end - 1)
+                    .stroke(goldGradient, style: style)
+            }
+        }
+    }
+
+    private func wrapped(_ value: Double) -> Double {
+        let r = value.truncatingRemainder(dividingBy: 1)
+        return r >= 0 ? r : r + 1
+    }
+}
+
+private struct LoopTypewriterText: View {
+    let fullText: String
+    let typingSpeed: Double
+    let holdAtEnd: Double
+    let holdAtStart: Double
+
+    var body: some View {
+        let chars = Array(fullText)
+        let count = chars.count
+        let typeDuration = Double(max(count, 1)) / max(typingSpeed, 0.1)
+        let eraseDuration = typeDuration * 0.72
+        let cycle = holdAtStart + typeDuration + holdAtEnd + eraseDuration
+
+        return TimelineView(.animation(minimumInterval: 1.0 / 28.0, paused: false)) { timeline in
+            let t = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: cycle)
+            let visibleCount: Int
+
+            if t < holdAtStart {
+                visibleCount = 0
+            } else if t < holdAtStart + typeDuration {
+                let progress = (t - holdAtStart) / typeDuration
+                visibleCount = min(count, max(0, Int(progress * Double(count))))
+            } else if t < holdAtStart + typeDuration + holdAtEnd {
+                visibleCount = count
+            } else {
+                let eraseProgress = (t - holdAtStart - typeDuration - holdAtEnd) / eraseDuration
+                visibleCount = max(0, min(count, count - Int(eraseProgress * Double(count))))
+            }
+
+            Text(String(chars.prefix(visibleCount)))
         }
     }
 }
