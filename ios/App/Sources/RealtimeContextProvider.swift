@@ -80,6 +80,7 @@ actor RealtimeContextProvider {
     private let weatherTTL: TimeInterval = 15 * 60
     private let marketTTL: TimeInterval = 5 * 60
     private let hotNewsTTL: TimeInterval = 10 * 60
+    private let realtimeLineTimeout: TimeInterval = 2.2
 
     init(session: URLSession? = nil) {
         if let session {
@@ -94,6 +95,11 @@ actor RealtimeContextProvider {
         self.session = URLSession(configuration: configuration)
     }
 
+    func prewarm(config: ChatConfig, now: Date = Date()) async {
+        guard config.realtimeContextEnabled else { return }
+        _ = await buildSystemContext(config: config, userPrompt: nil, now: now)
+    }
+
     func buildSystemContext(config: ChatConfig, userPrompt: String? = nil, now: Date = Date()) async -> String? {
         guard config.realtimeContextEnabled else { return nil }
 
@@ -101,47 +107,101 @@ actor RealtimeContextProvider {
         lines.append("以下是系统实时信息（仅供当前回答参考）：")
         lines.append(buildDateTimeLine(now: now))
 
-        if config.weatherContextEnabled {
-            let location = config.weatherLocation.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !location.isEmpty {
-                if let weatherLine = try? await fetchWeatherSummary(location: location, now: now) {
-                    lines.append(weatherLine)
-                } else {
-                    lines.append("天气：\(location) 暂时获取失败。")
-                }
-            }
+        // Build external realtime context in parallel to reduce first-message latency.
+        async let weatherLine = resolveLineWithTimeout(seconds: realtimeLineTimeout) { [self] in
+            await makeWeatherContextLine(config: config, now: now)
+        }
+        async let marketLine = resolveLineWithTimeout(seconds: realtimeLineTimeout) { [self] in
+            await makeMarketContextLine(config: config, userPrompt: userPrompt, now: now)
+        }
+        async let hotNewsLine = resolveLineWithTimeout(seconds: realtimeLineTimeout) { [self] in
+            await makeHotNewsContextLine(config: config, now: now)
+        }
+        async let fuelLine = resolveLineWithTimeout(seconds: realtimeLineTimeout) { [self] in
+            await makeChinaFuelContextLine(userPrompt: userPrompt, now: now)
         }
 
-        if config.marketContextEnabled {
-            let inferredSymbols = inferSymbols(from: userPrompt ?? "")
-            let symbols = mergeSymbols(parseSymbols(config.marketSymbols), inferredSymbols)
-            if !symbols.isEmpty {
-                if let marketLine = try? await fetchMarketSummary(symbols: symbols, now: now) {
-                    lines.append(marketLine)
-                } else {
-                    lines.append("市场价格：暂时获取失败。")
-                }
-            }
-        }
+        let resolvedWeatherLine = await weatherLine
+        let resolvedMarketLine = await marketLine
+        let resolvedHotNewsLine = await hotNewsLine
+        let resolvedFuelLine = await fuelLine
 
-        if config.hotNewsContextEnabled {
-            if let newsBlock = try? await fetchHotNewsSummary(count: config.hotNewsCount, now: now) {
-                lines.append(newsBlock)
-            } else {
-                lines.append("热门事件：暂时获取失败。")
-            }
+        if let resolvedWeatherLine {
+            lines.append(resolvedWeatherLine)
         }
-
-        if let prompt = userPrompt, shouldInjectChinaFuelPrice(for: prompt) {
-            if let fuelLine = try? await fetchChinaFuelSummary(from: prompt, now: now) {
-                lines.append(fuelLine)
-            } else {
-                lines.append("中国成品油（省级）价格：暂时获取失败。")
-            }
+        if let resolvedMarketLine {
+            lines.append(resolvedMarketLine)
+        }
+        if let resolvedHotNewsLine {
+            lines.append(resolvedHotNewsLine)
+        }
+        if let resolvedFuelLine {
+            lines.append(resolvedFuelLine)
         }
 
         lines.append("以上信息会随时间变化，回答价格或事件时请注明“以最新市场为准”。")
         return lines.joined(separator: "\n")
+    }
+
+    private func resolveLineWithTimeout(
+        seconds: TimeInterval,
+        operation: @Sendable @escaping () async -> String?
+    ) async -> String? {
+        let timeoutNanoseconds = UInt64(max(0.1, seconds) * 1_000_000_000)
+        return await withTaskGroup(of: String?.self) { group in
+            group.addTask {
+                await operation()
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+                return nil
+            }
+
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first ?? nil
+        }
+    }
+
+    private func makeWeatherContextLine(config: ChatConfig, now: Date) async -> String? {
+        guard config.weatherContextEnabled else { return nil }
+        let location = config.weatherLocation.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !location.isEmpty else { return nil }
+
+        if let weatherLine = try? await fetchWeatherSummary(location: location, now: now) {
+            return weatherLine
+        }
+        return "天气：\(location) 暂时获取失败。"
+    }
+
+    private func makeMarketContextLine(config: ChatConfig, userPrompt: String?, now: Date) async -> String? {
+        guard config.marketContextEnabled else { return nil }
+        let inferredSymbols = inferSymbols(from: userPrompt ?? "")
+        let symbols = mergeSymbols(parseSymbols(config.marketSymbols), inferredSymbols)
+        guard !symbols.isEmpty else { return nil }
+
+        if let marketLine = try? await fetchMarketSummary(symbols: symbols, now: now) {
+            return marketLine
+        }
+        return "市场价格：暂时获取失败。"
+    }
+
+    private func makeHotNewsContextLine(config: ChatConfig, now: Date) async -> String? {
+        guard config.hotNewsContextEnabled else { return nil }
+
+        if let newsBlock = try? await fetchHotNewsSummary(count: config.hotNewsCount, now: now) {
+            return newsBlock
+        }
+        return "热门事件：暂时获取失败。"
+    }
+
+    private func makeChinaFuelContextLine(userPrompt: String?, now: Date) async -> String? {
+        guard let prompt = userPrompt, shouldInjectChinaFuelPrice(for: prompt) else { return nil }
+
+        if let fuelLine = try? await fetchChinaFuelSummary(from: prompt, now: now) {
+            return fuelLine
+        }
+        return "中国成品油（省级）价格：暂时获取失败。"
     }
 
     private func shouldInjectChinaFuelPrice(for prompt: String) -> Bool {
@@ -468,16 +528,19 @@ actor RealtimeContextProvider {
         }
 
         var mergedTitles: [String] = []
-        for url in hotNewsFeedURLs() {
-            let (data, response) = try await session.data(from: url)
-            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-                continue
+        let feedURLs = hotNewsFeedURLs()
+        let perFeedMaxItems = normalizedCount * 2
+        await withTaskGroup(of: [String].self) { group in
+            for url in feedURLs {
+                group.addTask { [self] in
+                    await fetchHeadlines(from: url, maxItems: perFeedMaxItems)
+                }
             }
 
-            let parser = RSSHeadlineParser(maxItems: normalizedCount * 2)
-            let titles = parser.parse(data: data)
-            if !titles.isEmpty {
-                mergedTitles.append(contentsOf: titles)
+            for await titles in group {
+                if !titles.isEmpty {
+                    mergedTitles.append(contentsOf: titles)
+                }
             }
         }
 
@@ -493,6 +556,19 @@ actor RealtimeContextProvider {
         let summary = rows.joined(separator: "\n")
         hotNewsCache[normalizedCount] = CachedEntry(summary: summary, timestamp: now)
         return summary
+    }
+
+    private func fetchHeadlines(from url: URL, maxItems: Int) async -> [String] {
+        do {
+            let (data, response) = try await session.data(from: url)
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                return []
+            }
+            let parser = RSSHeadlineParser(maxItems: maxItems)
+            return parser.parse(data: data)
+        } catch {
+            return []
+        }
     }
 
     private func buildDateTimeLine(now: Date) -> String {

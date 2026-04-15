@@ -71,6 +71,7 @@ final class ChatViewModel: ObservableObject {
         autoSaveEnabled = true
         startNetworkMonitor()
         Task {
+            await prewarmRealtimeContext()
             await refreshMemoryEntries()
         }
     }
@@ -530,12 +531,20 @@ final class ChatViewModel: ObservableObject {
 
         guard !isLoadingModels else { return }
         Task {
-            await refreshAvailableModels(silent: true)
+            async let prewarm: Void = prewarmRealtimeContext()
+            async let refreshModels: Void = refreshAvailableModels(silent: true)
+            _ = await (prewarm, refreshModels)
         }
     }
 
     func removeDraftFile() {
         draftFileAttachment = nil
+    }
+
+    private func prewarmRealtimeContext() async {
+        let normalized = normalizedConfigForSave(config)
+        guard normalized.realtimeContextEnabled else { return }
+        await service.prewarmRealtimeContext(config: normalized)
     }
 
     private func updateCurrentModelAvailability() {

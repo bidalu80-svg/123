@@ -328,6 +328,10 @@ final class ChatService {
         self.session = URLSession(configuration: config)
     }
 
+    func prewarmRealtimeContext(config: ChatConfig) async {
+        await realtimeContextProvider.prewarm(config: config)
+    }
+
     func sendMessage(
         config: ChatConfig,
         history: [ChatMessage],
