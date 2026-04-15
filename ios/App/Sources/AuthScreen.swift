@@ -20,6 +20,7 @@ struct AuthScreen: View {
                 hero
                 Spacer(minLength: 26)
                 authPanel
+                bottomPolicyText
             }
             .padding(.horizontal, 22)
             .padding(.top, 10)
@@ -51,10 +52,10 @@ struct AuthScreen: View {
     private var topBar: some View {
         HStack {
             Spacer()
-            Button("设置") {
+            Button("跳过") {
                 showEndpointSheet = true
             }
-            .font(.system(size: 18, weight: .semibold))
+            .font(.system(size: 18, weight: .bold))
             .foregroundStyle(.white.opacity(0.95))
             .padding(.horizontal, 24)
             .padding(.vertical, 11)
@@ -72,12 +73,12 @@ struct AuthScreen: View {
     private var hero: some View {
         VStack(spacing: 8) {
             Text("IEXA")
-                .font(.system(size: 78, weight: .bold, design: .rounded))
+                .font(.system(size: 72, weight: .bold, design: .rounded))
                 .foregroundStyle(.white.opacity(0.96))
                 .shadow(color: .white.opacity(0.18), radius: 14, x: 0, y: 2)
 
             Text("Understand the Universe_")
-                .font(.system(size: 34, weight: .regular, design: .monospaced))
+                .font(.system(size: 22, weight: .regular, design: .monospaced))
                 .minimumScaleFactor(0.6)
                 .lineLimit(1)
                 .foregroundStyle(.white.opacity(0.78))
@@ -114,6 +115,12 @@ struct AuthScreen: View {
             }
             .padding(.top, 4)
 
+            Text("最近登录账号：\(authViewModel.phone.isEmpty ? "blank" : authViewModel.phone)")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.white.opacity(0.5))
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.top, 2)
+
             if !authViewModel.statusMessage.isEmpty {
                 Text(authViewModel.statusMessage)
                     .font(.system(size: 15, weight: .medium))
@@ -133,6 +140,11 @@ struct AuthScreen: View {
             Text("管理员账号：blank    密码：888888")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.white.opacity(0.56))
+                .padding(.top, 2)
+
+            Text("其他选项")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.72))
                 .padding(.top, 2)
         }
         .padding(.horizontal, 18)
@@ -223,12 +235,12 @@ struct AuthScreen: View {
                 Image(systemName: systemIcon)
                     .font(.system(size: 20, weight: .semibold))
                 Text(title)
-                    .font(.system(size: 32, weight: .bold))
+                    .font(.system(size: 25, weight: .bold))
                 Spacer(minLength: 0)
             }
             .foregroundStyle(.white.opacity(highlighted ? 0.97 : 0.9))
             .padding(.horizontal, 22)
-            .frame(height: 70)
+            .frame(height: 62)
             .background(
                 Capsule(style: .continuous)
                     .fill(Color.white.opacity(highlighted ? 0.14 : 0.09))
@@ -291,6 +303,13 @@ struct AuthScreen: View {
 
             GalaxyStarField()
         }
+    }
+
+    private var bottomPolicyText: some View {
+        Text("继续即表示你同意服务条款和隐私政策")
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(.white.opacity(0.45))
+            .padding(.top, 10)
     }
 }
 
