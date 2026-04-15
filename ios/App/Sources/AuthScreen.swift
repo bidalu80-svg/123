@@ -3,7 +3,6 @@ import SwiftUI
 struct AuthScreen: View {
     @EnvironmentObject private var authViewModel: AuthViewModel
     @FocusState private var focusedField: Field?
-    @State private var showEndpointSheet = false
 
     enum Field {
         case account
@@ -20,8 +19,7 @@ struct AuthScreen: View {
                     .ignoresSafeArea()
 
                 VStack(spacing: 0) {
-                    topBar
-                    Spacer(minLength: 24)
+                    Spacer(minLength: 42)
                     hero
                     Spacer(minLength: 22)
                     authPanel
@@ -33,46 +31,6 @@ struct AuthScreen: View {
             }
         }
         .navigationBarBackButtonHidden(true)
-        .sheet(isPresented: $showEndpointSheet) {
-            NavigationStack {
-                Form {
-                    Section("认证服务地址") {
-                        TextField("https://chatapp-auth-worker-v2.xxx.workers.dev", text: $authViewModel.baseURL)
-                            .keyboardType(.URL)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-
-                        Button("保存") {
-                            authViewModel.saveBaseURL()
-                            showEndpointSheet = false
-                        }
-                    }
-                }
-                .navigationTitle("连接设置")
-                .navigationBarTitleDisplayMode(.inline)
-            }
-        }
-    }
-
-    private var topBar: some View {
-        HStack {
-            Spacer()
-            Button("跳过") {
-                showEndpointSheet = true
-            }
-            .font(.system(size: 16, weight: .bold))
-            .foregroundStyle(.white.opacity(0.95))
-            .padding(.horizontal, 18)
-            .padding(.vertical, 9)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(Color.white.opacity(0.14))
-                    .overlay(
-                        Capsule(style: .continuous)
-                            .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                    )
-            )
-        }
     }
 
     private var hero: some View {
