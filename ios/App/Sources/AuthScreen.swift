@@ -11,22 +11,27 @@ struct AuthScreen: View {
     }
 
     var body: some View {
-        ZStack {
-            galaxyBackground
+        GeometryReader { proxy in
+            let safeTop = proxy.safeAreaInsets.top
+            let safeBottom = proxy.safeAreaInsets.bottom
 
-            VStack(spacing: 0) {
-                topBar
-                Spacer(minLength: 30)
-                hero
-                Spacer(minLength: 26)
-                authPanel
-                bottomPolicyText
+            ZStack {
+                galaxyBackground
+                    .ignoresSafeArea()
+
+                VStack(spacing: 0) {
+                    topBar
+                    Spacer(minLength: 24)
+                    hero
+                    Spacer(minLength: 22)
+                    authPanel
+                    bottomPolicyText
+                }
+                .padding(.horizontal, 22)
+                .padding(.top, safeTop + 8)
+                .padding(.bottom, max(10, safeBottom + 4))
             }
-            .padding(.horizontal, 22)
-            .padding(.top, 10)
-            .padding(.bottom, 14)
         }
-        .ignoresSafeArea()
         .navigationBarBackButtonHidden(true)
         .sheet(isPresented: $showEndpointSheet) {
             NavigationStack {
@@ -55,10 +60,10 @@ struct AuthScreen: View {
             Button("跳过") {
                 showEndpointSheet = true
             }
-            .font(.system(size: 18, weight: .bold))
+            .font(.system(size: 16, weight: .bold))
             .foregroundStyle(.white.opacity(0.95))
-            .padding(.horizontal, 24)
-            .padding(.vertical, 11)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 9)
             .background(
                 Capsule(style: .continuous)
                     .fill(Color.white.opacity(0.14))
@@ -87,7 +92,7 @@ struct AuthScreen: View {
     }
 
     private var authPanel: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 11) {
             credentialField(icon: "person.crop.circle.fill", placeholder: "账号（可填手机号）", text: $authViewModel.phone)
                 .focused($focusedField, equals: .account)
 
@@ -147,18 +152,18 @@ struct AuthScreen: View {
                 .foregroundStyle(.white.opacity(0.72))
                 .padding(.top, 2)
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 18)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 14)
         .background(
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .fill(Color.black.opacity(0.34))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 28, style: .continuous)
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
                         .stroke(Color.white.opacity(0.14), lineWidth: 1)
                 )
         )
         .overlay {
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .fill(
                     LinearGradient(
                         colors: [
@@ -177,23 +182,23 @@ struct AuthScreen: View {
     private func credentialField(icon: String, placeholder: String, text: Binding<String>) -> some View {
         HStack(spacing: 10) {
             Image(systemName: icon)
-                .font(.system(size: 18, weight: .medium))
+                .font(.system(size: 16, weight: .medium))
                 .foregroundStyle(.white.opacity(0.8))
                 .frame(width: 24)
 
             TextField(placeholder, text: text)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-                .font(.system(size: 18, weight: .medium))
+                .font(.system(size: 16, weight: .medium))
                 .foregroundStyle(.white.opacity(0.94))
         }
         .padding(.horizontal, 14)
-        .frame(height: 52)
+        .frame(height: 46)
         .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
+            RoundedRectangle(cornerRadius: 17, style: .continuous)
                 .fill(Color.white.opacity(0.11))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    RoundedRectangle(cornerRadius: 17, style: .continuous)
                         .stroke(Color.white.opacity(0.1), lineWidth: 1)
                 )
         )
@@ -202,23 +207,23 @@ struct AuthScreen: View {
     private func secureCredentialField(icon: String, placeholder: String, text: Binding<String>) -> some View {
         HStack(spacing: 10) {
             Image(systemName: icon)
-                .font(.system(size: 18, weight: .medium))
+                .font(.system(size: 16, weight: .medium))
                 .foregroundStyle(.white.opacity(0.8))
                 .frame(width: 24)
 
             SecureField(placeholder, text: text)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-                .font(.system(size: 18, weight: .medium))
+                .font(.system(size: 16, weight: .medium))
                 .foregroundStyle(.white.opacity(0.94))
         }
         .padding(.horizontal, 14)
-        .frame(height: 52)
+        .frame(height: 46)
         .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
+            RoundedRectangle(cornerRadius: 17, style: .continuous)
                 .fill(Color.white.opacity(0.11))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    RoundedRectangle(cornerRadius: 17, style: .continuous)
                         .stroke(Color.white.opacity(0.1), lineWidth: 1)
                 )
         )
@@ -233,14 +238,14 @@ struct AuthScreen: View {
         Button(action: action) {
             HStack(spacing: 10) {
                 Image(systemName: systemIcon)
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(.system(size: 15, weight: .semibold))
                 Text(title)
-                    .font(.system(size: 25, weight: .bold))
+                    .font(.system(size: 17, weight: .bold))
                 Spacer(minLength: 0)
             }
             .foregroundStyle(.white.opacity(highlighted ? 0.97 : 0.9))
-            .padding(.horizontal, 22)
-            .frame(height: 62)
+            .padding(.horizontal, 20)
+            .frame(height: 48)
             .background(
                 Capsule(style: .continuous)
                     .fill(Color.white.opacity(highlighted ? 0.14 : 0.09))
@@ -250,7 +255,7 @@ struct AuthScreen: View {
                                 highlighted
                                     ? Color(red: 0.86, green: 0.53, blue: 0.28).opacity(0.88)
                                     : Color.white.opacity(0.12),
-                                lineWidth: highlighted ? 1.8 : 1
+                                lineWidth: highlighted ? 1.4 : 0.9
                             )
                     )
             )
@@ -258,9 +263,9 @@ struct AuthScreen: View {
                 color: highlighted
                     ? Color(red: 0.86, green: 0.53, blue: 0.28).opacity(0.24)
                     : .black.opacity(0.22),
-                radius: 12,
+                radius: 7,
                 x: 0,
-                y: 4
+                y: 2
             )
         }
         .buttonStyle(.plain)
@@ -315,23 +320,39 @@ struct AuthScreen: View {
 
 private struct GalaxyStarField: View {
     var body: some View {
-        GeometryReader { proxy in
-            let size = proxy.size
-            ZStack {
-                ForEach(0..<210, id: \.self) { index in
-                    let x = pseudoRandom(index * 23 + 7)
-                    let y = pseudoRandom(index * 37 + 13)
-                    let radius = 0.6 + pseudoRandom(index * 29 + 3) * 2.3
-                    let alpha = 0.2 + pseudoRandom(index * 17 + 11) * 0.7
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { timeline in
+            GeometryReader { proxy in
+                let size = proxy.size
+                let time = timeline.date.timeIntervalSinceReferenceDate
 
-                    Circle()
-                        .fill(Color.white.opacity(alpha))
-                        .frame(width: radius, height: radius)
-                        .position(x: x * size.width, y: y * size.height)
+                ZStack {
+                    ForEach(0..<200, id: \.self) { index in
+                        let star = starSpec(index: index)
+                        let normalizedY = wrappedUnit(star.baseY - time * star.speed)
+
+                        Circle()
+                            .fill(Color.white.opacity(star.alpha))
+                            .frame(width: star.radius, height: star.radius)
+                            .position(x: star.baseX * size.width, y: normalizedY * size.height)
+                    }
                 }
             }
         }
         .allowsHitTesting(false)
+    }
+
+    private func wrappedUnit(_ value: Double) -> Double {
+        let remainder = value.truncatingRemainder(dividingBy: 1.0)
+        return remainder >= 0 ? remainder : remainder + 1.0
+    }
+
+    private func starSpec(index: Int) -> (baseX: CGFloat, baseY: Double, radius: CGFloat, alpha: CGFloat, speed: Double) {
+        let x = pseudoRandom(index * 23 + 7)
+        let y = Double(pseudoRandom(index * 37 + 13))
+        let radius = 0.55 + pseudoRandom(index * 29 + 3) * 2.1
+        let alpha = 0.16 + pseudoRandom(index * 17 + 11) * 0.66
+        let speed = 0.006 + Double(pseudoRandom(index * 41 + 19)) * 0.03
+        return (x, y, radius, alpha, speed)
     }
 
     private func pseudoRandom(_ seed: Int) -> CGFloat {
