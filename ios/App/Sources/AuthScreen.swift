@@ -259,6 +259,12 @@ struct AuthScreen: View {
                             )
                     )
             )
+            .overlay {
+                if highlighted {
+                    RotatingGoldCapsuleRing(lineWidth: 1.45, degreesPerSecond: 16)
+                        .padding(-1.2)
+                }
+            }
             .shadow(
                 color: highlighted
                     ? Color(red: 0.86, green: 0.53, blue: 0.28).opacity(0.24)
@@ -358,5 +364,35 @@ private struct GalaxyStarField: View {
     private func pseudoRandom(_ seed: Int) -> CGFloat {
         let value = sin(Double(seed) * 12.9898) * 43758.5453
         return CGFloat(value - floor(value))
+    }
+}
+
+private struct RotatingGoldCapsuleRing: View {
+    let lineWidth: CGFloat
+    let degreesPerSecond: Double
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { timeline in
+            let elapsed = timeline.date.timeIntervalSinceReferenceDate
+            let angle = elapsed * degreesPerSecond
+
+            Capsule(style: .continuous)
+                .stroke(
+                    AngularGradient(
+                        colors: [
+                            Color(red: 0.98, green: 0.82, blue: 0.40),
+                            Color(red: 0.89, green: 0.57, blue: 0.20),
+                            Color(red: 0.76, green: 0.43, blue: 0.12),
+                            Color(red: 0.90, green: 0.66, blue: 0.24),
+                            Color(red: 0.98, green: 0.82, blue: 0.40)
+                        ],
+                        center: .center
+                    ),
+                    lineWidth: lineWidth
+                )
+                .rotationEffect(.degrees(angle))
+                .blendMode(.plusLighter)
+                .opacity(0.92)
+        }
     }
 }
