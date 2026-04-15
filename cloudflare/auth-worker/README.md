@@ -11,6 +11,7 @@
 - 注册频率限制（防无限刷号）
 - 设备限制：1 台设备仅允许注册 1 个账号；账号首次登录后会绑定设备
 - 会话签发与注销
+- 管理员解绑设备绑定（用于换机迁移）
 
 当前已部署可用地址（开发环境）：
 
@@ -105,6 +106,7 @@ wrangler deploy
 - `POST /auth/apple`
 - `POST /auth/login`
 - `POST /auth/logout`
+- `POST /auth/admin/unbind-device`（管理员）
 
 备注：`/auth/send-code` 在当前版本会返回 `410`（已禁用）。
 
@@ -139,3 +141,25 @@ wrangler deploy
 - 客户端在登录/注册请求中会携带 `X-Device-Install-ID`。  
 - 注册：同一设备仅允许成功注册 1 次。  
 - 登录：账号首次成功登录后绑定当前设备，后续仅允许在同一设备登录。  
+
+## 管理员解绑设备
+
+`POST /auth/admin/unbind-device`
+
+请求头：
+
+- `Authorization: Bearer <管理员登录 token>`
+
+请求体：
+
+```json
+{
+  "account": "user@example.com"
+}
+```
+
+效果：
+
+- 清除该账号的设备绑定；
+- 同时撤销该账号现有会话（需要重新登录）；
+- 之后该账号可在新设备重新登录并重新绑定。  

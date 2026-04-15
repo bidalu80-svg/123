@@ -248,6 +248,33 @@ async function createSession(
   };
 }
 
+async function resolveUserByBearerToken(
+  env: Env,
+  bearerToken: string
+): Promise<{ id: string; phone: string } | null> {
+  const trimmed = bearerToken.trim();
+  if (!trimmed) return null;
+
+  const tokenHash = await sha256Hex(`${trimmed}:${env.AUTH_PEPPER}`);
+  const row = await env.DB.prepare(
+    `SELECT u.id AS id, u.phone AS phone
+     FROM auth_sessions s
+     INNER JOIN users u ON u.id = s.user_id
+     WHERE s.token_hash = ?
+       AND s.revoked_at IS NULL
+       AND s.expires_at > ?
+     ORDER BY s.created_at DESC
+     LIMIT 1`
+  )
+    .bind(tokenHash, nowISO())
+    .first<{ id: string; phone: string }>();
+
+  if (!row?.id || !row?.phone) {
+    return null;
+  }
+  return row;
+}
+
 async function recordAuthAttempt(
   env: Env,
   account: string,
@@ -636,6 +663,7 @@ export default {
             appleLoginEnabled: true,
             appleAudienceEnforced: parseAppleAllowedAudiences(env).length > 0,
             accountDeviceBindingEnabled: true,
+            adminDeviceUnbindEnabled: true,
           },
         });
       }
@@ -1049,6 +1077,72 @@ export default {
               ...session.user,
               createdAt: user.created_at,
             },
+          },
+        });
+      }
+
+      if (request.method === "POST" && path === "/auth/admin/unbind-device") {
+        const token = extractBearerToken(request);
+        if (!token) return errorResponse("缺少登录凭证。", 401);
+
+        const operator = await resolveUserByBearerToken(env, token);
+        if (!operator) return errorResponse("登录凭证已失效，请重新登录。", 401);
+        if (operator.phone !== ADMIN_USERNAME) {
+          return errorResponse("仅管理员可执行该操作。", 403);
+        }
+
+        const body = await parseJSON(request);
+        const account = normalizeAccount(body.phone ?? body.account);
+        if (!isAccountValid(account)) {
+          return errorResponse("账号格式无效。");
+        }
+        if (account === ADMIN_USERNAME) {
+          return errorResponse("管理员账号不支持解绑设备。", 400);
+        }
+
+        const user = await env.DB.prepare(
+          `SELECT id
+           FROM users
+           WHERE phone = ?
+           LIMIT 1`
+        )
+          .bind(account)
+          .first<{ id: string }>();
+        if (!user?.id) {
+          return errorResponse("账号不存在。", 404);
+        }
+
+        const bindingID = await makeAccountDeviceBindingID(env, account);
+        const unbindResult = await env.DB.prepare(
+          `DELETE FROM auth_attempts
+           WHERE id = ?
+             AND action = 'account_device_bind'`
+        )
+          .bind(bindingID)
+          .run();
+
+        const unbound = Number((unbindResult as { meta?: { changes?: number } })?.meta?.changes || 0) > 0;
+        let revokedSessions = 0;
+        if (unbound) {
+          const revokeResult = await env.DB.prepare(
+            `UPDATE auth_sessions
+             SET revoked_at = ?
+             WHERE user_id = ?
+               AND revoked_at IS NULL`
+          )
+            .bind(nowISO(), user.id)
+            .run();
+          revokedSessions = Number((revokeResult as { meta?: { changes?: number } })?.meta?.changes || 0);
+        }
+
+        return ok({
+          message: unbound
+            ? "已解绑该账号的设备限制，并撤销现有会话。"
+            : "该账号当前没有设备绑定记录。",
+          data: {
+            account,
+            unbound,
+            revokedSessions,
           },
         });
       }
