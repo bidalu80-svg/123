@@ -364,7 +364,7 @@ enum ChatConfigStore {
 
     private static func normalize(_ config: ChatConfig) -> ChatConfig {
         let normalizedModel = migratedModelNameIfNeeded(config.model)
-        ChatConfig(
+        return ChatConfig(
             apiURL: normalizedBaseURL(config.apiURL),
             apiKey: config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines),
             model: normalizedModel.trimmingCharacters(in: .whitespacesAndNewlines),
