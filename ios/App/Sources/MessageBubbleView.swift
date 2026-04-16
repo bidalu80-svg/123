@@ -274,7 +274,19 @@ struct MessageBubbleView: View {
 
     @ViewBuilder
     private var content: some View {
-        let segments = MessageContentParser.parse(message)
+        let parsedSegments = MessageContentParser.parse(message)
+        let segments: [MessageSegment]
+        if message.isStreaming {
+            segments = parsedSegments.filter { segment in
+                if case .text(let text) = segment {
+                    return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                }
+                return true
+            }
+        } else {
+            segments = parsedSegments
+        }
+
         if segments.isEmpty {
             if message.isStreaming {
                 streamingStandaloneIndicator
@@ -293,7 +305,10 @@ struct MessageBubbleView: View {
         } else {
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(Array(segments.enumerated()), id: \.offset) { index, segment in
-                    segmentView(segment, showsStreamingTailDot: message.isStreaming && index == segments.count - 1)
+                    segmentView(
+                        segment,
+                        showsStreamingTailDot: message.isStreaming && hasInlineStreamingDot && index == segments.count - 1
+                    )
                 }
             }
         }
@@ -309,9 +324,16 @@ struct MessageBubbleView: View {
     private var hasInlineStreamingDot: Bool {
         guard message.isStreaming else { return false }
         let segments = MessageContentParser.parse(message)
-        guard let last = segments.last else { return false }
-        if case .text(let text) = last {
-            return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard !segments.isEmpty else { return false }
+        for segment in segments.reversed() {
+            switch segment {
+            case .text(let text):
+                if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return true
+                }
+            default:
+                return false
+            }
         }
         return false
     }
