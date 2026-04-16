@@ -21,6 +21,7 @@ struct MessageBubbleView: View {
     @State private var activeHTMLPreview: HTMLPreviewPayload?
     @State private var pendingPythonRun: PendingPythonRun?
     @State private var pythonStdinDraft = ""
+    @State private var streamingDotPulse = false
 
     var body: some View {
         Group {
@@ -60,10 +61,8 @@ struct MessageBubbleView: View {
 
             content
 
-            if message.isStreaming {
-                ProgressView()
-                    .scaleEffect(0.9)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            if message.isStreaming && !hasInlineStreamingDot {
+                streamingStandaloneIndicator
                     .padding(.top, 8)
             }
 
@@ -265,8 +264,11 @@ struct MessageBubbleView: View {
         let segments = MessageContentParser.parse(message)
         if segments.isEmpty {
             if message.isStreaming {
-                Text("正在接收流式内容…")
-                    .foregroundStyle(.secondary)
+                HStack(alignment: .center, spacing: 6) {
+                    Text("正在接收流式内容…")
+                        .foregroundStyle(.secondary)
+                    streamingTailDot
+                }
             } else if let fallback = fallbackPlainText {
                 SelectableLinkTextView(
                     text: fallback,
@@ -281,8 +283,8 @@ struct MessageBubbleView: View {
             }
         } else {
             VStack(alignment: .leading, spacing: 10) {
-                ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
-                    segmentView(segment)
+                ForEach(Array(segments.enumerated()), id: \.offset) { index, segment in
+                    segmentView(segment, showsStreamingTailDot: message.isStreaming && index == segments.count - 1)
                 }
             }
         }
@@ -293,6 +295,42 @@ struct MessageBubbleView: View {
             .replacingOccurrences(of: "\r\n", with: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return normalized.isEmpty ? nil : normalized
+    }
+
+    private var hasInlineStreamingDot: Bool {
+        guard message.isStreaming else { return false }
+        let segments = MessageContentParser.parse(message)
+        guard let last = segments.last else { return false }
+        if case .text(let text) = last {
+            return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        return false
+    }
+
+    private var streamingStandaloneIndicator: some View {
+        HStack(alignment: .center, spacing: 6) {
+            Text("正在生成…")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.secondary)
+            streamingTailDot
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var streamingTailDot: some View {
+        Circle()
+            .fill(Color.secondary.opacity(0.9))
+            .frame(width: 6, height: 6)
+            .scaleEffect(streamingDotPulse ? 1.0 : 0.62)
+            .opacity(streamingDotPulse ? 0.95 : 0.28)
+            .animation(.easeInOut(duration: 0.58).repeatForever(autoreverses: true), value: streamingDotPulse)
+            .onAppear {
+                streamingDotPulse = true
+            }
+            .onDisappear {
+                streamingDotPulse = false
+            }
+            .accessibilityHidden(true)
     }
 
     @ViewBuilder
@@ -314,16 +352,30 @@ struct MessageBubbleView: View {
     }
 
     @ViewBuilder
-    private func segmentView(_ segment: MessageSegment) -> some View {
+    private func segmentView(_ segment: MessageSegment, showsStreamingTailDot: Bool = false) -> some View {
         switch segment {
         case .text(let text):
-            SelectableLinkTextView(
-                text: text,
-                textColor: UIColor.label,
-                linkColor: UIColor.systemGray,
-                font: .systemFont(ofSize: 18, weight: .regular)
-            )
+            if message.isStreaming {
+                HStack(alignment: .lastTextBaseline, spacing: 6) {
+                    Text(text)
+                        .font(.system(size: 18, weight: .regular))
+                        .lineSpacing(5)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if showsStreamingTailDot {
+                        streamingTailDot
+                    }
+                }
                 .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                SelectableLinkTextView(
+                    text: text,
+                    textColor: UIColor.label,
+                    linkColor: UIColor.systemGray,
+                    font: .systemFont(ofSize: 18, weight: .regular)
+                )
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         case .code(let language, let content):
             codeBlock(title: (language ?? "code").uppercased(), content: content, language: language)
         case .file(let name, let language, let content):
@@ -391,10 +443,17 @@ struct MessageBubbleView: View {
             }
 
             ScrollView(.horizontal, showsIndicators: false) {
-                Text(CodeHighlighter.highlighted(content, language: language, colorScheme: colorScheme, codeThemeMode: codeThemeMode))
-                    .font(.system(.footnote, design: .monospaced))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
+                if message.isStreaming {
+                    Text(content)
+                        .font(.system(.footnote, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                } else {
+                    Text(CodeHighlighter.highlighted(content, language: language, colorScheme: colorScheme, codeThemeMode: codeThemeMode))
+                        .font(.system(.footnote, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
             }
 
             if isRunning {
