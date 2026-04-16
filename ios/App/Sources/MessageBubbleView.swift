@@ -275,17 +275,14 @@ struct MessageBubbleView: View {
     @ViewBuilder
     private var content: some View {
         let parsedSegments = MessageContentParser.parse(message)
-        let segments: [MessageSegment]
-        if message.isStreaming {
-            segments = parsedSegments.filter { segment in
+        let segments = message.isStreaming
+            ? parsedSegments.filter { segment in
                 if case .text(let text) = segment {
                     return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 }
                 return true
             }
-        } else {
-            segments = parsedSegments
-        }
+            : parsedSegments
 
         if segments.isEmpty {
             if message.isStreaming {
