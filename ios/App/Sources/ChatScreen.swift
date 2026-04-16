@@ -453,6 +453,9 @@ struct ChatScreen: View {
                 )
                 .onAppear {
                     scrollToBottom(proxy, animated: false)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                        scrollToBottom(proxy, animated: false)
+                    }
                 }
                 .onChange(of: viewModel.messages.count) { _, _ in
                     guard let lastMessage = viewModel.messages.last else { return }

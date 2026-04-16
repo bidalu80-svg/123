@@ -21,7 +21,10 @@ struct SelectableLinkTextView: UIViewRepresentable {
         view.backgroundColor = .clear
         view.textContainerInset = .zero
         view.textContainer.lineFragmentPadding = 0
+        view.textContainer.widthTracksTextView = true
         view.adjustsFontForContentSizeCategory = true
+        view.setContentCompressionResistancePriority(.required, for: .vertical)
+        view.setContentHuggingPriority(.required, for: .vertical)
         view.dataDetectorTypes = []
         view.linkTextAttributes = [
             .foregroundColor: linkColor,
@@ -82,7 +85,7 @@ struct SelectableLinkTextView: UIViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
-        let width = proposal.width ?? UIScreen.main.bounds.width
+        guard let width = proposal.width, width > 1 else { return nil }
         let target = CGSize(width: width, height: .greatestFiniteMagnitude)
         let size = uiView.sizeThatFits(target)
         return CGSize(width: width, height: ceil(size.height))
