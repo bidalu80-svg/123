@@ -21,6 +21,7 @@ struct MessageBubbleView: View {
     @State private var activeHTMLPreview: HTMLPreviewPayload?
     @State private var pendingPythonRun: PendingPythonRun?
     @State private var pythonStdinDraft = ""
+    @State private var waitingDotPulse = false
 
     var body: some View {
         Group {
@@ -285,25 +286,72 @@ struct MessageBubbleView: View {
 
     @ViewBuilder
     private var streamingContent: some View {
-        let segments = MessageContentParser.parse(message)
-        if !segments.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
-                ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
-                    streamingSegmentView(segment)
-                }
+        if canUseFastStreamingTextPath {
+            let displayText = cleanStreamingMarkdownText(message.content)
+            if !displayText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                streamingGradientText(displayText)
+                    .font(.system(size: 18, weight: .regular))
+                    .lineSpacing(5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                streamingWaitingDot
             }
-        } else if let fallback = fallbackPlainText {
-            streamingGradientText(fallback)
-                .font(.system(size: 18, weight: .regular))
-                .lineSpacing(5)
-                .frame(maxWidth: .infinity, alignment: .leading)
         } else {
-            Circle()
-                .fill(Color.black)
-                .frame(width: 7, height: 7)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityLabel("正在接收流式内容")
+            let segments = MessageContentParser.parse(message)
+            if !segments.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                        streamingSegmentView(segment)
+                    }
+                }
+            } else if let fallback = fallbackPlainText {
+                streamingGradientText(fallback)
+                    .font(.system(size: 18, weight: .regular))
+                    .lineSpacing(5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                streamingWaitingDot
+            }
         }
+    }
+
+    private var canUseFastStreamingTextPath: Bool {
+        message.imageAttachments.isEmpty
+            && message.fileAttachments.isEmpty
+            && !message.content.contains("```")
+            && !message.content.contains("![")
+            && !message.content.contains("data:image")
+    }
+
+    private var streamingWaitingDot: some View {
+        Circle()
+            .fill(Color.black)
+            .frame(width: 7, height: 7)
+            .scaleEffect(waitingDotPulse ? 1.0 : 0.68)
+            .opacity(waitingDotPulse ? 0.95 : 0.3)
+            .animation(.easeInOut(duration: 0.62).repeatForever(autoreverses: true), value: waitingDotPulse)
+            .onAppear {
+                waitingDotPulse = true
+            }
+            .onDisappear {
+                waitingDotPulse = false
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel("正在接收流式内容")
+    }
+
+    private func cleanStreamingMarkdownText(_ raw: String) -> String {
+        var text = raw.replacingOccurrences(of: "\r\n", with: "\n")
+        text = text.replacingOccurrences(of: "(?m)^\\s{0,3}#{1,6}\\s*", with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?m)^\\s*[-*•]\\s+", with: "• ", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?m)^\\s*\\d+[\\.)、]\\s+", with: "• ", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?m)^\\s*>\\s?", with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?m)^\\s*([-*_])\\1{2,}\\s*$", with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: "**", with: "")
+        text = text.replacingOccurrences(of: "__", with: "")
+        text = text.replacingOccurrences(of: "`", with: "")
+        text = text.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
+        return text
     }
 
     @ViewBuilder
