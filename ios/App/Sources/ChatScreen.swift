@@ -1707,7 +1707,9 @@ struct ChatScreen: View {
             scrollView.contentSize.height - scrollView.bounds.height + scrollView.adjustedContentInset.bottom
         )
         let bottomDistance = maxOffsetY - scrollView.contentOffset.y
-        let nextPinnedState = bottomDistance <= 28
+        let panTranslationY = scrollView.panGestureRecognizer.translation(in: scrollView).y
+        let isUserDraggingUp = scrollView.isDragging && panTranslationY < -4
+        let nextPinnedState = !isUserDraggingUp && bottomDistance <= 28
 
         if isPinnedToBottom != nextPinnedState {
             isPinnedToBottom = nextPinnedState
