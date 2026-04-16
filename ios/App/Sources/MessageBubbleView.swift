@@ -275,39 +275,21 @@ struct MessageBubbleView: View {
 
     @ViewBuilder
     private var streamingContent: some View {
-        if canUseFastStreamingTextPath {
-            let displayText = cleanStreamingMarkdownText(message.content)
-            if !displayText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                streamingGradientText(displayText)
-                    .font(.system(size: 18, weight: .regular))
-                    .lineSpacing(5)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                streamingWaitingDot
+        let displayText = cleanStreamingMarkdownText(message.content)
+        if !displayText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            streamingGradientText(displayText)
+                .font(.system(size: 18, weight: .regular))
+                .lineSpacing(5)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else if !message.imageAttachments.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(message.imageAttachments) { attachment in
+                    messageImage(attachment)
+                }
             }
         } else {
-            let segments = MessageContentParser.parse(message)
-            if !segments.isEmpty {
-                VStack(alignment: .leading, spacing: 10) {
-                    ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
-                        streamingSegmentView(segment)
-                    }
-                }
-            } else if let fallback = fallbackPlainText {
-                streamingGradientText(fallback)
-                    .font(.system(size: 18, weight: .regular))
-                    .lineSpacing(5)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                streamingWaitingDot
-            }
+            streamingWaitingDot
         }
-    }
-
-    private var canUseFastStreamingTextPath: Bool {
-        message.imageAttachments.isEmpty
-            && message.fileAttachments.isEmpty
-            && !containsStreamingMarkdownSyntax(message.content)
     }
 
     private var streamingWaitingDot: some View {
@@ -333,47 +315,11 @@ struct MessageBubbleView: View {
             .replacingOccurrences(of: "**", with: "")
             .replacingOccurrences(of: "__", with: "")
             .replacingOccurrences(of: "`", with: "")
+            .replacingOccurrences(of: "```", with: "")
             .replacingOccurrences(of: #"(?m)^\s{0,3}#{1,6}\s+"#, with: "", options: .regularExpression)
             .replacingOccurrences(of: #"(?m)^\s*>\s?"#, with: "", options: .regularExpression)
             .replacingOccurrences(of: #"(?m)^\s*[-*]\s+"#, with: "• ", options: .regularExpression)
             .replacingOccurrences(of: #"(?m)^\s*(\d+)\.\s+"#, with: "$1. ", options: .regularExpression)
-    }
-
-    private func containsStreamingMarkdownSyntax(_ text: String) -> Bool {
-        text.contains("```")
-            || text.contains("![")
-            || text.contains("data:image")
-            || text.contains("**")
-            || text.contains("__")
-            || text.contains("`")
-            || text.contains("\n#")
-            || text.contains("\n##")
-            || text.contains("\n###")
-            || text.contains("\n- ")
-            || text.contains("\n* ")
-            || text.contains("\n> ")
-            || text.contains("\n1.")
-            || text.contains("\n2.")
-            || text.contains("\n3.")
-    }
-
-    @ViewBuilder
-    private func streamingSegmentView(_ segment: MessageSegment) -> some View {
-        switch segment {
-        case .text(let text):
-            if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                streamingGradientText(text)
-                    .font(.system(size: 18, weight: .regular))
-                    .lineSpacing(5)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        case .code(let language, let content):
-            codeBlock(title: (language ?? "code").uppercased(), content: content, language: language)
-        case .file(let name, let language, let content):
-            codeBlock(title: "FILE · \(name)", content: content, language: language)
-        case .image(let attachment):
-            messageImage(attachment)
-        }
     }
 
     private var fallbackPlainText: String? {
