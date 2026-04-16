@@ -93,7 +93,7 @@ struct ChatConfig: Codable, Equatable {
     static let `default` = ChatConfig(
         apiURL: "https://xxx.com",
         apiKey: "",
-        model: "gpt-5.4-pro",
+        model: "gpt-5.4",
         endpointMode: .chatCompletions,
         chatCompletionsPath: ChatConfig.defaultChatCompletionsPath,
         imagesGenerationsPath: ChatConfig.defaultImagesGenerationsPath,
@@ -246,6 +246,8 @@ struct ChatConfig: Codable, Equatable {
 
 enum ChatConfigStore {
     private static let configKey = "chatapp.chat.config"
+    private static let onboardingDoneKey = "chatapp.config.onboarding.done"
+    private static let legacyDefaultModel = "gpt-5.4-pro"
 
     static func load() -> ChatConfig {
         if let data = UserDefaults.standard.data(forKey: configKey),
@@ -254,7 +256,8 @@ enum ChatConfigStore {
         }
 
         let bundleURL = (Bundle.main.object(forInfoDictionaryKey: "CHAT_API_URL") as? String) ?? ChatConfig.default.apiURL
-        let bundleModel = (Bundle.main.object(forInfoDictionaryKey: "CHAT_MODEL") as? String) ?? ChatConfig.default.model
+        let rawBundleModel = (Bundle.main.object(forInfoDictionaryKey: "CHAT_MODEL") as? String) ?? ChatConfig.default.model
+        let bundleModel = migratedModelNameIfNeeded(rawBundleModel)
 
         return ChatConfig(
             apiURL: normalizedBaseURL(bundleURL),
@@ -360,10 +363,11 @@ enum ChatConfigStore {
     }
 
     private static func normalize(_ config: ChatConfig) -> ChatConfig {
+        let normalizedModel = migratedModelNameIfNeeded(config.model)
         ChatConfig(
             apiURL: normalizedBaseURL(config.apiURL),
             apiKey: config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines),
-            model: config.model.trimmingCharacters(in: .whitespacesAndNewlines),
+            model: normalizedModel.trimmingCharacters(in: .whitespacesAndNewlines),
             endpointMode: config.endpointMode,
             chatCompletionsPath: normalizeEndpointPath(config.chatCompletionsPath, fallback: ChatConfig.defaultChatCompletionsPath),
             imagesGenerationsPath: normalizeEndpointPath(config.imagesGenerationsPath, fallback: ChatConfig.defaultImagesGenerationsPath),
@@ -387,5 +391,16 @@ enum ChatConfigStore {
             memoryModeEnabled: config.memoryModeEnabled,
             soundEffectsEnabled: config.soundEffectsEnabled
         )
+    }
+
+    private static func migratedModelNameIfNeeded(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return trimmed }
+
+        let hasCompletedOnboarding = UserDefaults.standard.bool(forKey: onboardingDoneKey)
+        if !hasCompletedOnboarding && trimmed == legacyDefaultModel {
+            return ChatConfig.default.model
+        }
+        return trimmed
     }
 }
