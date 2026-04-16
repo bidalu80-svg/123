@@ -60,7 +60,7 @@ final class PythonExecutionService {
 
     private let embeddedRuntimeStateLock = NSLock()
     private var embeddedRuntimeDisabledUntil: Date?
-    private let embeddedRuntimeCooldownSeconds: TimeInterval = 45
+    private let embeddedRuntimeCooldownSeconds: TimeInterval = 12
 
     static func isRunnableSnippet(_ code: String) -> Bool {
         let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -140,7 +140,7 @@ final class PythonExecutionService {
         maxCodeLength: Int = 12_000,
         maxOutputLength: Int = 20_000,
         maxLoopSteps: Int = 50_000,
-        embeddedRuntimeTimeoutSeconds: TimeInterval = 12
+        embeddedRuntimeTimeoutSeconds: TimeInterval = 20
     ) {
         self.maxCodeLength = maxCodeLength
         self.maxOutputLength = maxOutputLength
@@ -161,6 +161,23 @@ final class PythonExecutionService {
             return PythonExecutionResult(output: "代码过长（最多 \(maxCodeLength) 字符）", exitCode: 1)
         }
 
+        if isLikelyInteractiveLoopScript(trimmed) {
+            let hasRequests = trimmed.lowercased().contains("import requests")
+            return PythonExecutionResult(
+                output: """
+                检测到交互式终端脚本（如 while True + input）。
+                当前运行器不是交互终端，这类脚本容易一直等待输入并触发超时。
+
+                \(hasRequests ? "你这段代码还依赖 requests，建议先确保嵌入 CPython 可用，再改成单次请求函数调用。" : "")
+
+                建议：
+                1) 去掉无限循环，改为单次函数调用；
+                2) 或在循环里加入明确 break 条件并提供 stdin。
+                """,
+                exitCode: 1
+            )
+        }
+
         var embeddedTimedOut = false
         if isEmbeddedRuntimeEnabledForCurrentLaunch {
             let embeddedAttempt = await runEmbeddedRuntimeWithTimeout(code: trimmed, stdin: stdin)
@@ -175,11 +192,41 @@ final class PythonExecutionService {
             }
         }
 
+        if embeddedTimedOut && requiresEmbeddedRuntime(for: trimmed) {
+            let hint = embeddedRuntimeCooldownHint
+            return PythonExecutionResult(
+                output: """
+                运行超时：该脚本依赖完整 CPython（例如 import/网络请求/复杂语法）。
+                为避免误报“简化运行器不支持”，本次未自动切到简化运行器。
+
+                请先检查是否存在长阻塞或无限循环（常见：while True + input）。
+                \(hint)
+                """,
+                exitCode: 1
+            )
+        }
+
+        let needsEmbedded = requiresEmbeddedRuntime(for: trimmed)
         let runtimeHint: String
         if isEmbeddedRuntimeEnabledForCurrentLaunch {
             runtimeHint = await EmbeddedCPythonRuntime.shared.statusHint()
         } else {
             runtimeHint = embeddedRuntimeCooldownHint
+        }
+
+        if needsEmbedded {
+            let shouldAvoidFallback = runtimeHint.contains("未检测到嵌入 CPython")
+                || runtimeHint.contains("暂时冷却中")
+                || runtimeHint.contains("暂时不可用")
+            if shouldAvoidFallback {
+                return PythonExecutionResult(
+                    output: """
+                    该脚本依赖完整 CPython 能力（import/网络请求/复杂语法），当前不适合回退到兼容运行器执行。
+                    \(runtimeHint)
+                    """,
+                    exitCode: 1
+                )
+            }
         }
 
         do {
@@ -231,6 +278,34 @@ final class PythonExecutionService {
             "__main__"
         ]
         return markers.contains { lowered.contains($0) }
+    }
+
+    private func requiresEmbeddedRuntime(for code: String) -> Bool {
+        let lowered = code.lowercased()
+        let markers = [
+            "import ",
+            "from ",
+            "def ",
+            "class ",
+            "try:",
+            "except ",
+            "finally:",
+            "with ",
+            "requests",
+            "urllib",
+            "socket",
+            "http",
+            "async ",
+            "await ",
+            "__name__"
+        ]
+        return markers.contains { lowered.contains($0) }
+    }
+
+    private func isLikelyInteractiveLoopScript(_ code: String) -> Bool {
+        let lowered = code.lowercased()
+        guard lowered.contains("input(") else { return false }
+        return lowered.contains("while true") || lowered.contains("while 1")
     }
 
     private var isEmbeddedRuntimeEnabledForCurrentLaunch: Bool {

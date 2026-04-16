@@ -12,6 +12,10 @@ struct ChatScreen: View {
     private let edgeDragActivationWidth: CGFloat = 28
     private let scrollTopAnchor = "scroll-top-anchor"
     private let headerCenterMinHorizontalInset: CGFloat = 76
+    private let maxRenderedMessages = 120
+    private let maxRenderedCharacters = 260_000
+    private let maxSingleRenderedMessageChars = 80_000
+    private let maxRenderedFilePreviewChars = 18_000
     private let starterPrompts: [(title: String, subtitle: String)] = [
         ("创作一幅插图", "为烘焙店"),
         ("告诉我一个冷知识", "关于罗马帝国"),
@@ -413,10 +417,15 @@ struct ChatScreen: View {
                             .frame(height: 1)
                             .id(scrollTopAnchor)
 
-                        ForEach(viewModel.messages) { message in
+                        if isRenderingWindowed {
+                            renderWindowNotice
+                        }
+
+                        ForEach(renderedMessages) { message in
                             let isLatestAssistant = message.id == latestAssistantMessageID
+                            let displayMessage = makeDisplaySafeMessage(message)
                             MessageBubbleView(
-                                message: message,
+                                message: displayMessage,
                                 codeThemeMode: viewModel.config.codeThemeMode,
                                 apiKey: viewModel.config.apiKey,
                                 apiBaseURL: viewModel.config.normalizedBaseURL,
@@ -864,6 +873,79 @@ struct ChatScreen: View {
 
     private var latestAssistantMessageID: UUID? {
         viewModel.messages.last(where: { $0.role == .assistant })?.id
+    }
+
+    private var renderedMessages: [ChatMessage] {
+        let source = viewModel.messages
+        guard !source.isEmpty else { return [] }
+
+        var selected: [ChatMessage] = []
+        var budget = 0
+
+        for message in source.reversed() {
+            let weight = renderWeight(for: message)
+            if !selected.isEmpty && (selected.count >= maxRenderedMessages || budget + weight > maxRenderedCharacters) {
+                break
+            }
+            selected.append(message)
+            budget += weight
+        }
+
+        return Array(selected.reversed())
+    }
+
+    private var isRenderingWindowed: Bool {
+        renderedMessages.count < viewModel.messages.count
+    }
+
+    private var renderWindowNotice: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "clock.arrow.circlepath")
+                .font(.system(size: 12, weight: .semibold))
+            Text("会话较长，已仅渲染最近 \(renderedMessages.count) 条消息以保持稳定")
+                .font(.system(size: 12, weight: .medium))
+                .lineLimit(2)
+        }
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(.secondarySystemBackground))
+        )
+    }
+
+    private func makeDisplaySafeMessage(_ message: ChatMessage) -> ChatMessage {
+        var safe = message
+
+        if safe.content.count > maxSingleRenderedMessageChars {
+            safe.content = String(safe.content.prefix(maxSingleRenderedMessageChars))
+                + "\n\n[该消息过长，已在聊天页截断显示。]"
+            safe.isStreaming = false
+        }
+
+        if !safe.fileAttachments.isEmpty {
+            safe.fileAttachments = safe.fileAttachments.map { file in
+                var clipped = file
+                if clipped.textContent.count > maxRenderedFilePreviewChars {
+                    clipped.textContent = String(clipped.textContent.prefix(maxRenderedFilePreviewChars))
+                        + "\n\n[附件预览过长，已截断显示。]"
+                }
+                return clipped
+            }
+        }
+
+        return safe
+    }
+
+    private func renderWeight(for message: ChatMessage) -> Int {
+        let textWeight = message.content.count
+        let fileWeight = message.fileAttachments.reduce(0) { partial, file in
+            partial + min(file.textContent.count, maxRenderedFilePreviewChars)
+        }
+        let imageWeight = message.imageAttachments.count * 800
+        return textWeight + fileWeight + imageWeight + 200
     }
 
     private func modelVendorSubtitle(_ rawModel: String, apiURL: String) -> String {

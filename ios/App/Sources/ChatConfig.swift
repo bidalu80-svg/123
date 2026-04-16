@@ -104,12 +104,12 @@ struct ChatConfig: Codable, Equatable {
         streamEnabled: true,
         themeMode: .system,
         codeThemeMode: .followApp,
-        realtimeContextEnabled: true,
-        weatherContextEnabled: true,
+        realtimeContextEnabled: false,
+        weatherContextEnabled: false,
         weatherLocation: "Shanghai",
-        marketContextEnabled: true,
+        marketContextEnabled: false,
         marketSymbols: "GC=F,CL=F,BZ=F,SI=F,HG=F,^GSPC,^IXIC,^DJI,^RUT,^N225,^HSI,^FTSE,^GDAXI,AAPL,NVDA,TSLA,MSFT,AMZN",
-        hotNewsContextEnabled: true,
+        hotNewsContextEnabled: false,
         hotNewsCount: 6,
         soundEffectsEnabled: true
     )
@@ -129,12 +129,12 @@ struct ChatConfig: Codable, Equatable {
         streamEnabled: Bool,
         themeMode: AppThemeMode = .system,
         codeThemeMode: CodeThemeMode = .followApp,
-        realtimeContextEnabled: Bool = true,
-        weatherContextEnabled: Bool = true,
+        realtimeContextEnabled: Bool = false,
+        weatherContextEnabled: Bool = false,
         weatherLocation: String = "Shanghai",
-        marketContextEnabled: Bool = true,
+        marketContextEnabled: Bool = false,
         marketSymbols: String = "GC=F,CL=F,BZ=F,SI=F,HG=F,^GSPC,^IXIC,^DJI,^RUT,^N225,^HSI,^FTSE,^GDAXI,AAPL,NVDA,TSLA,MSFT,AMZN",
-        hotNewsContextEnabled: Bool = true,
+        hotNewsContextEnabled: Bool = false,
         hotNewsCount: Int = 6,
         soundEffectsEnabled: Bool = true
     ) {
@@ -178,12 +178,12 @@ struct ChatConfig: Codable, Equatable {
         streamEnabled = try c.decode(Bool.self, forKey: .streamEnabled)
         themeMode = try c.decodeIfPresent(AppThemeMode.self, forKey: .themeMode) ?? .system
         codeThemeMode = try c.decodeIfPresent(CodeThemeMode.self, forKey: .codeThemeMode) ?? .followApp
-        realtimeContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .realtimeContextEnabled) ?? true
-        weatherContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .weatherContextEnabled) ?? true
+        realtimeContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .realtimeContextEnabled) ?? false
+        weatherContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .weatherContextEnabled) ?? false
         weatherLocation = try c.decodeIfPresent(String.self, forKey: .weatherLocation) ?? "Shanghai"
-        marketContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .marketContextEnabled) ?? true
+        marketContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .marketContextEnabled) ?? false
         marketSymbols = try c.decodeIfPresent(String.self, forKey: .marketSymbols) ?? "GC=F,CL=F,BZ=F,SI=F,HG=F,^GSPC,^IXIC,^DJI,^RUT,^N225,^HSI,^FTSE,^GDAXI,AAPL,NVDA,TSLA,MSFT,AMZN"
-        hotNewsContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .hotNewsContextEnabled) ?? true
+        hotNewsContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .hotNewsContextEnabled) ?? false
         hotNewsCount = try c.decodeIfPresent(Int.self, forKey: .hotNewsCount) ?? 6
         soundEffectsEnabled = try c.decodeIfPresent(Bool.self, forKey: .soundEffectsEnabled) ?? true
     }
