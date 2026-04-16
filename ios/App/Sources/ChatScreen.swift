@@ -414,7 +414,11 @@ struct ChatScreen: View {
     private var messageList: some View {
         GeometryReader { geometry in
             NativeTranscriptScrollView(
-                content: AnyView(transcriptContent(minHeight: max(geometry.size.height - 34, 0))),
+                historyContent: AnyView(transcriptHistoryContent()),
+                historyVersion: transcriptHistoryVersion,
+                streamingContent: AnyView(transcriptStreamingContent()),
+                streamingVersion: transcriptStreamingVersion,
+                hasStreamingContent: activeStreamingRenderedMessage != nil,
                 command: transcriptCommand,
                 onMetricsChanged: { metrics in
                     if transcriptMetrics != metrics {
@@ -461,14 +465,14 @@ struct ChatScreen: View {
         }
     }
 
-    private func transcriptContent(minHeight: CGFloat) -> some View {
+    private func transcriptHistoryContent() -> some View {
         VStack(alignment: .leading, spacing: 16) {
             if isRenderingWindowed {
                 renderWindowNotice
             }
 
-            ForEach(renderedMessages) { message in
-                let isLatestAssistant = message.id == latestAssistantMessageID
+            ForEach(frozenRenderedMessages) { message in
+                let isLatestAssistant = message.id == latestFrozenAssistantMessageID
                 let displayMessage = makeDisplaySafeMessage(message)
                 MessageBubbleView(
                     message: displayMessage,
@@ -482,10 +486,26 @@ struct ChatScreen: View {
                 )
             }
         }
-        .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
         .padding(.horizontal, 12)
         .padding(.top, 16)
-        .padding(.bottom, 18)
+        .padding(.bottom, activeStreamingRenderedMessage == nil ? 18 : 0)
+    }
+
+    @ViewBuilder
+    private func transcriptStreamingContent() -> some View {
+        if let streamingMessage = activeStreamingRenderedMessage {
+            MessageBubbleView(
+                message: streamingMessage,
+                codeThemeMode: viewModel.config.codeThemeMode,
+                apiKey: viewModel.config.apiKey,
+                apiBaseURL: viewModel.config.normalizedBaseURL,
+                showsAssistantActionBar: false,
+                onRegenerate: nil
+            )
+        } else {
+            EmptyView()
+        }
     }
 
     private var composer: some View {
@@ -877,6 +897,10 @@ struct ChatScreen: View {
         viewModel.messages.last(where: { $0.role == .assistant })?.id
     }
 
+    private var latestFrozenAssistantMessageID: UUID? {
+        frozenRenderedMessages.last(where: { $0.role == .assistant })?.id
+    }
+
     private var renderedMessages: [ChatMessage] {
         let source = viewModel.messages
         guard !source.isEmpty else { return [] }
@@ -896,8 +920,37 @@ struct ChatScreen: View {
         return Array(selected.reversed())
     }
 
+    private var activeStreamingRenderedMessage: ChatMessage? {
+        guard let last = renderedMessages.last,
+              last.role == .assistant,
+              last.isStreaming else {
+            return nil
+        }
+        return makeDisplaySafeMessage(last, preserveStreamingState: true)
+    }
+
+    private var frozenRenderedMessages: [ChatMessage] {
+        guard let activeStreamingRenderedMessage,
+              renderedMessages.last?.id == activeStreamingRenderedMessage.id else {
+            return renderedMessages
+        }
+        return Array(renderedMessages.dropLast())
+    }
+
     private var isRenderingWindowed: Bool {
         renderedMessages.count < viewModel.messages.count
+    }
+
+    private var transcriptHistoryVersion: String {
+        let ids = frozenRenderedMessages.map(\.id.uuidString).joined(separator: ",")
+        let lengths = frozenRenderedMessages.map { String($0.content.count) }.joined(separator: ",")
+        let windowFlag = isRenderingWindowed ? "1" : "0"
+        return "\(windowFlag)|\(ids)|\(lengths)"
+    }
+
+    private var transcriptStreamingVersion: String {
+        guard let message = activeStreamingRenderedMessage else { return "none" }
+        return "\(message.id.uuidString)|\(message.content.count)|\(message.imageAttachments.count)|\(message.fileAttachments.count)"
     }
 
     private var renderWindowNotice: some View {
@@ -918,13 +971,15 @@ struct ChatScreen: View {
         )
     }
 
-    private func makeDisplaySafeMessage(_ message: ChatMessage) -> ChatMessage {
+    private func makeDisplaySafeMessage(_ message: ChatMessage, preserveStreamingState: Bool = false) -> ChatMessage {
         var safe = message
 
         if safe.content.count > maxSingleRenderedMessageChars {
             safe.content = String(safe.content.prefix(maxSingleRenderedMessageChars))
                 + "\n\n[该消息过长，已在聊天页截断显示。]"
-            safe.isStreaming = false
+            if !preserveStreamingState {
+                safe.isStreaming = false
+            }
         }
 
         if !safe.fileAttachments.isEmpty {
@@ -1653,7 +1708,11 @@ private struct ChatTranscriptCommand: Equatable {
 }
 
 private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
-    let content: AnyView
+    let historyContent: AnyView
+    let historyVersion: String
+    let streamingContent: AnyView
+    let streamingVersion: String
+    let hasStreamingContent: Bool
     let command: ChatTranscriptCommand?
     let onMetricsChanged: (ChatTranscriptMetrics) -> Void
 
@@ -1662,20 +1721,34 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: Controller, context: Context) {
-        uiViewController.update(content: content, command: command, onMetricsChanged: onMetricsChanged)
+        uiViewController.update(
+            historyContent: historyContent,
+            historyVersion: historyVersion,
+            streamingContent: streamingContent,
+            streamingVersion: streamingVersion,
+            hasStreamingContent: hasStreamingContent,
+            command: command,
+            onMetricsChanged: onMetricsChanged
+        )
     }
 
     final class Controller: UIViewController, UIScrollViewDelegate {
         private let scrollView = UIScrollView()
-        private let hostingController = UIHostingController(rootView: AnyView(EmptyView()))
+        private let stackView = UIStackView()
+        private let historyHostingController = UIHostingController(rootView: AnyView(EmptyView()))
+        private let streamingHostingController = UIHostingController(rootView: AnyView(EmptyView()))
+        private let spacerView = UIView()
         private var onMetricsChanged: (ChatTranscriptMetrics) -> Void
         private var lastReportedMetrics = ChatTranscriptMetrics()
         private var lastAppliedCommandID: Int?
         private var pendingCommand: ChatTranscriptCommand?
-        private var pendingContent: AnyView?
-        private var contentApplyWorkItem: DispatchWorkItem?
-        private var lastContentApplyAt = Date.distantPast
-        private let contentApplyInterval: TimeInterval = 1.0 / 24.0
+        private var lastHistoryVersion: String?
+        private var lastStreamingVersion: String?
+        private var pendingStreamingContent: AnyView?
+        private var pendingStreamingVersion: String?
+        private var streamingApplyWorkItem: DispatchWorkItem?
+        private var lastStreamingApplyAt = Date.distantPast
+        private let streamingApplyInterval: TimeInterval = 1.0 / 24.0
 
         init(onMetricsChanged: @escaping (ChatTranscriptMetrics) -> Void) {
             self.onMetricsChanged = onMetricsChanged
@@ -1706,21 +1779,36 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
                 scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
             ])
 
-            hostingController.sizingOptions = [.intrinsicContentSize]
-            hostingController.view.backgroundColor = .clear
-            hostingController.view.translatesAutoresizingMaskIntoConstraints = false
-            addChild(hostingController)
-            scrollView.addSubview(hostingController.view)
+            stackView.axis = .vertical
+            stackView.alignment = .fill
+            stackView.spacing = 16
+            stackView.isLayoutMarginsRelativeArrangement = true
+            stackView.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 16, leading: 12, bottom: 18, trailing: 12)
+            stackView.translatesAutoresizingMaskIntoConstraints = false
+            scrollView.addSubview(stackView)
+
+            for hostingController in [historyHostingController, streamingHostingController] {
+                hostingController.sizingOptions = [.intrinsicContentSize]
+                hostingController.view.backgroundColor = .clear
+                hostingController.view.translatesAutoresizingMaskIntoConstraints = false
+                addChild(hostingController)
+                stackView.addArrangedSubview(hostingController.view)
+                hostingController.didMove(toParent: self)
+            }
+            streamingHostingController.view.isHidden = true
+            spacerView.backgroundColor = .clear
+            spacerView.setContentHuggingPriority(.defaultLow, for: .vertical)
+            spacerView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+            stackView.addArrangedSubview(spacerView)
 
             NSLayoutConstraint.activate([
-                hostingController.view.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor),
-                hostingController.view.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor),
-                hostingController.view.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor),
-                hostingController.view.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor),
-                hostingController.view.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor)
+                stackView.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor),
+                stackView.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor),
+                stackView.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor),
+                stackView.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor),
+                stackView.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor),
+                stackView.heightAnchor.constraint(greaterThanOrEqualTo: scrollView.frameLayoutGuide.heightAnchor)
             ])
-
-            hostingController.didMove(toParent: self)
         }
 
         override func viewDidLayoutSubviews() {
@@ -1730,10 +1818,42 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             reportMetrics()
         }
 
-        func update(content: AnyView, command: ChatTranscriptCommand?, onMetricsChanged: @escaping (ChatTranscriptMetrics) -> Void) {
+        func update(
+            historyContent: AnyView,
+            historyVersion: String,
+            streamingContent: AnyView,
+            streamingVersion: String,
+            hasStreamingContent: Bool,
+            command: ChatTranscriptCommand?,
+            onMetricsChanged: @escaping (ChatTranscriptMetrics) -> Void
+        ) {
             self.onMetricsChanged = onMetricsChanged
-            pendingContent = content
-            scheduleContentApplyIfNeeded()
+
+            if historyVersion != lastHistoryVersion {
+                UIView.performWithoutAnimation {
+                    historyHostingController.rootView = historyContent
+                    historyHostingController.view.invalidateIntrinsicContentSize()
+                }
+                lastHistoryVersion = historyVersion
+            }
+
+            if hasStreamingContent {
+                pendingStreamingContent = streamingContent
+                pendingStreamingVersion = streamingVersion
+                scheduleStreamingApplyIfNeeded()
+            } else if !streamingHostingController.view.isHidden || lastStreamingVersion != nil {
+                streamingApplyWorkItem?.cancel()
+                streamingApplyWorkItem = nil
+                pendingStreamingContent = nil
+                pendingStreamingVersion = nil
+                UIView.performWithoutAnimation {
+                    streamingHostingController.rootView = AnyView(EmptyView())
+                    streamingHostingController.view.invalidateIntrinsicContentSize()
+                    streamingHostingController.view.isHidden = true
+                }
+                lastStreamingVersion = nil
+            }
+
             if let command, command.id != lastAppliedCommandID {
                 pendingCommand = command
             }
@@ -1744,32 +1864,35 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             }
         }
 
-        private func scheduleContentApplyIfNeeded() {
-            guard contentApplyWorkItem == nil else { return }
+        private func scheduleStreamingApplyIfNeeded() {
+            guard streamingApplyWorkItem == nil else { return }
 
-            let delay = max(0, contentApplyInterval - Date().timeIntervalSince(lastContentApplyAt))
+            let delay = max(0, streamingApplyInterval - Date().timeIntervalSince(lastStreamingApplyAt))
             let workItem = DispatchWorkItem { [weak self] in
                 guard let self else { return }
-                self.contentApplyWorkItem = nil
-                self.applyPendingContentIfNeeded()
+                self.streamingApplyWorkItem = nil
+                self.applyPendingStreamingContentIfNeeded()
             }
-            contentApplyWorkItem = workItem
+            streamingApplyWorkItem = workItem
 
-            if lastContentApplyAt == .distantPast || delay <= 0.001 {
+            if lastStreamingApplyAt == .distantPast || delay <= 0.001 {
                 DispatchQueue.main.async(execute: workItem)
             } else {
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
             }
         }
 
-        private func applyPendingContentIfNeeded() {
-            guard let pendingContent else { return }
+        private func applyPendingStreamingContentIfNeeded() {
+            guard let pendingStreamingContent else { return }
             UIView.performWithoutAnimation {
-                hostingController.rootView = pendingContent
-                hostingController.view.invalidateIntrinsicContentSize()
+                streamingHostingController.rootView = pendingStreamingContent
+                streamingHostingController.view.invalidateIntrinsicContentSize()
+                streamingHostingController.view.isHidden = false
             }
-            lastContentApplyAt = Date()
-            self.pendingContent = nil
+            lastStreamingApplyAt = Date()
+            lastStreamingVersion = pendingStreamingVersion
+            self.pendingStreamingContent = nil
+            self.pendingStreamingVersion = nil
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
