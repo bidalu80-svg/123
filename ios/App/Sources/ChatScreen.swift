@@ -485,7 +485,7 @@ struct ChatScreen: View {
                         if let scrollView = messageScrollView {
                             scrollToBottom(scrollView, animated: false)
                         } else {
-                            scrollToBottom(proxy, animated: false)
+                            needsInitialScrollToBottom = true
                         }
                     }
                 }
@@ -1616,21 +1616,6 @@ struct ChatScreen: View {
         ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
     }
 
-    private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool) {
-        guard let lastID = viewModel.messages.last?.id else { return }
-        if animated {
-            withAnimation(.easeOut(duration: 0.16)) {
-                proxy.scrollTo(lastID, anchor: .bottom)
-            }
-        } else {
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) {
-                proxy.scrollTo(lastID, anchor: .bottom)
-            }
-        }
-    }
-
     private func scrollToBottomReliable(_ proxy: ScrollViewProxy, animated: Bool) {
         if let scrollView = messageScrollView {
             guard canScroll(scrollView) else {
@@ -1683,13 +1668,8 @@ struct ChatScreen: View {
     }
 
     private func scrollDownByMessageStep(_ proxy: ScrollViewProxy) {
-        guard !renderedMessages.isEmpty else { return }
-        isPinnedToBottom = false
-        if let lastID = renderedMessages.last?.id {
-            withAnimation(.easeOut(duration: 0.24)) {
-                proxy.scrollTo(lastID, anchor: .bottom)
-            }
-        }
+        needsInitialScrollToBottom = true
+        isPinnedToBottom = true
     }
 
     private func scrollToBottom(_ scrollView: UIScrollView, animated: Bool) {
