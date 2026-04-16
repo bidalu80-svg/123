@@ -21,7 +21,6 @@ struct MessageBubbleView: View {
     @State private var activeHTMLPreview: HTMLPreviewPayload?
     @State private var pendingPythonRun: PendingPythonRun?
     @State private var pythonStdinDraft = ""
-    @State private var streamingDotPulse = false
 
     var body: some View {
         Group {
@@ -49,20 +48,7 @@ struct MessageBubbleView: View {
         .sheet(item: $pendingPythonRun) { payload in
             pythonInputSheet(payload: payload)
         }
-        .onAppear {
-            if message.isStreaming {
-                startStreamingDotBreathing()
-            }
-        }
-        .onChange(of: message.isStreaming) { _, newValue in
-            if newValue {
-                startStreamingDotBreathing()
-            } else {
-                stopStreamingDotBreathing()
-            }
-        }
         .onDisappear {
-            stopStreamingDotBreathing()
             cancelAllPythonRuns()
         }
     }
@@ -73,11 +59,6 @@ struct MessageBubbleView: View {
                 .padding(.bottom, 6)
 
             content
-
-            if message.isStreaming && !hasInlineStreamingDot {
-                streamingStandaloneIndicator
-                    .padding(.top, 8)
-            }
 
             if showsAssistantActionBar {
                 assistantActionBar
@@ -274,40 +255,64 @@ struct MessageBubbleView: View {
 
     @ViewBuilder
     private var content: some View {
-        let parsedSegments = MessageContentParser.parse(message)
-        let segments = message.isStreaming
-            ? parsedSegments.filter { segment in
-                if case .text(let text) = segment {
-                    return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                }
-                return true
-            }
-            : parsedSegments
-
-        if segments.isEmpty {
-            if message.isStreaming {
-                streamingStandaloneIndicator
-            } else if let fallback = fallbackPlainText {
-                SelectableLinkTextView(
-                    text: fallback,
-                    textColor: UIColor.label,
-                    linkColor: UIColor.systemGray,
-                    font: .systemFont(ofSize: 18, weight: .regular)
-                )
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                Text("（空响应）")
-                    .foregroundStyle(.secondary)
-            }
+        if message.isStreaming {
+            streamingContent
         } else {
-            VStack(alignment: .leading, spacing: 10) {
-                ForEach(Array(segments.enumerated()), id: \.offset) { index, segment in
-                    segmentView(
-                        segment,
-                        showsStreamingTailDot: message.isStreaming && hasInlineStreamingDot && index == segments.count - 1
+            let segments = MessageContentParser.parse(message)
+
+            if segments.isEmpty {
+                if let fallback = fallbackPlainText {
+                    SelectableLinkTextView(
+                        text: fallback,
+                        textColor: UIColor.label,
+                        linkColor: UIColor.systemGray,
+                        font: .systemFont(ofSize: 18, weight: .regular)
                     )
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    Text("（空响应）")
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                        segmentView(segment)
+                    }
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var streamingContent: some View {
+        let visibleText = message.content.replacingOccurrences(of: "\r\n", with: "\n")
+        if !message.imageAttachments.isEmpty || !message.fileAttachments.isEmpty || !visibleText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(message.imageAttachments) { attachment in
+                    messageImage(attachment)
+                }
+                ForEach(message.fileAttachments) { file in
+                    codeBlock(title: "FILE · \(file.fileName)", content: file.previewText, language: file.codeLanguageHint)
+                }
+                if !visibleText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text(visibleText)
+                        .font(.system(size: 18, weight: .regular))
+                        .lineSpacing(5)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+            }
+        } else if let fallback = fallbackPlainText {
+            Text(fallback)
+                .font(.system(size: 18, weight: .regular))
+                .lineSpacing(5)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+        } else {
+            Text("正在接收流式内容…")
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -316,37 +321,6 @@ struct MessageBubbleView: View {
             .replacingOccurrences(of: "\r\n", with: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return normalized.isEmpty ? nil : normalized
-    }
-
-    private var hasInlineStreamingDot: Bool {
-        guard message.isStreaming else { return false }
-        let segments = MessageContentParser.parse(message)
-        guard !segments.isEmpty else { return false }
-        for segment in segments.reversed() {
-            switch segment {
-            case .text(let text):
-                if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    return true
-                }
-            default:
-                return false
-            }
-        }
-        return false
-    }
-
-    private var streamingStandaloneIndicator: some View {
-        streamingTailDot
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var streamingTailDot: some View {
-        Circle()
-            .fill(Color.secondary.opacity(0.9))
-            .frame(width: 6, height: 6)
-            .scaleEffect(streamingDotPulse ? 1.0 : 0.62)
-            .opacity(streamingDotPulse ? 0.95 : 0.28)
-            .accessibilityHidden(true)
     }
 
     @ViewBuilder
@@ -368,24 +342,16 @@ struct MessageBubbleView: View {
     }
 
     @ViewBuilder
-    private func segmentView(_ segment: MessageSegment, showsStreamingTailDot: Bool = false) -> some View {
+    private func segmentView(_ segment: MessageSegment) -> some View {
         switch segment {
         case .text(let text):
-            if message.isStreaming {
-                streamingRevealText(text, showsTailDot: showsStreamingTailDot)
-                    .font(.system(size: 18, weight: .regular))
-                    .lineSpacing(5)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                SelectableLinkTextView(
-                    text: text,
-                    textColor: UIColor.label,
-                    linkColor: UIColor.systemGray,
-                    font: .systemFont(ofSize: 18, weight: .regular)
-                )
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
+            SelectableLinkTextView(
+                text: text,
+                textColor: UIColor.label,
+                linkColor: UIColor.systemGray,
+                font: .systemFont(ofSize: 18, weight: .regular)
+            )
+                .frame(maxWidth: .infinity, alignment: .leading)
         case .code(let language, let content):
             codeBlock(title: (language ?? "code").uppercased(), content: content, language: language)
         case .file(let name, let language, let content):
@@ -393,53 +359,6 @@ struct MessageBubbleView: View {
         case .image(let attachment):
             messageImage(attachment)
         }
-    }
-
-    private func streamingRevealText(_ raw: String, showsTailDot: Bool) -> Text {
-        let parts = splitStreamingReveal(raw)
-        var rendered = Text(parts.head).foregroundColor(.primary)
-
-        if !parts.mid.isEmpty {
-            rendered = rendered + Text(parts.mid).foregroundColor(Color.primary.opacity(0.72))
-        }
-        if !parts.tip.isEmpty {
-            rendered = rendered + Text(parts.tip).foregroundColor(Color.secondary.opacity(0.58))
-        }
-        if showsTailDot {
-            rendered = rendered
-                + Text(" ●")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(Color.secondary.opacity(streamingDotPulse ? 0.95 : 0.28))
-        }
-        return rendered
-    }
-
-    private func splitStreamingReveal(_ value: String) -> (head: String, mid: String, tip: String) {
-        let total = value.count
-        guard total > 0 else { return ("", "", "") }
-
-        let tipCount = min(2, total)
-        let midCount = min(5, max(0, total - tipCount))
-        let headCount = max(0, total - tipCount - midCount)
-
-        let headEnd = value.index(value.startIndex, offsetBy: headCount)
-        let midEnd = value.index(headEnd, offsetBy: midCount)
-
-        let head = String(value[..<headEnd])
-        let mid = String(value[headEnd..<midEnd])
-        let tip = String(value[midEnd...])
-        return (head, mid, tip)
-    }
-
-    private func startStreamingDotBreathing() {
-        streamingDotPulse = false
-        withAnimation(.easeInOut(duration: 0.58).repeatForever(autoreverses: true)) {
-            streamingDotPulse = true
-        }
-    }
-
-    private func stopStreamingDotBreathing() {
-        streamingDotPulse = false
     }
 
     private func codeBlock(title: String, content: String, language: String? = nil) -> some View {

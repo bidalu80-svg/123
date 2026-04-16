@@ -87,6 +87,7 @@ struct ChatConfig: Codable, Equatable {
     var marketSymbols: String
     var hotNewsContextEnabled: Bool
     var hotNewsCount: Int
+    var memoryModeEnabled: Bool
     var soundEffectsEnabled: Bool
 
     static let `default` = ChatConfig(
@@ -111,6 +112,7 @@ struct ChatConfig: Codable, Equatable {
         marketSymbols: "GC=F,CL=F,BZ=F,SI=F,HG=F,^GSPC,^IXIC,^DJI,^RUT,^N225,^HSI,^FTSE,^GDAXI,AAPL,NVDA,TSLA,MSFT,AMZN",
         hotNewsContextEnabled: false,
         hotNewsCount: 6,
+        memoryModeEnabled: true,
         soundEffectsEnabled: true
     )
 
@@ -136,6 +138,7 @@ struct ChatConfig: Codable, Equatable {
         marketSymbols: String = "GC=F,CL=F,BZ=F,SI=F,HG=F,^GSPC,^IXIC,^DJI,^RUT,^N225,^HSI,^FTSE,^GDAXI,AAPL,NVDA,TSLA,MSFT,AMZN",
         hotNewsContextEnabled: Bool = false,
         hotNewsCount: Int = 6,
+        memoryModeEnabled: Bool = true,
         soundEffectsEnabled: Bool = true
     ) {
         self.apiURL = apiURL
@@ -159,6 +162,7 @@ struct ChatConfig: Codable, Equatable {
         self.marketSymbols = marketSymbols
         self.hotNewsContextEnabled = hotNewsContextEnabled
         self.hotNewsCount = hotNewsCount
+        self.memoryModeEnabled = memoryModeEnabled
         self.soundEffectsEnabled = soundEffectsEnabled
     }
 
@@ -185,6 +189,7 @@ struct ChatConfig: Codable, Equatable {
         marketSymbols = try c.decodeIfPresent(String.self, forKey: .marketSymbols) ?? "GC=F,CL=F,BZ=F,SI=F,HG=F,^GSPC,^IXIC,^DJI,^RUT,^N225,^HSI,^FTSE,^GDAXI,AAPL,NVDA,TSLA,MSFT,AMZN"
         hotNewsContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .hotNewsContextEnabled) ?? false
         hotNewsCount = try c.decodeIfPresent(Int.self, forKey: .hotNewsCount) ?? 6
+        memoryModeEnabled = try c.decodeIfPresent(Bool.self, forKey: .memoryModeEnabled) ?? true
         soundEffectsEnabled = try c.decodeIfPresent(Bool.self, forKey: .soundEffectsEnabled) ?? true
     }
 
@@ -273,6 +278,7 @@ enum ChatConfigStore {
             marketSymbols: ChatConfig.default.marketSymbols,
             hotNewsContextEnabled: ChatConfig.default.hotNewsContextEnabled,
             hotNewsCount: ChatConfig.default.hotNewsCount,
+            memoryModeEnabled: ChatConfig.default.memoryModeEnabled,
             soundEffectsEnabled: ChatConfig.default.soundEffectsEnabled
         )
     }
@@ -378,6 +384,7 @@ enum ChatConfigStore {
             marketSymbols: config.marketSymbols.trimmingCharacters(in: .whitespacesAndNewlines),
             hotNewsContextEnabled: config.hotNewsContextEnabled,
             hotNewsCount: min(max(config.hotNewsCount, 1), 12),
+            memoryModeEnabled: config.memoryModeEnabled,
             soundEffectsEnabled: config.soundEffectsEnabled
         )
     }

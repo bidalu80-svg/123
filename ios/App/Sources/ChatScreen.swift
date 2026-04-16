@@ -34,7 +34,8 @@ struct ChatScreen: View {
     @State private var showTestSheet = false
     @State private var isPinnedToBottom = true
     @State private var starterPromptDeck: [(title: String, subtitle: String)] = []
-    @GestureState private var sidebarDragTranslation: CGFloat = 0
+    @State private var sidebarDragOffset: CGFloat = 0
+    @State private var isSidebarDragging = false
     @State private var recentAssets: [PHAsset] = []
     @State private var recentThumbnails: [String: UIImage] = [:]
     @State private var sidebarAnimationLock = false
@@ -58,16 +59,15 @@ struct ChatScreen: View {
                     }
                 }
                 .clipShape(
-                    RoundedRectangle(cornerRadius: 40 * sidebarRevealProgress, style: .continuous)
+                    RoundedRectangle(cornerRadius: (isSidebarDragging ? 18 : 40) * sidebarRevealProgress, style: .continuous)
                 )
                 .shadow(
                     color: Color.black.opacity(0.18 * sidebarRevealProgress),
-                    radius: 24 * sidebarRevealProgress,
+                    radius: (isSidebarDragging ? 12 : 24) * sidebarRevealProgress,
                     x: 0,
                     y: 0
                 )
-                .offset(x: sidebarRevealWidth)
-                .animation(.interactiveSpring(response: 0.24, dampingFraction: 0.9), value: isSidebarOpen)
+                .offset(x: mainContentOffsetX)
 
             if sidebarRevealWidth > 0.01 {
                 HStack(spacing: 0) {
@@ -452,10 +452,7 @@ struct ChatScreen: View {
                     }
                 )
                 .onAppear {
-                    scrollToBottom(proxy, animated: false)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-                        scrollToBottom(proxy, animated: false)
-                    }
+                    scrollToBottomReliable(proxy, animated: false)
                 }
                 .onChange(of: viewModel.messages.count) { _, _ in
                     guard let lastMessage = viewModel.messages.last else { return }
@@ -463,12 +460,12 @@ struct ChatScreen: View {
                         isPinnedToBottom = true
                     }
                     if isPinnedToBottom || lastMessage.role == .user {
-                        scrollToBottom(proxy, animated: true)
+                        scrollToBottomReliable(proxy, animated: true)
                     }
                 }
                 .onChange(of: viewModel.streamScrollTrigger) { _, _ in
                     if isPinnedToBottom {
-                        scrollToBottom(proxy, animated: false)
+                        scrollToBottomReliable(proxy, animated: false)
                     }
                 }
 
@@ -642,7 +639,7 @@ struct ChatScreen: View {
     private func scrollDownButton(proxy: ScrollViewProxy) -> some View {
         Button {
             isPinnedToBottom = true
-            scrollToBottom(proxy, animated: true)
+            scrollToBottomReliable(proxy, animated: true)
         } label: {
             Image(systemName: "arrow.down")
                 .font(.system(size: 18, weight: .medium))
@@ -1162,17 +1159,11 @@ struct ChatScreen: View {
         .frame(width: sidebarWidth)
         .frame(maxHeight: .infinity)
         .background(Color(.systemBackground))
-        .overlay(
-            Rectangle()
-                .frame(width: 1)
-                .foregroundStyle(Color.black.opacity(0.08)),
-            alignment: .trailing
-        )
     }
 
     private var sidebarRevealWidth: CGFloat {
         let base = isSidebarOpen ? sidebarWidth : 0
-        return min(max(base + sidebarDragTranslation, 0), sidebarWidth)
+        return min(max(base + sidebarDragOffset, 0), sidebarWidth)
     }
 
     private var sidebarRevealProgress: CGFloat {
@@ -1180,9 +1171,14 @@ struct ChatScreen: View {
         return min(max(sidebarRevealWidth / sidebarWidth, 0), 1)
     }
 
+    private var mainContentOffsetX: CGFloat {
+        guard sidebarRevealWidth > 0 else { return 0 }
+        return max(sidebarRevealWidth - 1, 0)
+    }
+
     private var sidebarDragGesture: some Gesture {
         DragGesture(minimumDistance: 8, coordinateSpace: .local)
-            .updating($sidebarDragTranslation) { value, state, _ in
+            .onChanged { value in
                 guard abs(value.translation.width) > abs(value.translation.height) * 1.35 else {
                     return
                 }
@@ -1191,18 +1187,24 @@ struct ChatScreen: View {
                     return
                 }
 
+                isSidebarDragging = true
                 if isSidebarOpen {
-                    state = min(0, value.translation.width)
+                    sidebarDragOffset = min(0, value.translation.width)
                 } else {
-                    state = max(0, value.translation.width)
+                    sidebarDragOffset = max(0, value.translation.width)
                 }
             }
             .onEnded { value in
+                defer {
+                    isSidebarDragging = false
+                }
                 guard abs(value.translation.width) > abs(value.translation.height) * 1.35 else {
+                    settleSidebar(to: isSidebarOpen)
                     return
                 }
 
                 if !isSidebarOpen && value.startLocation.x > edgeDragActivationWidth {
+                    settleSidebar(to: isSidebarOpen)
                     return
                 }
 
@@ -1212,7 +1214,7 @@ struct ChatScreen: View {
                     sidebarWidth
                 )
 
-                setSidebarOpen(finalReveal > sidebarWidth * 0.5, force: true)
+                settleSidebar(to: finalReveal > sidebarWidth * 0.5)
             }
     }
 
@@ -1616,16 +1618,31 @@ struct ChatScreen: View {
         }
     }
 
-    private func setSidebarOpen(_ open: Bool, force: Bool = false) {
-        if !force && sidebarAnimationLock { return }
-        guard isSidebarOpen != open else { return }
+    private func scrollToBottomReliable(_ proxy: ScrollViewProxy, animated: Bool) {
+        scrollToBottom(proxy, animated: animated)
+        DispatchQueue.main.async {
+            scrollToBottom(proxy, animated: false)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+            scrollToBottom(proxy, animated: false)
+        }
+    }
+
+    private func settleSidebar(to open: Bool) {
         sidebarAnimationLock = true
         withAnimation(.interactiveSpring(response: 0.24, dampingFraction: 0.9)) {
             isSidebarOpen = open
+            sidebarDragOffset = 0
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
             sidebarAnimationLock = false
         }
+    }
+
+    private func setSidebarOpen(_ open: Bool, force: Bool = false) {
+        if !force && sidebarAnimationLock { return }
+        guard isSidebarOpen != open else { return }
+        settleSidebar(to: open)
     }
 }
 

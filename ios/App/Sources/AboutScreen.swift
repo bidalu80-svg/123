@@ -2,7 +2,7 @@ import SwiftUI
 
 struct AboutScreen: View {
     private var appVersionText: String {
-        "v1.0"
+        "v2.0"
     }
 
     var body: some View {
@@ -17,7 +17,7 @@ struct AboutScreen: View {
                 featureRow("多接口模式", detail: "统一支持聊天、生图、语音转写、向量与模型列表测试。")
                 featureRow("会话管理", detail: "支持多会话、私密聊天、会话切换与历史持久化。")
                 featureRow("多模态输入", detail: "支持图片、文件、音频附件与中文语音转文本输入。")
-                featureRow("智能增强", detail: "可选注入时间、天气、市场、热点信息与跨会话记忆。")
+                featureRow("智能增强", detail: "可选注入时间、天气、市场、热点信息与记忆模式。")
                 featureRow("开发效率", detail: "内置代码运行、HTML 预览与测试中心，便于快速验证。")
             }
 

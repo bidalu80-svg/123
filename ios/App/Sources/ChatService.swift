@@ -469,8 +469,13 @@ final class ChatService {
         message: ChatMessage,
         onEvent: @escaping @Sendable (StreamChunk) -> Void
     ) async throws -> ChatReply {
-        await memoryStore.remember(message)
-        let memoryContext = await memoryStore.buildSystemContext()
+        let memoryContext: String?
+        if config.memoryModeEnabled {
+            await memoryStore.remember(message)
+            memoryContext = await memoryStore.buildSystemContext()
+        } else {
+            memoryContext = nil
+        }
         let realtimeContext = await realtimeContextProvider.buildSystemContext(
             config: config,
             userPrompt: message.copyableText
@@ -500,7 +505,7 @@ final class ChatService {
                 var pendingDeltaText = ""
                 var pendingImageURLs = Set<String>()
                 var lastEmitAt = Date.distantPast
-                let streamEmitInterval: TimeInterval = 0.02
+                let streamEmitInterval: TimeInterval = 0.03
 
                 func emitPending(force: Bool = false) {
                     guard !pendingDeltaText.isEmpty || !pendingImageURLs.isEmpty else { return }
