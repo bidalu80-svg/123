@@ -413,89 +413,89 @@ struct ChatScreen: View {
     private var messageList: some View {
         GeometryReader { geometry in
             ScrollViewReader { proxy in
-                ZStack(alignment: .bottom) {
-                    ScrollView {
-                        LazyVStack(spacing: 16) {
-                            ScrollViewResolver(
-                                onResolve: { scrollView in
-                                    if messageScrollView !== scrollView {
-                                        messageScrollView = scrollView
-                                    }
-                                    applyInitialScrollIfNeeded(on: scrollView)
-                                    updateScrollState(from: scrollView)
-                                },
-                                onScroll: { scrollView in
-                                    updateScrollState(from: scrollView)
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 16) {
+                        ScrollViewResolver(
+                            onResolve: { scrollView in
+                                if messageScrollView !== scrollView {
+                                    messageScrollView = scrollView
                                 }
-                            )
-                            .frame(width: 0, height: 0)
-
-                            if isRenderingWindowed {
-                                renderWindowNotice
+                                applyInitialScrollIfNeeded(on: scrollView)
+                                updateScrollState(from: scrollView)
+                            },
+                            onScroll: { scrollView in
+                                updateScrollState(from: scrollView)
                             }
-
-                            ForEach(renderedMessages) { message in
-                                let isLatestAssistant = message.id == latestAssistantMessageID
-                                let displayMessage = makeDisplaySafeMessage(message)
-                                MessageBubbleView(
-                                    message: displayMessage,
-                                    codeThemeMode: viewModel.config.codeThemeMode,
-                                    apiKey: viewModel.config.apiKey,
-                                    apiBaseURL: viewModel.config.normalizedBaseURL,
-                                    showsAssistantActionBar: message.role == .assistant && !message.isStreaming,
-                                    onRegenerate: (isLatestAssistant && viewModel.config.endpointMode == .chatCompletions && !viewModel.isPrivateMode) ? {
-                                        Task { await viewModel.regenerateLastAssistantReply() }
-                                    } : nil
-                                )
-                                    .id(message.id)
-                            }
-                        }
-                        .scrollTargetLayout()
-                        .frame(
-                            maxWidth: .infinity,
-                            minHeight: max(geometry.size.height - 34, 0),
-                            alignment: .topLeading
                         )
-                        .padding(.horizontal, 12)
-                        .padding(.top, 16)
-                        .padding(.bottom, 18)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    .scrollIndicators(.hidden)
-                    .scrollDismissesKeyboard(.interactively)
-                    .onAppear {
-                        needsInitialScrollToBottom = true
-                    }
-                    .onDisappear {
-                        messageScrollView = nil
-                        needsInitialScrollToBottom = false
-                    }
-                    .onChange(of: viewModel.messages.count) { _, _ in
-                        guard let lastMessage = viewModel.messages.last else { return }
-                        if lastMessage.role == .user {
-                            isPinnedToBottom = true
-                        }
-                        if isPinnedToBottom || lastMessage.role == .user {
-                            DispatchQueue.main.async {
-                                scrollToBottomReliable(proxy, animated: false)
-                            }
-                        }
-                    }
-                    .onChange(of: viewModel.streamScrollTrigger) { _, _ in
-                        if isPinnedToBottom {
-                            if let scrollView = messageScrollView {
-                                scrollToBottom(scrollView, animated: false)
-                            } else {
-                                scrollToBottom(proxy, animated: false)
-                            }
-                        }
-                    }
+                        .frame(width: 0, height: 0)
 
+                        if isRenderingWindowed {
+                            renderWindowNotice
+                        }
+
+                        ForEach(renderedMessages) { message in
+                            let isLatestAssistant = message.id == latestAssistantMessageID
+                            let displayMessage = makeDisplaySafeMessage(message)
+                            MessageBubbleView(
+                                message: displayMessage,
+                                codeThemeMode: viewModel.config.codeThemeMode,
+                                apiKey: viewModel.config.apiKey,
+                                apiBaseURL: viewModel.config.normalizedBaseURL,
+                                showsAssistantActionBar: message.role == .assistant && !message.isStreaming,
+                                onRegenerate: (isLatestAssistant && viewModel.config.endpointMode == .chatCompletions && !viewModel.isPrivateMode) ? {
+                                    Task { await viewModel.regenerateLastAssistantReply() }
+                                } : nil
+                            )
+                                .id(message.id)
+                        }
+                    }
+                    .scrollTargetLayout()
+                    .frame(
+                        maxWidth: .infinity,
+                        minHeight: max(geometry.size.height - 34, 0),
+                        alignment: .topLeading
+                    )
+                    .padding(.horizontal, 12)
+                    .padding(.top, 16)
+                    .padding(.bottom, 18)
+                }
+                .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
+                .scrollIndicators(.hidden)
+                .scrollDismissesKeyboard(.interactively)
+                .onAppear {
+                    needsInitialScrollToBottom = true
+                }
+                .onDisappear {
+                    messageScrollView = nil
+                    needsInitialScrollToBottom = false
+                }
+                .onChange(of: viewModel.messages.count) { _, _ in
+                    guard let lastMessage = viewModel.messages.last else { return }
+                    if lastMessage.role == .user {
+                        isPinnedToBottom = true
+                    }
+                    if isPinnedToBottom || lastMessage.role == .user {
+                        DispatchQueue.main.async {
+                            scrollToBottomReliable(proxy, animated: false)
+                        }
+                    }
+                }
+                .onChange(of: viewModel.streamScrollTrigger) { _, _ in
+                    if isPinnedToBottom {
+                        if let scrollView = messageScrollView {
+                            scrollToBottom(scrollView, animated: false)
+                        } else {
+                            scrollToBottom(proxy, animated: false)
+                        }
+                    }
+                }
+                .overlay(alignment: .bottom) {
                     if shouldShowCenterScrollDownButton {
                         scrollDownButton(proxy: proxy)
                             .padding(.bottom, 12)
                     }
-
+                }
+                .overlay {
                     if shouldShowPrivateModeCenterNotice {
                         privateModeCenterNotice
                             .padding(.horizontal, 30)
