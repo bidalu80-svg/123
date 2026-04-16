@@ -44,6 +44,7 @@ struct ChatScreen: View {
     @State private var headerLeadingWidth: CGFloat = 36
     @State private var headerTrailingWidth: CGFloat = 108
     @State private var messageScrollView: UIScrollView?
+    @State private var pendingBottomAlignment = false
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -420,9 +421,11 @@ struct ChatScreen: View {
                                     messageScrollView = scrollView
                                 }
                                 updateScrollState(from: scrollView)
+                                applyPendingBottomAlignmentIfNeeded(on: scrollView)
                             },
                             onScroll: { scrollView in
                                 updateScrollState(from: scrollView)
+                                applyPendingBottomAlignmentIfNeeded(on: scrollView)
                             }
                         )
                         .frame(width: 0, height: 0)
@@ -455,10 +458,12 @@ struct ChatScreen: View {
                 .scrollIndicators(.hidden)
                 .scrollDismissesKeyboard(.interactively)
                 .onAppear {
+                    pendingBottomAlignment = true
                     scrollToBottomReliable(proxy, animated: false)
                 }
                 .onDisappear {
                     messageScrollView = nil
+                    pendingBottomAlignment = false
                 }
                 .onChange(of: viewModel.messages.count) { _, _ in
                     guard let lastMessage = viewModel.messages.last else { return }
@@ -1621,31 +1626,24 @@ struct ChatScreen: View {
     }
 
     private func scrollToBottomReliable(_ proxy: ScrollViewProxy, animated: Bool) {
+        pendingBottomAlignment = true
         if let scrollView = messageScrollView {
             scrollToBottom(scrollView, animated: animated)
             DispatchQueue.main.async {
                 guard let scrollView = messageScrollView else {
-                    scrollToBottom(proxy, animated: false)
                     return
                 }
                 scrollToBottom(scrollView, animated: false)
+                pendingBottomAlignment = false
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
                 guard let scrollView = messageScrollView else {
-                    scrollToBottom(proxy, animated: false)
                     return
                 }
                 scrollToBottom(scrollView, animated: false)
+                pendingBottomAlignment = false
             }
             return
-        }
-
-        scrollToBottom(proxy, animated: animated)
-        DispatchQueue.main.async {
-            scrollToBottom(proxy, animated: false)
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-            scrollToBottom(proxy, animated: false)
         }
     }
 
@@ -1701,6 +1699,12 @@ struct ChatScreen: View {
         if isPinnedToBottom != nextPinnedState {
             isPinnedToBottom = nextPinnedState
         }
+    }
+
+    private func applyPendingBottomAlignmentIfNeeded(on scrollView: UIScrollView) {
+        guard pendingBottomAlignment else { return }
+        scrollToBottom(scrollView, animated: false)
+        pendingBottomAlignment = false
     }
 
     private func settleSidebar(to open: Bool) {
