@@ -1618,16 +1618,6 @@ struct ChatScreen: View {
     }
 
     private func scrollToBottomReliable(_ proxy: ScrollViewProxy, animated: Bool) {
-        if let scrollView = messageScrollView {
-            scrollToBottom(scrollView, animated: animated)
-            DispatchQueue.main.async {
-                scrollToBottom(scrollView, animated: false)
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-                scrollToBottom(scrollView, animated: false)
-            }
-            return
-        }
         scrollToBottom(proxy, animated: animated)
         DispatchQueue.main.async {
             scrollToBottom(proxy, animated: false)

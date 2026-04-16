@@ -433,13 +433,22 @@ struct MessageBubbleView: View {
     private func segmentView(_ segment: MessageSegment) -> some View {
         switch segment {
         case .text(let text):
-            SelectableLinkTextView(
-                text: text,
-                textColor: UIColor.label,
-                linkColor: UIColor.systemGray,
-                font: .systemFont(ofSize: 18, weight: .regular)
-            )
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if shouldUseLinkTextView(for: text) {
+                SelectableLinkTextView(
+                    text: text,
+                    textColor: UIColor.label,
+                    linkColor: UIColor.systemGray,
+                    font: .systemFont(ofSize: 18, weight: .regular)
+                )
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Text(text)
+                    .font(.system(size: 18, weight: .regular))
+                    .lineSpacing(5)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
         case .code(let language, let content):
             codeBlock(title: (language ?? "code").uppercased(), content: content, language: language)
         case .file(let name, let language, let content):
@@ -447,6 +456,13 @@ struct MessageBubbleView: View {
         case .image(let attachment):
             messageImage(attachment)
         }
+    }
+
+    private func shouldUseLinkTextView(for text: String) -> Bool {
+        let lowered = text.lowercased()
+        return lowered.contains("http://")
+            || lowered.contains("https://")
+            || lowered.contains("www.")
     }
 
     private func codeBlock(title: String, content: String, language: String? = nil) -> some View {
