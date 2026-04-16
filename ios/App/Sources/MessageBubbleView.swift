@@ -31,11 +31,6 @@ struct MessageBubbleView: View {
                 assistantMessageView
             }
         }
-        .contextMenu {
-            Button("复制全部") {
-                UIPasteboard.general.string = message.copyableText
-            }
-        }
         .alert("提示", isPresented: saveFeedbackBinding) {
             Button("确定", role: .cancel) {
                 saveFeedback = nil
@@ -263,13 +258,7 @@ struct MessageBubbleView: View {
 
             if segments.isEmpty {
                 if let fallback = fallbackPlainText {
-                    SelectableLinkTextView(
-                        text: fallback,
-                        textColor: UIColor.label,
-                        linkColor: UIColor.systemGray,
-                        font: .systemFont(ofSize: 18, weight: .regular)
-                    )
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    selectableTextContent(fallback)
                 } else {
                     Text("（空响应）")
                         .foregroundStyle(.secondary)
@@ -319,8 +308,6 @@ struct MessageBubbleView: View {
         message.imageAttachments.isEmpty
             && message.fileAttachments.isEmpty
             && !message.content.contains("```")
-            && !message.content.contains("![")
-            && !message.content.contains("data:image")
     }
 
     private var streamingWaitingDot: some View {
@@ -341,17 +328,8 @@ struct MessageBubbleView: View {
     }
 
     private func cleanStreamingMarkdownText(_ raw: String) -> String {
-        var text = raw.replacingOccurrences(of: "\r\n", with: "\n")
-        text = text.replacingOccurrences(of: "(?m)^\\s{0,3}#{1,6}\\s*", with: "", options: .regularExpression)
-        text = text.replacingOccurrences(of: "(?m)^\\s*[-*•]\\s+", with: "• ", options: .regularExpression)
-        text = text.replacingOccurrences(of: "(?m)^\\s*\\d+[\\.)、]\\s+", with: "• ", options: .regularExpression)
-        text = text.replacingOccurrences(of: "(?m)^\\s*>\\s?", with: "", options: .regularExpression)
-        text = text.replacingOccurrences(of: "(?m)^\\s*([-*_])\\1{2,}\\s*$", with: "", options: .regularExpression)
-        text = text.replacingOccurrences(of: "**", with: "")
-        text = text.replacingOccurrences(of: "__", with: "")
-        text = text.replacingOccurrences(of: "`", with: "")
-        text = text.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
-        return text
+        raw
+            .replacingOccurrences(of: "\r\n", with: "\n")
     }
 
     @ViewBuilder
@@ -433,22 +411,7 @@ struct MessageBubbleView: View {
     private func segmentView(_ segment: MessageSegment) -> some View {
         switch segment {
         case .text(let text):
-            if shouldUseLinkTextView(for: text) {
-                SelectableLinkTextView(
-                    text: text,
-                    textColor: UIColor.label,
-                    linkColor: UIColor.systemGray,
-                    font: .systemFont(ofSize: 18, weight: .regular)
-                )
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                Text(text)
-                    .font(.system(size: 18, weight: .regular))
-                    .lineSpacing(5)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-            }
+            selectableTextContent(text)
         case .code(let language, let content):
             codeBlock(title: (language ?? "code").uppercased(), content: content, language: language)
         case .file(let name, let language, let content):
@@ -458,11 +421,14 @@ struct MessageBubbleView: View {
         }
     }
 
-    private func shouldUseLinkTextView(for text: String) -> Bool {
-        let lowered = text.lowercased()
-        return lowered.contains("http://")
-            || lowered.contains("https://")
-            || lowered.contains("www.")
+    private func selectableTextContent(_ text: String) -> some View {
+        SelectableLinkTextView(
+            text: text,
+            textColor: UIColor.label,
+            linkColor: UIColor.systemGray,
+            font: .systemFont(ofSize: 18, weight: .regular)
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func codeBlock(title: String, content: String, language: String? = nil) -> some View {

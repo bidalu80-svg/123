@@ -50,8 +50,8 @@ final class ChatViewModel: ObservableObject {
 
     private let service: ChatService
     private var autoSaveEnabled = false
-    private let streamScrollThrottleInterval: TimeInterval = 0.11
-    private let streamUIFlushInterval: TimeInterval = 1.0 / 45.0
+    private let streamScrollThrottleInterval: TimeInterval = 0.08
+    private let streamUIFlushInterval: TimeInterval = 1.0 / 60.0
     private var lastStreamScrollSignal: Date = .distantPast
     private var inflightSendTask: Task<ChatReply, Error>?
     private var inflightTargetContext: StreamTargetContext?
@@ -686,11 +686,12 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func smoothChunkCharacterCount(forPendingTextCount pendingCount: Int) -> Int {
-        if pendingCount >= 600 { return 18 }
-        if pendingCount >= 300 { return 14 }
-        if pendingCount >= 120 { return 9 }
-        if pendingCount >= 48 { return 6 }
-        return 3
+        if pendingCount >= 1000 { return 120 }
+        if pendingCount >= 600 { return 80 }
+        if pendingCount >= 300 { return 48 }
+        if pendingCount >= 120 { return 24 }
+        if pendingCount >= 48 { return 12 }
+        return 6
     }
 
     private func splitPrefix(_ value: String, maxCharacters: Int) -> (prefix: String, suffix: String) {

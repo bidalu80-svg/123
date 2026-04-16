@@ -17,6 +17,7 @@ struct SelectableLinkTextView: UIViewRepresentable {
         view.isEditable = false
         view.isScrollEnabled = false
         view.isSelectable = true
+        view.scrollsToTop = false
         view.delegate = context.coordinator
         view.backgroundColor = .clear
         view.textContainerInset = .zero
@@ -30,8 +31,6 @@ struct SelectableLinkTextView: UIViewRepresentable {
             .foregroundColor: linkColor,
             .underlineStyle: 0
         ]
-        // Let the parent SwiftUI ScrollView own vertical scrolling.
-        view.panGestureRecognizer.isEnabled = false
         return view
     }
 

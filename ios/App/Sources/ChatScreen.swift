@@ -10,7 +10,6 @@ struct ChatScreen: View {
 
     private let sidebarWidth: CGFloat = 286
     private let edgeDragActivationWidth: CGFloat = 28
-    private let scrollTopAnchor = "scroll-top-anchor"
     private let headerCenterMinHorizontalInset: CGFloat = 76
     private let maxRenderedMessages = 120
     private let maxRenderedCharacters = 260_000
@@ -45,7 +44,6 @@ struct ChatScreen: View {
     @State private var headerLeadingWidth: CGFloat = 36
     @State private var headerTrailingWidth: CGFloat = 108
     @State private var messageScrollView: UIScrollView?
-    @State private var visibleMessageID: UUID?
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -416,16 +414,18 @@ struct ChatScreen: View {
             ZStack(alignment: .bottom) {
                 ScrollView {
                     LazyVStack(spacing: 16) {
-                        ScrollViewResolver { scrollView in
-                            if messageScrollView !== scrollView {
-                                messageScrollView = scrollView
+                        ScrollViewResolver(
+                            onResolve: { scrollView in
+                                if messageScrollView !== scrollView {
+                                    messageScrollView = scrollView
+                                }
+                                updateScrollState(from: scrollView)
+                            },
+                            onScroll: { scrollView in
+                                updateScrollState(from: scrollView)
                             }
-                        }
+                        )
                         .frame(width: 0, height: 0)
-
-                        Color.clear
-                            .frame(height: 1)
-                            .id(scrollTopAnchor)
 
                         if isRenderingWindowed {
                             renderWindowNotice
@@ -454,16 +454,11 @@ struct ChatScreen: View {
                 }
                 .scrollIndicators(.hidden)
                 .scrollDismissesKeyboard(.interactively)
-                .scrollPosition(id: $visibleMessageID)
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 6).onChanged { _ in
-                        if isPinnedToBottom {
-                            isPinnedToBottom = false
-                        }
-                    }
-                )
                 .onAppear {
                     scrollToBottomReliable(proxy, animated: false)
+                }
+                .onDisappear {
+                    messageScrollView = nil
                 }
                 .onChange(of: viewModel.messages.count) { _, _ in
                     guard let lastMessage = viewModel.messages.last else { return }
@@ -478,7 +473,11 @@ struct ChatScreen: View {
                 }
                 .onChange(of: viewModel.streamScrollTrigger) { _, _ in
                     if isPinnedToBottom {
-                        scrollToBottom(proxy, animated: false)
+                        if let scrollView = messageScrollView {
+                            scrollToBottom(scrollView, animated: false)
+                        } else {
+                            scrollToBottom(proxy, animated: false)
+                        }
                     }
                 }
 
@@ -1622,6 +1621,25 @@ struct ChatScreen: View {
     }
 
     private func scrollToBottomReliable(_ proxy: ScrollViewProxy, animated: Bool) {
+        if let scrollView = messageScrollView {
+            scrollToBottom(scrollView, animated: animated)
+            DispatchQueue.main.async {
+                guard let scrollView = messageScrollView else {
+                    scrollToBottom(proxy, animated: false)
+                    return
+                }
+                scrollToBottom(scrollView, animated: false)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                guard let scrollView = messageScrollView else {
+                    scrollToBottom(proxy, animated: false)
+                    return
+                }
+                scrollToBottom(scrollView, animated: false)
+            }
+            return
+        }
+
         scrollToBottom(proxy, animated: animated)
         DispatchQueue.main.async {
             scrollToBottom(proxy, animated: false)
@@ -1650,24 +1668,17 @@ struct ChatScreen: View {
         let targetY = min(scrollView.contentOffset.y + pageStep, maxOffsetY)
         let isNearBottomAfterScroll = targetY >= maxOffsetY - 8
 
+        isPinnedToBottom = isNearBottomAfterScroll
         scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: targetY), animated: true)
-        if isNearBottomAfterScroll {
-            isPinnedToBottom = true
-        }
     }
 
     private func scrollDownByMessageStep(_ proxy: ScrollViewProxy) {
         guard !renderedMessages.isEmpty else { return }
-        let currentID = visibleMessageID
-        let currentIndex = renderedMessages.firstIndex(where: { $0.id == currentID }) ?? 0
-        let targetIndex = min(currentIndex + 3, renderedMessages.count - 1)
-        let targetID = renderedMessages[targetIndex].id
-
-        withAnimation(.easeOut(duration: 0.24)) {
-            proxy.scrollTo(targetID, anchor: .top)
-        }
-        if targetIndex >= renderedMessages.count - 1 {
-            isPinnedToBottom = true
+        isPinnedToBottom = false
+        if let lastID = renderedMessages.last?.id {
+            withAnimation(.easeOut(duration: 0.24)) {
+                proxy.scrollTo(lastID, anchor: .bottom)
+            }
         }
     }
 
@@ -1677,6 +1688,19 @@ struct ChatScreen: View {
             scrollView.contentSize.height - scrollView.bounds.height + scrollView.adjustedContentInset.bottom
         )
         scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: targetY), animated: animated)
+    }
+
+    private func updateScrollState(from scrollView: UIScrollView) {
+        let maxOffsetY = max(
+            -scrollView.adjustedContentInset.top,
+            scrollView.contentSize.height - scrollView.bounds.height + scrollView.adjustedContentInset.bottom
+        )
+        let bottomDistance = maxOffsetY - scrollView.contentOffset.y
+        let nextPinnedState = bottomDistance <= 28
+
+        if isPinnedToBottom != nextPinnedState {
+            isPinnedToBottom = nextPinnedState
+        }
     }
 
     private func settleSidebar(to open: Bool) {
@@ -1715,23 +1739,39 @@ private struct HeaderTrailingWidthPreferenceKey: PreferenceKey {
 
 private struct ScrollViewResolver: UIViewRepresentable {
     let onResolve: (UIScrollView) -> Void
+    let onScroll: (UIScrollView) -> Void
 
     func makeUIView(context: Context) -> ResolverView {
         let view = ResolverView(frame: .zero)
         view.onResolve = onResolve
+        view.onScroll = onScroll
         return view
     }
 
     func updateUIView(_ uiView: ResolverView, context: Context) {
         uiView.onResolve = onResolve
-        uiView.resolveRepeatedly()
+        uiView.onScroll = onScroll
+        uiView.refresh()
     }
 
     final class ResolverView: UIView {
         var onResolve: ((UIScrollView) -> Void)?
+        var onScroll: ((UIScrollView) -> Void)?
+        private weak var observedScrollView: UIScrollView?
+        private var contentOffsetObservation: NSKeyValueObservation?
+        private var contentSizeObservation: NSKeyValueObservation?
+        private var boundsObservation: NSKeyValueObservation?
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
+            refresh()
+        }
+
+        func refresh() {
+            if let scrollView = observedScrollView ?? enclosingScrollView {
+                connectIfNeeded(to: scrollView)
+                return
+            }
             resolveRepeatedly()
         }
 
@@ -1739,13 +1779,39 @@ private struct ScrollViewResolver: UIViewRepresentable {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { [weak self] in
                 guard let self else { return }
                 if let scrollView = self.enclosingScrollView {
-                    self.onResolve?(scrollView)
+                    self.connectIfNeeded(to: scrollView)
                     return
                 }
                 if remainingAttempts > 0 {
                     self.resolveRepeatedly(remainingAttempts: remainingAttempts - 1)
                 }
             }
+        }
+
+        private func connectIfNeeded(to scrollView: UIScrollView) {
+            if observedScrollView !== scrollView {
+                observedScrollView = scrollView
+                scrollView.scrollsToTop = true
+
+                contentOffsetObservation = scrollView.observe(\.contentOffset, options: [.initial, .new]) { [weak self] scrollView, _ in
+                    DispatchQueue.main.async {
+                        self?.onScroll?(scrollView)
+                    }
+                }
+                contentSizeObservation = scrollView.observe(\.contentSize, options: [.new]) { [weak self] scrollView, _ in
+                    DispatchQueue.main.async {
+                        self?.onScroll?(scrollView)
+                    }
+                }
+                boundsObservation = scrollView.observe(\.bounds, options: [.new]) { [weak self] scrollView, _ in
+                    DispatchQueue.main.async {
+                        self?.onScroll?(scrollView)
+                    }
+                }
+            }
+
+            scrollView.disableNestedScrollsToTop()
+            onResolve?(scrollView)
         }
     }
 }
@@ -1760,6 +1826,15 @@ private extension UIView {
             current = view.superview
         }
         return nil
+    }
+
+    func disableNestedScrollsToTop() {
+        for subview in subviews {
+            if let scrollView = subview as? UIScrollView {
+                scrollView.scrollsToTop = false
+            }
+            subview.disableNestedScrollsToTop()
+        }
     }
 }
 
