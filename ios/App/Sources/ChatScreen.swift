@@ -416,9 +416,7 @@ struct ChatScreen: View {
             NativeTranscriptScrollView(
                 historyContent: AnyView(transcriptHistoryContent()),
                 historyVersion: transcriptHistoryVersion,
-                streamingContent: AnyView(transcriptStreamingContent()),
-                streamingVersion: transcriptStreamingVersion,
-                hasStreamingContent: activeStreamingRenderedMessage != nil,
+                streamingMessage: activeStreamingRenderedMessage,
                 command: transcriptCommand,
                 onMetricsChanged: { metrics in
                     if transcriptMetrics != metrics {
@@ -490,22 +488,6 @@ struct ChatScreen: View {
         .padding(.horizontal, 12)
         .padding(.top, 16)
         .padding(.bottom, activeStreamingRenderedMessage == nil ? 18 : 0)
-    }
-
-    @ViewBuilder
-    private func transcriptStreamingContent() -> some View {
-        if let streamingMessage = activeStreamingRenderedMessage {
-            MessageBubbleView(
-                message: streamingMessage,
-                codeThemeMode: viewModel.config.codeThemeMode,
-                apiKey: viewModel.config.apiKey,
-                apiBaseURL: viewModel.config.normalizedBaseURL,
-                showsAssistantActionBar: false,
-                onRegenerate: nil
-            )
-        } else {
-            EmptyView()
-        }
     }
 
     private var composer: some View {
@@ -946,11 +928,6 @@ struct ChatScreen: View {
         let lengths = frozenRenderedMessages.map { String($0.content.count) }.joined(separator: ",")
         let windowFlag = isRenderingWindowed ? "1" : "0"
         return "\(windowFlag)|\(ids)|\(lengths)"
-    }
-
-    private var transcriptStreamingVersion: String {
-        guard let message = activeStreamingRenderedMessage else { return "none" }
-        return "\(message.id.uuidString)|\(message.content.count)|\(message.imageAttachments.count)|\(message.fileAttachments.count)"
     }
 
     private var renderWindowNotice: some View {
@@ -1710,9 +1687,7 @@ private struct ChatTranscriptCommand: Equatable {
 private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
     let historyContent: AnyView
     let historyVersion: String
-    let streamingContent: AnyView
-    let streamingVersion: String
-    let hasStreamingContent: Bool
+    let streamingMessage: ChatMessage?
     let command: ChatTranscriptCommand?
     let onMetricsChanged: (ChatTranscriptMetrics) -> Void
 
@@ -1724,9 +1699,7 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
         uiViewController.update(
             historyContent: historyContent,
             historyVersion: historyVersion,
-            streamingContent: streamingContent,
-            streamingVersion: streamingVersion,
-            hasStreamingContent: hasStreamingContent,
+            streamingMessage: streamingMessage,
             command: command,
             onMetricsChanged: onMetricsChanged
         )
@@ -1736,19 +1709,14 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
         private let scrollView = UIScrollView()
         private let stackView = UIStackView()
         private let historyHostingController = UIHostingController(rootView: AnyView(EmptyView()))
-        private let streamingHostingController = UIHostingController(rootView: AnyView(EmptyView()))
+        private let streamingView = NativeStreamingAssistantView()
         private let spacerView = UIView()
         private var onMetricsChanged: (ChatTranscriptMetrics) -> Void
         private var lastReportedMetrics = ChatTranscriptMetrics()
         private var lastAppliedCommandID: Int?
         private var pendingCommand: ChatTranscriptCommand?
         private var lastHistoryVersion: String?
-        private var lastStreamingVersion: String?
-        private var pendingStreamingContent: AnyView?
-        private var pendingStreamingVersion: String?
-        private var streamingApplyWorkItem: DispatchWorkItem?
-        private var lastStreamingApplyAt = Date.distantPast
-        private let streamingApplyInterval: TimeInterval = 1.0 / 24.0
+        private var lastStreamingSignature: String?
 
         init(onMetricsChanged: @escaping (ChatTranscriptMetrics) -> Void) {
             self.onMetricsChanged = onMetricsChanged
@@ -1787,15 +1755,17 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             stackView.translatesAutoresizingMaskIntoConstraints = false
             scrollView.addSubview(stackView)
 
-            for hostingController in [historyHostingController, streamingHostingController] {
-                hostingController.sizingOptions = [.intrinsicContentSize]
-                hostingController.view.backgroundColor = .clear
-                hostingController.view.translatesAutoresizingMaskIntoConstraints = false
-                addChild(hostingController)
-                stackView.addArrangedSubview(hostingController.view)
-                hostingController.didMove(toParent: self)
-            }
-            streamingHostingController.view.isHidden = true
+            historyHostingController.sizingOptions = [.intrinsicContentSize]
+            historyHostingController.view.backgroundColor = .clear
+            historyHostingController.view.translatesAutoresizingMaskIntoConstraints = false
+            addChild(historyHostingController)
+            stackView.addArrangedSubview(historyHostingController.view)
+            historyHostingController.didMove(toParent: self)
+
+            streamingView.translatesAutoresizingMaskIntoConstraints = false
+            streamingView.isHidden = true
+            stackView.addArrangedSubview(streamingView)
+
             spacerView.backgroundColor = .clear
             spacerView.setContentHuggingPriority(.defaultLow, for: .vertical)
             spacerView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
@@ -1821,9 +1791,7 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
         func update(
             historyContent: AnyView,
             historyVersion: String,
-            streamingContent: AnyView,
-            streamingVersion: String,
-            hasStreamingContent: Bool,
+            streamingMessage: ChatMessage?,
             command: ChatTranscriptCommand?,
             onMetricsChanged: @escaping (ChatTranscriptMetrics) -> Void
         ) {
@@ -1837,21 +1805,23 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
                 lastHistoryVersion = historyVersion
             }
 
-            if hasStreamingContent {
-                pendingStreamingContent = streamingContent
-                pendingStreamingVersion = streamingVersion
-                scheduleStreamingApplyIfNeeded()
-            } else if !streamingHostingController.view.isHidden || lastStreamingVersion != nil {
-                streamingApplyWorkItem?.cancel()
-                streamingApplyWorkItem = nil
-                pendingStreamingContent = nil
-                pendingStreamingVersion = nil
-                UIView.performWithoutAnimation {
-                    streamingHostingController.rootView = AnyView(EmptyView())
-                    streamingHostingController.view.invalidateIntrinsicContentSize()
-                    streamingHostingController.view.isHidden = true
+            let newStreamingSignature = streamingMessage.map {
+                "\($0.id.uuidString)|\($0.content.count)|\($0.imageAttachments.count)|\($0.fileAttachments.count)"
+            }
+            if let streamingMessage {
+                if newStreamingSignature != lastStreamingSignature || streamingView.isHidden {
+                    UIView.performWithoutAnimation {
+                        streamingView.isHidden = false
+                        streamingView.apply(message: streamingMessage)
+                    }
+                    lastStreamingSignature = newStreamingSignature
                 }
-                lastStreamingVersion = nil
+            } else if !streamingView.isHidden || lastStreamingSignature != nil {
+                UIView.performWithoutAnimation {
+                    streamingView.reset()
+                    streamingView.isHidden = true
+                }
+                lastStreamingSignature = nil
             }
 
             if let command, command.id != lastAppliedCommandID {
@@ -1859,40 +1829,11 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             }
             view.setNeedsLayout()
             DispatchQueue.main.async { [weak self] in
+                self?.view.setNeedsLayout()
+                self?.view.layoutIfNeeded()
                 self?.applyPendingCommandIfNeeded()
                 self?.reportMetrics()
             }
-        }
-
-        private func scheduleStreamingApplyIfNeeded() {
-            guard streamingApplyWorkItem == nil else { return }
-
-            let delay = max(0, streamingApplyInterval - Date().timeIntervalSince(lastStreamingApplyAt))
-            let workItem = DispatchWorkItem { [weak self] in
-                guard let self else { return }
-                self.streamingApplyWorkItem = nil
-                self.applyPendingStreamingContentIfNeeded()
-            }
-            streamingApplyWorkItem = workItem
-
-            if lastStreamingApplyAt == .distantPast || delay <= 0.001 {
-                DispatchQueue.main.async(execute: workItem)
-            } else {
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
-            }
-        }
-
-        private func applyPendingStreamingContentIfNeeded() {
-            guard let pendingStreamingContent else { return }
-            UIView.performWithoutAnimation {
-                streamingHostingController.rootView = pendingStreamingContent
-                streamingHostingController.view.invalidateIntrinsicContentSize()
-                streamingHostingController.view.isHidden = false
-            }
-            lastStreamingApplyAt = Date()
-            lastStreamingVersion = pendingStreamingVersion
-            self.pendingStreamingContent = nil
-            self.pendingStreamingVersion = nil
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
@@ -2002,6 +1943,142 @@ private struct ScrollsToTopConfigurator: UIViewRepresentable {
                 scrollView.scrollsToTop = self.enabled
             }
         }
+    }
+}
+
+private final class NativeStreamingAssistantView: UIView {
+    private let containerStack = UIStackView()
+    private let headerStack = UIStackView()
+    private let iconView = UIImageView()
+    private let nameLabel = UILabel()
+    private let textView = UITextView()
+
+    private var currentMessageID: UUID?
+    private var currentRenderedText = ""
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        setup()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func apply(message: ChatMessage) {
+        let renderedText: String
+        if !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            renderedText = Self.cleanStreamingMarkdownText(message.content)
+        } else if !message.imageAttachments.isEmpty {
+            renderedText = "正在接收图片…"
+        } else {
+            renderedText = ""
+        }
+
+        if currentMessageID == message.id, renderedText.hasPrefix(currentRenderedText) {
+            let suffix = String(renderedText.dropFirst(currentRenderedText.count))
+            if !suffix.isEmpty {
+                textView.textStorage.append(NSAttributedString(string: suffix, attributes: textAttributes))
+            }
+        } else {
+            textView.attributedText = NSAttributedString(string: renderedText, attributes: textAttributes)
+        }
+
+        currentMessageID = message.id
+        currentRenderedText = renderedText
+        invalidateIntrinsicContentSize()
+        setNeedsLayout()
+    }
+
+    func reset() {
+        currentMessageID = nil
+        currentRenderedText = ""
+        textView.attributedText = nil
+        invalidateIntrinsicContentSize()
+    }
+
+    override var intrinsicContentSize: CGSize {
+        layoutIfNeeded()
+        let textWidth = max(bounds.width - 12, 0)
+        let fitted = textView.sizeThatFits(CGSize(width: textWidth, height: .greatestFiniteMagnitude))
+        let totalHeight = 18 + 6 + fitted.height + 16
+        return CGSize(width: UIView.noIntrinsicMetric, height: totalHeight)
+    }
+
+    private func setup() {
+        backgroundColor = .clear
+
+        containerStack.axis = .vertical
+        containerStack.alignment = .fill
+        containerStack.spacing = 6
+        containerStack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(containerStack)
+
+        NSLayoutConstraint.activate([
+            containerStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            containerStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            containerStack.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            containerStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
+        ])
+
+        headerStack.axis = .horizontal
+        headerStack.alignment = .center
+        headerStack.spacing = 8
+
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        iconView.image = UIImage(systemName: "sparkles")
+        iconView.tintColor = .white
+        iconView.contentMode = .center
+        iconView.backgroundColor = .black
+        iconView.layer.cornerRadius = 5
+        iconView.clipsToBounds = true
+        NSLayoutConstraint.activate([
+            iconView.widthAnchor.constraint(equalToConstant: 18),
+            iconView.heightAnchor.constraint(equalToConstant: 18)
+        ])
+
+        nameLabel.text = "IEXA"
+        nameLabel.font = .systemFont(ofSize: 15, weight: .semibold)
+        nameLabel.textColor = .label
+
+        headerStack.addArrangedSubview(iconView)
+        headerStack.addArrangedSubview(nameLabel)
+        headerStack.addArrangedSubview(UIView())
+        containerStack.addArrangedSubview(headerStack)
+
+        textView.isEditable = false
+        textView.isSelectable = false
+        textView.isScrollEnabled = false
+        textView.backgroundColor = .clear
+        textView.textContainerInset = .zero
+        textView.textContainer.lineFragmentPadding = 0
+        textView.textContainer.widthTracksTextView = true
+        textView.panGestureRecognizer.isEnabled = false
+        containerStack.addArrangedSubview(textView)
+    }
+
+    private var textAttributes: [NSAttributedString.Key: Any] {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = 5
+        return [
+            .font: UIFont.systemFont(ofSize: 18, weight: .regular),
+            .foregroundColor: UIColor.label,
+            .paragraphStyle: paragraph
+        ]
+    }
+
+    private static func cleanStreamingMarkdownText(_ raw: String) -> String {
+        raw
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "**", with: "")
+            .replacingOccurrences(of: "__", with: "")
+            .replacingOccurrences(of: "`", with: "")
+            .replacingOccurrences(of: "```", with: "")
+            .replacingOccurrences(of: #"(?m)^\s{0,3}#{1,6}\s+"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"(?m)^\s*>\s?"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"(?m)^\s*[-*]\s+"#, with: "• ", options: .regularExpression)
+            .replacingOccurrences(of: #"(?m)^\s*(\d+)\.\s+"#, with: "$1. ", options: .regularExpression)
     }
 }
 
