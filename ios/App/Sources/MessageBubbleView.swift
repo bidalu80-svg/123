@@ -307,7 +307,7 @@ struct MessageBubbleView: View {
     private var canUseFastStreamingTextPath: Bool {
         message.imageAttachments.isEmpty
             && message.fileAttachments.isEmpty
-            && !message.content.contains("```")
+            && !containsStreamingMarkdownSyntax(message.content)
     }
 
     private var streamingWaitingDot: some View {
@@ -330,6 +330,31 @@ struct MessageBubbleView: View {
     private func cleanStreamingMarkdownText(_ raw: String) -> String {
         raw
             .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "**", with: "")
+            .replacingOccurrences(of: "__", with: "")
+            .replacingOccurrences(of: "`", with: "")
+            .replacingOccurrences(of: #"(?m)^\s{0,3}#{1,6}\s+"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"(?m)^\s*>\s?"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"(?m)^\s*[-*]\s+"#, with: "• ", options: .regularExpression)
+            .replacingOccurrences(of: #"(?m)^\s*(\d+)\.\s+"#, with: "$1. ", options: .regularExpression)
+    }
+
+    private func containsStreamingMarkdownSyntax(_ text: String) -> Bool {
+        text.contains("```")
+            || text.contains("![")
+            || text.contains("data:image")
+            || text.contains("**")
+            || text.contains("__")
+            || text.contains("`")
+            || text.contains("\n#")
+            || text.contains("\n##")
+            || text.contains("\n###")
+            || text.contains("\n- ")
+            || text.contains("\n* ")
+            || text.contains("\n> ")
+            || text.contains("\n1.")
+            || text.contains("\n2.")
+            || text.contains("\n3.")
     }
 
     @ViewBuilder

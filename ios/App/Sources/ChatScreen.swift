@@ -44,7 +44,7 @@ struct ChatScreen: View {
     @State private var headerLeadingWidth: CGFloat = 36
     @State private var headerTrailingWidth: CGFloat = 108
     @State private var messageScrollView: UIScrollView?
-    @State private var pendingBottomAlignment = false
+    @State private var needsInitialScrollToBottom = false
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -420,12 +420,11 @@ struct ChatScreen: View {
                                 if messageScrollView !== scrollView {
                                     messageScrollView = scrollView
                                 }
+                                applyInitialScrollIfNeeded(on: scrollView)
                                 updateScrollState(from: scrollView)
-                                applyPendingBottomAlignmentIfNeeded(on: scrollView)
                             },
                             onScroll: { scrollView in
                                 updateScrollState(from: scrollView)
-                                applyPendingBottomAlignmentIfNeeded(on: scrollView)
                             }
                         )
                         .frame(width: 0, height: 0)
@@ -451,19 +450,21 @@ struct ChatScreen: View {
                         }
                     }
                     .scrollTargetLayout()
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                     .padding(.horizontal, 12)
                     .padding(.top, 16)
                     .padding(.bottom, 18)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .scrollIndicators(.hidden)
                 .scrollDismissesKeyboard(.interactively)
                 .onAppear {
-                    pendingBottomAlignment = true
+                    needsInitialScrollToBottom = true
                     scrollToBottomReliable(proxy, animated: false)
                 }
                 .onDisappear {
                     messageScrollView = nil
-                    pendingBottomAlignment = false
+                    needsInitialScrollToBottom = false
                 }
                 .onChange(of: viewModel.messages.count) { _, _ in
                     guard let lastMessage = viewModel.messages.last else { return }
@@ -861,7 +862,7 @@ struct ChatScreen: View {
     }
 
     private var shouldShowCenterScrollDownButton: Bool {
-        shouldShowScrollJumpButtons && !isPinnedToBottom
+        shouldShowScrollJumpButtons && canScrollMessageList && !isPinnedToBottom
     }
 
     private var shouldShowPrivateModeCenterNotice: Bool {
@@ -1626,7 +1627,6 @@ struct ChatScreen: View {
     }
 
     private func scrollToBottomReliable(_ proxy: ScrollViewProxy, animated: Bool) {
-        pendingBottomAlignment = true
         if let scrollView = messageScrollView {
             scrollToBottom(scrollView, animated: animated)
             DispatchQueue.main.async {
@@ -1634,14 +1634,12 @@ struct ChatScreen: View {
                     return
                 }
                 scrollToBottom(scrollView, animated: false)
-                pendingBottomAlignment = false
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
                 guard let scrollView = messageScrollView else {
                     return
                 }
                 scrollToBottom(scrollView, animated: false)
-                pendingBottomAlignment = false
             }
             return
         }
@@ -1701,10 +1699,17 @@ struct ChatScreen: View {
         }
     }
 
-    private func applyPendingBottomAlignmentIfNeeded(on scrollView: UIScrollView) {
-        guard pendingBottomAlignment else { return }
+    private func applyInitialScrollIfNeeded(on scrollView: UIScrollView) {
+        guard needsInitialScrollToBottom else { return }
         scrollToBottom(scrollView, animated: false)
-        pendingBottomAlignment = false
+        needsInitialScrollToBottom = false
+    }
+
+    private var canScrollMessageList: Bool {
+        guard let scrollView = messageScrollView else {
+            return false
+        }
+        return scrollView.contentSize.height > scrollView.bounds.height + 8
     }
 
     private func settleSidebar(to open: Bool) {
@@ -1763,8 +1768,6 @@ private struct ScrollViewResolver: UIViewRepresentable {
         var onScroll: ((UIScrollView) -> Void)?
         private weak var observedScrollView: UIScrollView?
         private var contentOffsetObservation: NSKeyValueObservation?
-        private var contentSizeObservation: NSKeyValueObservation?
-        private var boundsObservation: NSKeyValueObservation?
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
@@ -1798,16 +1801,6 @@ private struct ScrollViewResolver: UIViewRepresentable {
                 scrollView.scrollsToTop = true
 
                 contentOffsetObservation = scrollView.observe(\.contentOffset, options: [.initial, .new]) { [weak self] scrollView, _ in
-                    DispatchQueue.main.async {
-                        self?.onScroll?(scrollView)
-                    }
-                }
-                contentSizeObservation = scrollView.observe(\.contentSize, options: [.new]) { [weak self] scrollView, _ in
-                    DispatchQueue.main.async {
-                        self?.onScroll?(scrollView)
-                    }
-                }
-                boundsObservation = scrollView.observe(\.bounds, options: [.new]) { [weak self] scrollView, _ in
                     DispatchQueue.main.async {
                         self?.onScroll?(scrollView)
                     }
