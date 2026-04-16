@@ -1701,6 +1701,7 @@ struct ChatScreen: View {
     }
 
     private func updateScrollState(from scrollView: UIScrollView) {
+        normalizeShortContentOffsetIfNeeded(for: scrollView)
         let maxOffsetY = max(
             -scrollView.adjustedContentInset.top,
             scrollView.contentSize.height - scrollView.bounds.height + scrollView.adjustedContentInset.bottom
@@ -1721,6 +1722,13 @@ struct ChatScreen: View {
             updateScrollState(from: scrollView)
         }
         needsInitialScrollToBottom = false
+    }
+
+    private func normalizeShortContentOffsetIfNeeded(for scrollView: UIScrollView) {
+        guard !canScroll(scrollView) else { return }
+        let topOffsetY = -scrollView.adjustedContentInset.top
+        guard abs(scrollView.contentOffset.y - topOffsetY) > 1 else { return }
+        scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: topOffsetY), animated: false)
     }
 
     private var canScrollMessageList: Bool {
@@ -1790,6 +1798,8 @@ private struct ScrollViewResolver: UIViewRepresentable {
         var onScroll: ((UIScrollView) -> Void)?
         private weak var observedScrollView: UIScrollView?
         private var contentOffsetObservation: NSKeyValueObservation?
+        private var contentSizeObservation: NSKeyValueObservation?
+        private var boundsObservation: NSKeyValueObservation?
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
@@ -1823,6 +1833,16 @@ private struct ScrollViewResolver: UIViewRepresentable {
                 scrollView.scrollsToTop = true
 
                 contentOffsetObservation = scrollView.observe(\.contentOffset, options: [.initial, .new]) { [weak self] scrollView, _ in
+                    DispatchQueue.main.async {
+                        self?.onScroll?(scrollView)
+                    }
+                }
+                contentSizeObservation = scrollView.observe(\.contentSize, options: [.new]) { [weak self] scrollView, _ in
+                    DispatchQueue.main.async {
+                        self?.onScroll?(scrollView)
+                    }
+                }
+                boundsObservation = scrollView.observe(\.bounds, options: [.new]) { [weak self] scrollView, _ in
                     DispatchQueue.main.async {
                         self?.onScroll?(scrollView)
                     }
