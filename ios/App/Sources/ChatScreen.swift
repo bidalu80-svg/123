@@ -465,7 +465,6 @@ struct ChatScreen: View {
                     .scrollDismissesKeyboard(.interactively)
                     .onAppear {
                         needsInitialScrollToBottom = true
-                        scrollToBottomReliable(proxy, animated: false)
                     }
                     .onDisappear {
                         messageScrollView = nil
@@ -1634,21 +1633,30 @@ struct ChatScreen: View {
 
     private func scrollToBottomReliable(_ proxy: ScrollViewProxy, animated: Bool) {
         if let scrollView = messageScrollView {
+            guard canScroll(scrollView) else {
+                needsInitialScrollToBottom = false
+                updateScrollState(from: scrollView)
+                return
+            }
             scrollToBottom(scrollView, animated: animated)
             DispatchQueue.main.async {
                 guard let scrollView = messageScrollView else {
                     return
                 }
+                guard canScroll(scrollView) else { return }
                 scrollToBottom(scrollView, animated: false)
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
                 guard let scrollView = messageScrollView else {
                     return
                 }
+                guard canScroll(scrollView) else { return }
                 scrollToBottom(scrollView, animated: false)
             }
             return
         }
+
+        needsInitialScrollToBottom = true
     }
 
     private func scrollDownOnePage(proxy: ScrollViewProxy) {
@@ -1707,7 +1715,11 @@ struct ChatScreen: View {
 
     private func applyInitialScrollIfNeeded(on scrollView: UIScrollView) {
         guard needsInitialScrollToBottom else { return }
-        scrollToBottom(scrollView, animated: false)
+        if canScroll(scrollView) {
+            scrollToBottom(scrollView, animated: false)
+        } else {
+            updateScrollState(from: scrollView)
+        }
         needsInitialScrollToBottom = false
     }
 
@@ -1715,7 +1727,11 @@ struct ChatScreen: View {
         guard let scrollView = messageScrollView else {
             return false
         }
-        return scrollView.contentSize.height > scrollView.bounds.height + 8
+        return canScroll(scrollView)
+    }
+
+    private func canScroll(_ scrollView: UIScrollView) -> Bool {
+        scrollView.contentSize.height > scrollView.bounds.height + 8
     }
 
     private func settleSidebar(to open: Bool) {
