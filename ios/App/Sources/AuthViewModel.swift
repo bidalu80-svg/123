@@ -110,7 +110,7 @@ final class AuthViewModel: ObservableObject {
             password = ""
             confirmPassword = ""
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = friendlyAuthErrorMessage(error)
         }
     }
 
@@ -166,7 +166,7 @@ final class AuthViewModel: ObservableObject {
             self.confirmPassword = ""
             self.statusMessage = "Google 登录成功"
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = friendlyAuthErrorMessage(error)
         }
         #else
         errorMessage = "当前构建未集成 GoogleSignIn SDK。"
@@ -197,7 +197,7 @@ final class AuthViewModel: ObservableObject {
             self.confirmPassword = ""
             self.statusMessage = "Apple 登录成功"
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = friendlyAuthErrorMessage(error)
         }
         #else
         errorMessage = "当前系统不支持 Apple 登录。"
@@ -239,6 +239,17 @@ final class AuthViewModel: ObservableObject {
         #else
         return nil
         #endif
+    }
+
+    private func friendlyAuthErrorMessage(_ error: Error) -> String {
+        let message = error.localizedDescription
+        if message.contains("该账号已绑定其他设备") {
+            return """
+            \(message)
+            如果你是重装应用后出现该提示，请联系管理员执行设备解绑后再登录。
+            """
+        }
+        return message
     }
 }
 

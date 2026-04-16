@@ -11,14 +11,17 @@ enum DeviceInstallIdentity {
             return existing
         }
 
+        if let fallback = UserDefaults.standard.string(forKey: fallbackDefaultsKey),
+           !fallback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            // If Keychain is available now, backfill it with the existing fallback ID
+            // so reinstall/login keeps a stable device identity.
+            _ = saveToKeychain(fallback)
+            return fallback
+        }
+
         let generated = UUID().uuidString.lowercased()
         if saveToKeychain(generated) {
             return generated
-        }
-
-        if let fallback = UserDefaults.standard.string(forKey: fallbackDefaultsKey),
-           !fallback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return fallback
         }
 
         UserDefaults.standard.set(generated, forKey: fallbackDefaultsKey)
