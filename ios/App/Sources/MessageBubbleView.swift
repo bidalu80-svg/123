@@ -21,7 +21,7 @@ struct MessageBubbleView: View {
     @State private var activeHTMLPreview: HTMLPreviewPayload?
     @State private var pendingPythonRun: PendingPythonRun?
     @State private var pythonStdinDraft = ""
-    @State private var streamingDotPulse = false
+    @State private var waitingDotPulse = false
 
     var body: some View {
         Group {
@@ -29,11 +29,6 @@ struct MessageBubbleView: View {
                 userMessageView
             } else {
                 assistantMessageView
-            }
-        }
-        .contextMenu {
-            Button("复制全部") {
-                UIPasteboard.general.string = message.copyableText
             }
         }
         .alert("提示", isPresented: saveFeedbackBinding) {
@@ -60,11 +55,6 @@ struct MessageBubbleView: View {
                 .padding(.bottom, 6)
 
             content
-
-            if message.isStreaming && !hasInlineStreamingDot {
-                streamingStandaloneIndicator
-                    .padding(.top, 8)
-            }
 
             if showsAssistantActionBar {
                 assistantActionBar
@@ -261,32 +251,103 @@ struct MessageBubbleView: View {
 
     @ViewBuilder
     private var content: some View {
-        let segments = MessageContentParser.parse(message)
-        if segments.isEmpty {
-            if message.isStreaming {
-                HStack(alignment: .center, spacing: 6) {
-                    Text("正在接收流式内容…")
+        if message.isStreaming {
+            streamingContent
+        } else {
+            let segments = MessageContentParser.parse(message)
+
+            if segments.isEmpty {
+                if let fallback = fallbackPlainText {
+                    selectableTextContent(fallback)
+                } else {
+                    Text("（空响应）")
                         .foregroundStyle(.secondary)
-                    streamingTailDot
                 }
-            } else if let fallback = fallbackPlainText {
-                SelectableLinkTextView(
-                    text: fallback,
-                    textColor: UIColor.label,
-                    linkColor: UIColor.systemGray,
-                    font: .systemFont(ofSize: 18, weight: .regular)
-                )
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                        segmentView(segment)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var streamingContent: some View {
+        if canUseFastStreamingTextPath {
+            let displayText = cleanStreamingMarkdownText(message.content)
+            if !displayText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                streamingGradientText(displayText)
+                    .font(.system(size: 18, weight: .regular))
+                    .lineSpacing(5)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                Text("（空响应）")
-                    .foregroundStyle(.secondary)
+                streamingWaitingDot
             }
         } else {
-            VStack(alignment: .leading, spacing: 10) {
-                ForEach(Array(segments.enumerated()), id: \.offset) { index, segment in
-                    segmentView(segment, showsStreamingTailDot: message.isStreaming && index == segments.count - 1)
+            let segments = MessageContentParser.parse(message)
+            if !segments.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                        streamingSegmentView(segment)
+                    }
                 }
+            } else if let fallback = fallbackPlainText {
+                streamingGradientText(fallback)
+                    .font(.system(size: 18, weight: .regular))
+                    .lineSpacing(5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                streamingWaitingDot
             }
+        }
+    }
+
+    private var canUseFastStreamingTextPath: Bool {
+        message.imageAttachments.isEmpty
+            && message.fileAttachments.isEmpty
+            && !message.content.contains("```")
+    }
+
+    private var streamingWaitingDot: some View {
+        Circle()
+            .fill(Color.black)
+            .frame(width: 7, height: 7)
+            .scaleEffect(waitingDotPulse ? 1.0 : 0.68)
+            .opacity(waitingDotPulse ? 0.95 : 0.3)
+            .animation(.easeInOut(duration: 0.62).repeatForever(autoreverses: true), value: waitingDotPulse)
+            .onAppear {
+                waitingDotPulse = true
+            }
+            .onDisappear {
+                waitingDotPulse = false
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel("正在接收流式内容")
+    }
+
+    private func cleanStreamingMarkdownText(_ raw: String) -> String {
+        raw
+            .replacingOccurrences(of: "\r\n", with: "\n")
+    }
+
+    @ViewBuilder
+    private func streamingSegmentView(_ segment: MessageSegment) -> some View {
+        switch segment {
+        case .text(let text):
+            if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                streamingGradientText(text)
+                    .font(.system(size: 18, weight: .regular))
+                    .lineSpacing(5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        case .code(let language, let content):
+            codeBlock(title: (language ?? "code").uppercased(), content: content, language: language)
+        case .file(let name, let language, let content):
+            codeBlock(title: "FILE · \(name)", content: content, language: language)
+        case .image(let attachment):
+            messageImage(attachment)
         }
     }
 
@@ -295,42 +356,6 @@ struct MessageBubbleView: View {
             .replacingOccurrences(of: "\r\n", with: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return normalized.isEmpty ? nil : normalized
-    }
-
-    private var hasInlineStreamingDot: Bool {
-        guard message.isStreaming else { return false }
-        let segments = MessageContentParser.parse(message)
-        guard let last = segments.last else { return false }
-        if case .text(let text) = last {
-            return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }
-        return false
-    }
-
-    private var streamingStandaloneIndicator: some View {
-        HStack(alignment: .center, spacing: 6) {
-            Text("正在生成…")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.secondary)
-            streamingTailDot
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var streamingTailDot: some View {
-        Circle()
-            .fill(Color.secondary.opacity(0.9))
-            .frame(width: 6, height: 6)
-            .scaleEffect(streamingDotPulse ? 1.0 : 0.62)
-            .opacity(streamingDotPulse ? 0.95 : 0.28)
-            .animation(.easeInOut(duration: 0.58).repeatForever(autoreverses: true), value: streamingDotPulse)
-            .onAppear {
-                streamingDotPulse = true
-            }
-            .onDisappear {
-                streamingDotPulse = false
-            }
-            .accessibilityHidden(true)
     }
 
     @ViewBuilder
@@ -351,31 +376,42 @@ struct MessageBubbleView: View {
         }
     }
 
+    private func streamingGradientText(_ value: String) -> Text {
+        let parts = splitStreamingGradientText(value)
+        var rendered = Text(verbatim: parts.head).foregroundColor(.primary)
+
+        if !parts.mid.isEmpty {
+            rendered = rendered + Text(verbatim: parts.mid).foregroundColor(Color.primary.opacity(0.72))
+        }
+        if !parts.tip.isEmpty {
+            rendered = rendered + Text(verbatim: parts.tip).foregroundColor(Color.secondary.opacity(0.5))
+        }
+        return rendered
+    }
+
+    private func splitStreamingGradientText(_ value: String) -> (head: String, mid: String, tip: String) {
+        let total = value.count
+        guard total > 0 else { return ("", "", "") }
+
+        let tipCount = min(3, total)
+        let midCount = min(8, max(total - tipCount, 0))
+        let headCount = max(total - tipCount - midCount, 0)
+
+        let headEnd = value.index(value.startIndex, offsetBy: headCount)
+        let midEnd = value.index(headEnd, offsetBy: midCount)
+
+        return (
+            String(value[..<headEnd]),
+            String(value[headEnd..<midEnd]),
+            String(value[midEnd...])
+        )
+    }
+
     @ViewBuilder
-    private func segmentView(_ segment: MessageSegment, showsStreamingTailDot: Bool = false) -> some View {
+    private func segmentView(_ segment: MessageSegment) -> some View {
         switch segment {
         case .text(let text):
-            if message.isStreaming {
-                HStack(alignment: .lastTextBaseline, spacing: 6) {
-                    Text(text)
-                        .font(.system(size: 18, weight: .regular))
-                        .lineSpacing(5)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    if showsStreamingTailDot {
-                        streamingTailDot
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                SelectableLinkTextView(
-                    text: text,
-                    textColor: UIColor.label,
-                    linkColor: UIColor.systemGray,
-                    font: .systemFont(ofSize: 18, weight: .regular)
-                )
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
+            selectableTextContent(text)
         case .code(let language, let content):
             codeBlock(title: (language ?? "code").uppercased(), content: content, language: language)
         case .file(let name, let language, let content):
@@ -383,6 +419,16 @@ struct MessageBubbleView: View {
         case .image(let attachment):
             messageImage(attachment)
         }
+    }
+
+    private func selectableTextContent(_ text: String) -> some View {
+        SelectableLinkTextView(
+            text: text,
+            textColor: UIColor.label,
+            linkColor: UIColor.systemGray,
+            font: .systemFont(ofSize: 18, weight: .regular)
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func codeBlock(title: String, content: String, language: String? = nil) -> some View {

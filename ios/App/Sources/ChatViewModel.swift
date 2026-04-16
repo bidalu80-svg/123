@@ -50,7 +50,7 @@ final class ChatViewModel: ObservableObject {
 
     private let service: ChatService
     private var autoSaveEnabled = false
-    private let streamScrollThrottleInterval: TimeInterval = 0.05
+    private let streamScrollThrottleInterval: TimeInterval = 0.08
     private let streamUIFlushInterval: TimeInterval = 1.0 / 60.0
     private var lastStreamScrollSignal: Date = .distantPast
     private var inflightSendTask: Task<ChatReply, Error>?
@@ -86,8 +86,10 @@ final class ChatViewModel: ObservableObject {
         autoSaveEnabled = true
         startNetworkMonitor()
         Task {
+            async let initialModelValidation: Void = refreshAvailableModels(silent: true)
             await prewarmRealtimeContext()
             await refreshMemoryEntries()
+            _ = await initialModelValidation
         }
     }
 
@@ -184,14 +186,22 @@ final class ChatViewModel: ObservableObject {
         )
         inflightTargetContext = targetContext
 
+        let placeholderID = UUID()
+        let placeholder = ChatMessage(
+            id: placeholderID,
+            role: .assistant,
+            content: "",
+            isStreaming: config.streamEnabled && config.endpointMode == .chatCompletions
+        )
+
         var historyBeforeSend: [ChatMessage] = []
         if isPrivateMode {
             historyBeforeSend = privateMessages
-            privateMessages.append(userMessage)
+            privateMessages.append(contentsOf: [userMessage, placeholder])
             messages = privateMessages
         } else if let current = currentSessionIndex {
             historyBeforeSend = sessions[current].messages
-            sessions[current].messages.append(userMessage)
+            sessions[current].messages.append(contentsOf: [userMessage, placeholder])
             sessions[current].updatedAt = Date()
             sessions[current].title = buildSessionTitle(from: sessions[current])
             messages = sessions[current].messages
@@ -201,14 +211,6 @@ final class ChatViewModel: ObservableObject {
         draftImageAttachments = []
         draftFileAttachment = nil
 
-        let placeholderID = UUID()
-        let placeholder = ChatMessage(
-            id: placeholderID,
-            role: .assistant,
-            content: "",
-            isStreaming: config.streamEnabled && config.endpointMode == .chatCompletions
-        )
-        appendMessageToTargetSession(placeholder, target: targetContext)
         persistSessions()
         signalStreamScroll(force: true)
         beginBackgroundSendTask()
@@ -336,8 +338,15 @@ final class ChatViewModel: ObservableObject {
 
     func saveConfig() {
         config = normalizedConfigForSave(config)
-        statusMessage = "配置已保存"
+        selectedModelFromList = config.model
+        hasValidatedModelList = false
+        availableModels = []
+        updateCurrentModelAvailability()
+        statusMessage = "配置已保存，正在检测模型…"
         appendLog("配置测试：配置已保存。")
+        Task {
+            await refreshAvailableModels(silent: true)
+        }
     }
 
     func resetConfig() {
@@ -677,11 +686,12 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func smoothChunkCharacterCount(forPendingTextCount pendingCount: Int) -> Int {
+        if pendingCount >= 1000 { return 120 }
         if pendingCount >= 600 { return 80 }
         if pendingCount >= 300 { return 48 }
-        if pendingCount >= 120 { return 28 }
-        if pendingCount >= 48 { return 18 }
-        return 10
+        if pendingCount >= 120 { return 24 }
+        if pendingCount >= 48 { return 12 }
+        return 6
     }
 
     private func splitPrefix(_ value: String, maxCharacters: Int) -> (prefix: String, suffix: String) {
@@ -984,6 +994,7 @@ final class ChatViewModel: ObservableObject {
             marketSymbols: input.marketSymbols.trimmingCharacters(in: .whitespacesAndNewlines),
             hotNewsContextEnabled: input.hotNewsContextEnabled,
             hotNewsCount: min(max(input.hotNewsCount, 1), 12),
+            memoryModeEnabled: input.memoryModeEnabled,
             soundEffectsEnabled: input.soundEffectsEnabled
         )
     }
