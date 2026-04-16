@@ -506,7 +506,6 @@ struct MessageBubbleView: View {
             runningCodeToken = nil
         }
         codeRunErrors[token] = "运行已结束。"
-        PythonExecutionService.shared.disableEmbeddedRuntimeForCurrentLaunch()
         feedback(.light, "已结束运行")
     }
 

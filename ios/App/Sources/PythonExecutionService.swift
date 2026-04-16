@@ -59,7 +59,8 @@ final class PythonExecutionService {
     private let embeddedRuntimeTimeoutNanoseconds: UInt64
 
     private let embeddedRuntimeStateLock = NSLock()
-    private var embeddedRuntimeDisabledForCurrentLaunch = false
+    private var embeddedRuntimeDisabledUntil: Date?
+    private let embeddedRuntimeCooldownSeconds: TimeInterval = 45
 
     static func isRunnableSnippet(_ code: String) -> Bool {
         let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -149,7 +150,7 @@ final class PythonExecutionService {
 
     func disableEmbeddedRuntimeForCurrentLaunch() {
         embeddedRuntimeStateLock.lock()
-        embeddedRuntimeDisabledForCurrentLaunch = true
+        embeddedRuntimeDisabledUntil = Date().addingTimeInterval(embeddedRuntimeCooldownSeconds)
         embeddedRuntimeStateLock.unlock()
     }
 
@@ -178,7 +179,7 @@ final class PythonExecutionService {
         if isEmbeddedRuntimeEnabledForCurrentLaunch {
             runtimeHint = await EmbeddedCPythonRuntime.shared.statusHint()
         } else {
-            runtimeHint = "嵌入 CPython 已在本次启动中临时停用（检测到运行超时）。"
+            runtimeHint = embeddedRuntimeCooldownHint
         }
 
         do {
@@ -234,9 +235,31 @@ final class PythonExecutionService {
 
     private var isEmbeddedRuntimeEnabledForCurrentLaunch: Bool {
         embeddedRuntimeStateLock.lock()
-        let enabled = !embeddedRuntimeDisabledForCurrentLaunch
+        let enabled: Bool
+        if let disabledUntil = embeddedRuntimeDisabledUntil {
+            if Date() < disabledUntil {
+                enabled = false
+            } else {
+                embeddedRuntimeDisabledUntil = nil
+                enabled = true
+            }
+        } else {
+            enabled = true
+        }
         embeddedRuntimeStateLock.unlock()
         return enabled
+    }
+
+    private var embeddedRuntimeCooldownHint: String {
+        embeddedRuntimeStateLock.lock()
+        defer { embeddedRuntimeStateLock.unlock() }
+        if let disabledUntil = embeddedRuntimeDisabledUntil {
+            let remain = max(0, Int(ceil(disabledUntil.timeIntervalSinceNow)))
+            if remain > 0 {
+                return "嵌入 CPython 暂时冷却中（约 \(remain) 秒后自动恢复），当前使用兼容运行器。"
+            }
+        }
+        return "嵌入 CPython 暂时不可用，当前使用兼容运行器。"
     }
 
     private func runEmbeddedRuntimeWithTimeout(code: String, stdin: String?) async -> EmbeddedRuntimeAttempt {
@@ -263,6 +286,11 @@ final class PythonExecutionService {
 }
 
 private final class LocalPythonInterpreter {
+    private enum LoopJump: Error {
+        case breakLoop(line: Int)
+        case continueLoop(line: Int)
+    }
+
     private var env: [String: Value] = [:]
     private var output: [String] = []
     private var outputCount = 0
@@ -281,7 +309,13 @@ private final class LocalPythonInterpreter {
 
     func execute(code: String) throws -> PythonExecutionResult {
         let lines = try PythonLineParser.parse(code: code)
-        _ = try runBlock(lines: lines, start: 0, indent: 0)
+        do {
+            _ = try runBlock(lines: lines, start: 0, indent: 0)
+        } catch LoopJump.breakLoop(let line) {
+            throw PythonExecutionError.unsupportedSyntax("第\(line)行 break 只能用于循环内部")
+        } catch LoopJump.continueLoop(let line) {
+            throw PythonExecutionError.unsupportedSyntax("第\(line)行 continue 只能用于循环内部")
+        }
         let text = output.joined(separator: "\n")
         return PythonExecutionResult(output: text.isEmpty ? "执行完成（无输出）" : text, exitCode: 0)
     }
@@ -296,8 +330,14 @@ private final class LocalPythonInterpreter {
                 throw PythonExecutionError.unsupportedSyntax("第\(line.number)行缩进异常")
             }
 
-            if line.raw == "break" || line.raw == "continue" {
-                throw PythonExecutionError.unsupportedSyntax("第\(line.number)行不支持 break/continue")
+            if line.raw == "break" {
+                throw LoopJump.breakLoop(line: line.number)
+            }
+            if line.raw == "continue" {
+                throw LoopJump.continueLoop(line: line.number)
+            }
+            if line.raw.hasPrefix("elif ") || line.raw == "else:" {
+                throw PythonExecutionError.unsupportedSyntax("第\(line.number)行 elif/else 必须跟在 if 后面")
             }
 
             if line.raw.hasPrefix("for ") {
@@ -324,6 +364,10 @@ private final class LocalPythonInterpreter {
 
     private func executeSimple(_ line: Line) throws {
         let raw = line.raw
+
+        if raw == "pass" {
+            return
+        }
 
         if raw.hasPrefix("import ") || raw.hasPrefix("from ") || raw.hasPrefix("def ") || raw.hasPrefix("class ") {
             throw PythonExecutionError.unsupportedSyntax("第\(line.number)行语法 \(raw)")
@@ -353,32 +397,61 @@ private final class LocalPythonInterpreter {
             throw PythonExecutionError.unsupportedSyntax("第\(line.number)行 if 缺少冒号")
         }
 
-        let conditionExpr = String(line.raw.dropFirst(2).dropLast()).trimmingCharacters(in: .whitespaces)
-        let trueStart = index + 1
-        guard trueStart < lines.count, lines[trueStart].indent == line.indent + 1 else {
+        var chosenBlockStart: Int?
+        let baseIndent = line.indent
+        var cursor = index
+
+        let firstConditionExpr = String(line.raw.dropFirst(2).dropLast()).trimmingCharacters(in: .whitespaces)
+        let firstBodyStart = cursor + 1
+        guard firstBodyStart < lines.count, lines[firstBodyStart].indent == baseIndent + 1 else {
             throw PythonExecutionError.unsupportedSyntax("第\(line.number)行 if 缺少缩进代码块")
         }
+        let firstBodyEnd = blockEnd(lines: lines, from: firstBodyStart, indent: baseIndent + 1)
 
-        let trueEnd = blockEnd(lines: lines, from: trueStart, indent: line.indent + 1)
+        if try evalExpr(firstConditionExpr, line: line.number).isTruthy {
+            chosenBlockStart = firstBodyStart
+        }
+        cursor = firstBodyEnd
 
-        var elseStart = trueEnd
-        var elseEnd = trueEnd
-        if trueEnd < lines.count, lines[trueEnd].indent == line.indent, lines[trueEnd].raw == "else:" {
-            elseStart = trueEnd + 1
-            guard elseStart < lines.count, lines[elseStart].indent == line.indent + 1 else {
-                throw PythonExecutionError.unsupportedSyntax("第\(lines[trueEnd].number)行 else 缺少缩进代码块")
+        while cursor < lines.count,
+              lines[cursor].indent == baseIndent,
+              lines[cursor].raw.hasPrefix("elif ") {
+            let elifLine = lines[cursor]
+            guard elifLine.raw.hasSuffix(":") else {
+                throw PythonExecutionError.unsupportedSyntax("第\(elifLine.number)行 elif 缺少冒号")
             }
-            elseEnd = blockEnd(lines: lines, from: elseStart, indent: line.indent + 1)
+
+            let conditionExpr = String(elifLine.raw.dropFirst(4).dropLast()).trimmingCharacters(in: .whitespaces)
+            let bodyStart = cursor + 1
+            guard bodyStart < lines.count, lines[bodyStart].indent == baseIndent + 1 else {
+                throw PythonExecutionError.unsupportedSyntax("第\(elifLine.number)行 elif 缺少缩进代码块")
+            }
+            let bodyEnd = blockEnd(lines: lines, from: bodyStart, indent: baseIndent + 1)
+
+            if chosenBlockStart == nil, try evalExpr(conditionExpr, line: elifLine.number).isTruthy {
+                chosenBlockStart = bodyStart
+            }
+            cursor = bodyEnd
         }
 
-        let cond = try evalExpr(conditionExpr, line: line.number).isTruthy
-        if cond {
-            _ = try runBlock(lines: lines, start: trueStart, indent: line.indent + 1)
-        } else if elseStart < elseEnd {
-            _ = try runBlock(lines: lines, start: elseStart, indent: line.indent + 1)
+        if cursor < lines.count, lines[cursor].indent == baseIndent, lines[cursor].raw == "else:" {
+            let elseLine = lines[cursor]
+            let bodyStart = cursor + 1
+            guard bodyStart < lines.count, lines[bodyStart].indent == baseIndent + 1 else {
+                throw PythonExecutionError.unsupportedSyntax("第\(elseLine.number)行 else 缺少缩进代码块")
+            }
+            let bodyEnd = blockEnd(lines: lines, from: bodyStart, indent: baseIndent + 1)
+            if chosenBlockStart == nil {
+                chosenBlockStart = bodyStart
+            }
+            cursor = bodyEnd
         }
 
-        return elseStart < elseEnd ? elseEnd : trueEnd
+        if let chosenBlockStart {
+            _ = try runBlock(lines: lines, start: chosenBlockStart, indent: baseIndent + 1)
+        }
+
+        return cursor
     }
 
     private func executeWhile(lines: [Line], index: Int) throws -> Int {
@@ -399,7 +472,13 @@ private final class LocalPythonInterpreter {
             if steps > maxLoopSteps {
                 throw PythonExecutionError.runtime("循环步数超过限制（\(maxLoopSteps)）")
             }
-            _ = try runBlock(lines: lines, start: bodyStart, indent: line.indent + 1)
+            do {
+                _ = try runBlock(lines: lines, start: bodyStart, indent: line.indent + 1)
+            } catch LoopJump.breakLoop {
+                break
+            } catch LoopJump.continueLoop {
+                continue
+            }
         }
 
         return end
@@ -436,7 +515,13 @@ private final class LocalPythonInterpreter {
                 throw PythonExecutionError.runtime("循环步数超过限制（\(maxLoopSteps)）")
             }
             env[name] = .number(Double(item))
-            _ = try runBlock(lines: lines, start: bodyStart, indent: line.indent + 1)
+            do {
+                _ = try runBlock(lines: lines, start: bodyStart, indent: line.indent + 1)
+            } catch LoopJump.breakLoop {
+                break
+            } catch LoopJump.continueLoop {
+                continue
+            }
         }
 
         return end
@@ -754,17 +839,30 @@ private enum PythonLineParser {
         let rawLines = normalized.split(separator: "\n", omittingEmptySubsequences: false)
 
         var result: [Line] = []
+        var indentStack: [Int] = [0]
         for (i, rawLine) in rawLines.enumerated() {
             let lineNumber = i + 1
             let text = rawLine.replacingOccurrences(of: "\t", with: "    ")
             let spaces = text.prefix { $0 == " " }.count
-            if spaces % 4 != 0 {
-                throw PythonExecutionError.unsupportedSyntax("第\(lineNumber)行缩进请使用 4 的倍数空格")
-            }
             let start = text.index(text.startIndex, offsetBy: spaces)
             let raw = String(text[start...]).trimmingCharacters(in: .whitespacesAndNewlines)
             if raw.isEmpty || raw.hasPrefix("#") { continue }
-            result.append(Line(number: lineNumber, indent: spaces / 4, raw: raw))
+
+            if let current = indentStack.last {
+                if spaces > current {
+                    indentStack.append(spaces)
+                } else if spaces < current {
+                    while let top = indentStack.last, spaces < top {
+                        indentStack.removeLast()
+                    }
+                    guard indentStack.last == spaces else {
+                        throw PythonExecutionError.unsupportedSyntax("第\(lineNumber)行缩进不一致")
+                    }
+                }
+            }
+
+            let indentLevel = max(0, indentStack.count - 1)
+            result.append(Line(number: lineNumber, indent: indentLevel, raw: raw))
         }
         return result
     }
