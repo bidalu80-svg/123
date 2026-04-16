@@ -50,8 +50,8 @@ final class ChatViewModel: ObservableObject {
 
     private let service: ChatService
     private var autoSaveEnabled = false
-    private let streamScrollThrottleInterval: TimeInterval = 0.11
-    private let streamUIFlushInterval: TimeInterval = 0.085
+    private let streamScrollThrottleInterval: TimeInterval = 0.05
+    private let streamUIFlushInterval: TimeInterval = 1.0 / 60.0
     private var lastStreamScrollSignal: Date = .distantPast
     private var inflightSendTask: Task<ChatReply, Error>?
     private var inflightTargetContext: StreamTargetContext?
@@ -613,33 +613,82 @@ final class ChatViewModel: ObservableObject {
 
     private func schedulePendingStreamFlushIfNeeded() {
         guard streamFlushTask == nil else { return }
-        let interval = max(0.02, streamUIFlushInterval)
         streamFlushTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
-            await MainActor.run {
-                self?.flushPendingStreamUpdates()
-                self?.streamFlushTask = nil
-            }
+            await self?.drainPendingStreamLoop()
         }
     }
 
-    private func flushPendingStreamUpdates(force: Bool = false) {
-        guard !pendingStreamDeltas.isEmpty else { return }
+    private func drainPendingStreamLoop() async {
+        let interval = max(0.012, streamUIFlushInterval)
+        while !Task.isCancelled {
+            let hasRemaining = flushPendingStreamUpdates()
+            if !hasRemaining {
+                streamFlushTask = nil
+                return
+            }
+            try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+        }
+        streamFlushTask = nil
+    }
+
+    @discardableResult
+    private func flushPendingStreamUpdates(force: Bool = false) -> Bool {
+        guard !pendingStreamDeltas.isEmpty else { return false }
         if force {
             streamFlushTask?.cancel()
             streamFlushTask = nil
         }
 
-        let pending = pendingStreamDeltas
-        let targets = pendingStreamTargets
-        pendingStreamDeltas.removeAll()
-        pendingStreamTargets.removeAll()
+        let keys = Array(pendingStreamDeltas.keys)
+        for id in keys {
+            guard var pending = pendingStreamDeltas[id] else { continue }
+            guard let target = pendingStreamTargets[id] ?? inflightTargetContext else {
+                pendingStreamDeltas.removeValue(forKey: id)
+                pendingStreamTargets.removeValue(forKey: id)
+                continue
+            }
 
-        for (id, delta) in pending {
-            guard !delta.deltaText.isEmpty || !delta.imageURLs.isEmpty else { continue }
-            guard let target = targets[id] ?? inflightTargetContext else { continue }
-            applyPendingStreamDelta(delta, to: id, target: target)
+            var deltaToApply = PendingStreamDelta(deltaText: "", imageURLs: pending.imageURLs)
+            pending.imageURLs = []
+
+            if force {
+                deltaToApply.deltaText = pending.deltaText
+                pending.deltaText = ""
+            } else if !pending.deltaText.isEmpty {
+                let chunkChars = smoothChunkCharacterCount(forPendingTextCount: pending.deltaText.count)
+                let split = splitPrefix(pending.deltaText, maxCharacters: chunkChars)
+                deltaToApply.deltaText = split.prefix
+                pending.deltaText = split.suffix
+            }
+
+            if !deltaToApply.deltaText.isEmpty || !deltaToApply.imageURLs.isEmpty {
+                applyPendingStreamDelta(deltaToApply, to: id, target: target)
+            }
+
+            if pending.deltaText.isEmpty && pending.imageURLs.isEmpty {
+                pendingStreamDeltas.removeValue(forKey: id)
+                pendingStreamTargets.removeValue(forKey: id)
+            } else {
+                pendingStreamDeltas[id] = pending
+            }
         }
+
+        return !pendingStreamDeltas.isEmpty
+    }
+
+    private func smoothChunkCharacterCount(forPendingTextCount pendingCount: Int) -> Int {
+        if pendingCount >= 600 { return 80 }
+        if pendingCount >= 300 { return 48 }
+        if pendingCount >= 120 { return 28 }
+        if pendingCount >= 48 { return 18 }
+        return 10
+    }
+
+    private func splitPrefix(_ value: String, maxCharacters: Int) -> (prefix: String, suffix: String) {
+        guard maxCharacters > 0, !value.isEmpty else { return ("", value) }
+        guard value.count > maxCharacters else { return (value, "") }
+        let splitIndex = value.index(value.startIndex, offsetBy: maxCharacters)
+        return (String(value[..<splitIndex]), String(value[splitIndex...]))
     }
 
     private func applyPendingStreamDelta(_ delta: PendingStreamDelta, to id: UUID, target: StreamTargetContext) {

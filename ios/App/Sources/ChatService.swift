@@ -500,7 +500,7 @@ final class ChatService {
                 var pendingDeltaText = ""
                 var pendingImageURLs = Set<String>()
                 var lastEmitAt = Date.distantPast
-                let streamEmitInterval: TimeInterval = 0.045
+                let streamEmitInterval: TimeInterval = 0.02
 
                 func emitPending(force: Bool = false) {
                     guard !pendingDeltaText.isEmpty || !pendingImageURLs.isEmpty else { return }
