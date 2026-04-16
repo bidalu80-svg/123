@@ -1672,6 +1672,10 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
         private var lastReportedMetrics = ChatTranscriptMetrics()
         private var lastAppliedCommandID: Int?
         private var pendingCommand: ChatTranscriptCommand?
+        private var pendingContent: AnyView?
+        private var contentApplyWorkItem: DispatchWorkItem?
+        private var lastContentApplyAt = Date.distantPast
+        private let contentApplyInterval: TimeInterval = 1.0 / 24.0
 
         init(onMetricsChanged: @escaping (ChatTranscriptMetrics) -> Void) {
             self.onMetricsChanged = onMetricsChanged
@@ -1728,8 +1732,8 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
 
         func update(content: AnyView, command: ChatTranscriptCommand?, onMetricsChanged: @escaping (ChatTranscriptMetrics) -> Void) {
             self.onMetricsChanged = onMetricsChanged
-            hostingController.rootView = content
-            hostingController.view.invalidateIntrinsicContentSize()
+            pendingContent = content
+            scheduleContentApplyIfNeeded()
             if let command, command.id != lastAppliedCommandID {
                 pendingCommand = command
             }
@@ -1738,6 +1742,34 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
                 self?.applyPendingCommandIfNeeded()
                 self?.reportMetrics()
             }
+        }
+
+        private func scheduleContentApplyIfNeeded() {
+            guard contentApplyWorkItem == nil else { return }
+
+            let delay = max(0, contentApplyInterval - Date().timeIntervalSince(lastContentApplyAt))
+            let workItem = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.contentApplyWorkItem = nil
+                self.applyPendingContentIfNeeded()
+            }
+            contentApplyWorkItem = workItem
+
+            if lastContentApplyAt == .distantPast || delay <= 0.001 {
+                DispatchQueue.main.async(execute: workItem)
+            } else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+            }
+        }
+
+        private func applyPendingContentIfNeeded() {
+            guard let pendingContent else { return }
+            UIView.performWithoutAnimation {
+                hostingController.rootView = pendingContent
+                hostingController.view.invalidateIntrinsicContentSize()
+            }
+            lastContentApplyAt = Date()
+            self.pendingContent = nil
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
