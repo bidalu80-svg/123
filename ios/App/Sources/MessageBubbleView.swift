@@ -353,24 +353,11 @@ struct MessageBubbleView: View {
         switch segment {
         case .text(let text):
             if message.isStreaming {
-                if showsStreamingTailDot {
-                    (
-                        Text(text)
-                            .font(.system(size: 18, weight: .regular))
-                        + Text(" ●")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundColor(Color.secondary.opacity(streamingDotPulse ? 0.95 : 0.28))
-                    )
-                        .lineSpacing(5)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    Text(text)
-                        .font(.system(size: 18, weight: .regular))
-                        .lineSpacing(5)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                streamingRevealText(text, showsTailDot: showsStreamingTailDot)
+                    .font(.system(size: 18, weight: .regular))
+                    .lineSpacing(5)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 SelectableLinkTextView(
                     text: text,
@@ -387,6 +374,42 @@ struct MessageBubbleView: View {
         case .image(let attachment):
             messageImage(attachment)
         }
+    }
+
+    private func streamingRevealText(_ raw: String, showsTailDot: Bool) -> Text {
+        let parts = splitStreamingReveal(raw)
+        var rendered = Text(parts.head).foregroundColor(.primary)
+
+        if !parts.mid.isEmpty {
+            rendered = rendered + Text(parts.mid).foregroundColor(Color.primary.opacity(0.72))
+        }
+        if !parts.tip.isEmpty {
+            rendered = rendered + Text(parts.tip).foregroundColor(Color.secondary.opacity(0.58))
+        }
+        if showsTailDot {
+            rendered = rendered
+                + Text(" ●")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(Color.secondary.opacity(streamingDotPulse ? 0.95 : 0.28))
+        }
+        return rendered
+    }
+
+    private func splitStreamingReveal(_ value: String) -> (head: String, mid: String, tip: String) {
+        let total = value.count
+        guard total > 0 else { return ("", "", "") }
+
+        let tipCount = min(2, total)
+        let midCount = min(5, max(0, total - tipCount))
+        let headCount = max(0, total - tipCount - midCount)
+
+        let headEnd = value.index(value.startIndex, offsetBy: headCount)
+        let midEnd = value.index(headEnd, offsetBy: midCount)
+
+        let head = String(value[..<headEnd])
+        let mid = String(value[headEnd..<midEnd])
+        let tip = String(value[midEnd...])
+        return (head, mid, tip)
     }
 
     private func startStreamingDotBreathing() {
