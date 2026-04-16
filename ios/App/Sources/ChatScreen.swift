@@ -45,6 +45,7 @@ struct ChatScreen: View {
     @State private var headerLeadingWidth: CGFloat = 36
     @State private var headerTrailingWidth: CGFloat = 108
     @State private var messageScrollView: UIScrollView?
+    @State private var visibleMessageID: UUID?
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -415,6 +416,13 @@ struct ChatScreen: View {
             ZStack(alignment: .bottom) {
                 ScrollView {
                     LazyVStack(spacing: 16) {
+                        ScrollViewResolver { scrollView in
+                            if messageScrollView !== scrollView {
+                                messageScrollView = scrollView
+                            }
+                        }
+                        .frame(width: 0, height: 0)
+
                         Color.clear
                             .frame(height: 1)
                             .id(scrollTopAnchor)
@@ -444,15 +452,9 @@ struct ChatScreen: View {
                     .padding(.top, 16)
                     .padding(.bottom, 18)
                 }
-                .background(
-                    ScrollViewResolver { scrollView in
-                        if messageScrollView !== scrollView {
-                            messageScrollView = scrollView
-                        }
-                    }
-                )
                 .scrollIndicators(.hidden)
                 .scrollDismissesKeyboard(.interactively)
+                .scrollPosition(id: $visibleMessageID)
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 6).onChanged { _ in
                         if isPinnedToBottom {
@@ -1631,16 +1633,7 @@ struct ChatScreen: View {
 
     private func scrollDownOnePage(proxy: ScrollViewProxy) {
         guard let scrollView = messageScrollView else {
-            DispatchQueue.main.async {
-                if let scrollView = messageScrollView {
-                    scrollDownByStep(scrollView)
-                }
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-                if let scrollView = messageScrollView {
-                    scrollDownByStep(scrollView)
-                }
-            }
+            scrollDownByMessageStep(proxy)
             return
         }
 
@@ -1659,6 +1652,21 @@ struct ChatScreen: View {
 
         scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: targetY), animated: true)
         if isNearBottomAfterScroll {
+            isPinnedToBottom = true
+        }
+    }
+
+    private func scrollDownByMessageStep(_ proxy: ScrollViewProxy) {
+        guard !renderedMessages.isEmpty else { return }
+        let currentID = visibleMessageID
+        let currentIndex = renderedMessages.firstIndex(where: { $0.id == currentID }) ?? 0
+        let targetIndex = min(currentIndex + 3, renderedMessages.count - 1)
+        let targetID = renderedMessages[targetIndex].id
+
+        withAnimation(.easeOut(duration: 0.24)) {
+            proxy.scrollTo(targetID, anchor: .top)
+        }
+        if targetIndex >= renderedMessages.count - 1 {
             isPinnedToBottom = true
         }
     }

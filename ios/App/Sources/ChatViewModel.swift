@@ -50,8 +50,8 @@ final class ChatViewModel: ObservableObject {
 
     private let service: ChatService
     private var autoSaveEnabled = false
-    private let streamScrollThrottleInterval: TimeInterval = 0.05
-    private let streamUIFlushInterval: TimeInterval = 1.0 / 60.0
+    private let streamScrollThrottleInterval: TimeInterval = 0.11
+    private let streamUIFlushInterval: TimeInterval = 1.0 / 45.0
     private var lastStreamScrollSignal: Date = .distantPast
     private var inflightSendTask: Task<ChatReply, Error>?
     private var inflightTargetContext: StreamTargetContext?
@@ -86,8 +86,10 @@ final class ChatViewModel: ObservableObject {
         autoSaveEnabled = true
         startNetworkMonitor()
         Task {
+            async let initialModelValidation: Void = refreshAvailableModels(silent: true)
             await prewarmRealtimeContext()
             await refreshMemoryEntries()
+            _ = await initialModelValidation
         }
     }
 
@@ -336,8 +338,15 @@ final class ChatViewModel: ObservableObject {
 
     func saveConfig() {
         config = normalizedConfigForSave(config)
-        statusMessage = "配置已保存"
+        selectedModelFromList = config.model
+        hasValidatedModelList = false
+        availableModels = []
+        updateCurrentModelAvailability()
+        statusMessage = "配置已保存，正在检测模型…"
         appendLog("配置测试：配置已保存。")
+        Task {
+            await refreshAvailableModels(silent: true)
+        }
     }
 
     func resetConfig() {
@@ -677,11 +686,11 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func smoothChunkCharacterCount(forPendingTextCount pendingCount: Int) -> Int {
-        if pendingCount >= 600 { return 24 }
-        if pendingCount >= 300 { return 18 }
-        if pendingCount >= 120 { return 12 }
-        if pendingCount >= 48 { return 8 }
-        return 4
+        if pendingCount >= 600 { return 18 }
+        if pendingCount >= 300 { return 14 }
+        if pendingCount >= 120 { return 9 }
+        if pendingCount >= 48 { return 6 }
+        return 3
     }
 
     private func splitPrefix(_ value: String, maxCharacters: Int) -> (prefix: String, suffix: String) {
