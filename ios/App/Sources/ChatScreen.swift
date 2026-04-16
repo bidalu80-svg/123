@@ -44,24 +44,46 @@ struct ChatScreen: View {
     @State private var showInitialConfigSheet = false
     @State private var headerLeadingWidth: CGFloat = 36
     @State private var headerTrailingWidth: CGFloat = 108
+    @State private var messageScrollView: UIScrollView?
 
     var body: some View {
         ZStack(alignment: .leading) {
+            sessionSidebar
+
             mainContent
                 .overlay {
                     if sidebarRevealWidth > 0.01 {
                         Color.black.opacity(0.16 * sidebarRevealProgress)
                             .ignoresSafeArea()
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                setSidebarOpen(false)
-                            }
+                            .allowsHitTesting(false)
                     }
                 }
+                .clipShape(
+                    RoundedRectangle(cornerRadius: 40 * sidebarRevealProgress, style: .continuous)
+                )
+                .shadow(
+                    color: Color.black.opacity(0.16 * sidebarRevealProgress),
+                    radius: 22 * sidebarRevealProgress,
+                    x: 0,
+                    y: 0
+                )
+                .offset(x: sidebarRevealWidth)
+                .zIndex(1)
 
-            sessionSidebar
-                .offset(x: sidebarRevealWidth - sidebarWidth)
-                .zIndex(2)
+            if sidebarRevealWidth > 0.01 {
+                HStack(spacing: 0) {
+                    Color.clear
+                        .frame(width: sidebarWidth)
+                        .allowsHitTesting(false)
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            setSidebarOpen(false)
+                        }
+                }
+                .ignoresSafeArea()
+                .zIndex(3)
+            }
         }
         .navigationBarHidden(true)
         .simultaneousGesture(sidebarDragGesture)
@@ -422,6 +444,13 @@ struct ChatScreen: View {
                     .padding(.top, 16)
                     .padding(.bottom, 18)
                 }
+                .background(
+                    ScrollViewResolver { scrollView in
+                        if messageScrollView !== scrollView {
+                            messageScrollView = scrollView
+                        }
+                    }
+                )
                 .scrollIndicators(.hidden)
                 .scrollDismissesKeyboard(.interactively)
                 .simultaneousGesture(
@@ -618,8 +647,7 @@ struct ChatScreen: View {
 
     private func scrollDownButton(proxy: ScrollViewProxy) -> some View {
         Button {
-            isPinnedToBottom = true
-            scrollToBottomReliable(proxy, animated: true)
+            scrollDownOnePage(proxy: proxy)
         } label: {
             Image(systemName: "arrow.down")
                 .font(.system(size: 18, weight: .medium))
@@ -1590,6 +1618,16 @@ struct ChatScreen: View {
     }
 
     private func scrollToBottomReliable(_ proxy: ScrollViewProxy, animated: Bool) {
+        if let scrollView = messageScrollView {
+            scrollToBottom(scrollView, animated: animated)
+            DispatchQueue.main.async {
+                scrollToBottom(scrollView, animated: false)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                scrollToBottom(scrollView, animated: false)
+            }
+            return
+        }
         scrollToBottom(proxy, animated: animated)
         DispatchQueue.main.async {
             scrollToBottom(proxy, animated: false)
@@ -1597,6 +1635,36 @@ struct ChatScreen: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
             scrollToBottom(proxy, animated: false)
         }
+    }
+
+    private func scrollDownOnePage(proxy: ScrollViewProxy) {
+        guard let scrollView = messageScrollView else {
+            isPinnedToBottom = true
+            scrollToBottomReliable(proxy, animated: true)
+            return
+        }
+
+        let viewportHeight = scrollView.bounds.height
+        let pageStep = max(viewportHeight * 0.82, 220)
+        let maxOffsetY = max(
+            -scrollView.adjustedContentInset.top,
+            scrollView.contentSize.height - viewportHeight + scrollView.adjustedContentInset.bottom
+        )
+        let targetY = min(scrollView.contentOffset.y + pageStep, maxOffsetY)
+        let isNearBottomAfterScroll = targetY >= maxOffsetY - 8
+
+        scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: targetY), animated: true)
+        if isNearBottomAfterScroll {
+            isPinnedToBottom = true
+        }
+    }
+
+    private func scrollToBottom(_ scrollView: UIScrollView, animated: Bool) {
+        let targetY = max(
+            -scrollView.adjustedContentInset.top,
+            scrollView.contentSize.height - scrollView.bounds.height + scrollView.adjustedContentInset.bottom
+        )
+        scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: targetY), animated: animated)
     }
 
     private func settleSidebar(to open: Bool) {
@@ -1630,6 +1698,34 @@ private struct HeaderTrailingWidthPreferenceKey: PreferenceKey {
 
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = max(value, nextValue())
+    }
+}
+
+private struct ScrollViewResolver: UIViewRepresentable {
+    let onResolve: (UIScrollView) -> Void
+
+    func makeUIView(context: Context) -> UIView {
+        UIView(frame: .zero)
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        DispatchQueue.main.async {
+            guard let scrollView = uiView.enclosingScrollView else { return }
+            onResolve(scrollView)
+        }
+    }
+}
+
+private extension UIView {
+    var enclosingScrollView: UIScrollView? {
+        var current = superview
+        while let view = current {
+            if let scrollView = view as? UIScrollView {
+                return scrollView
+            }
+            current = view.superview
+        }
+        return nil
     }
 }
 

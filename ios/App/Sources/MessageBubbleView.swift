@@ -285,20 +285,11 @@ struct MessageBubbleView: View {
 
     @ViewBuilder
     private var streamingContent: some View {
-        let visibleText = message.content.replacingOccurrences(of: "\r\n", with: "\n")
-        if !message.imageAttachments.isEmpty || !message.fileAttachments.isEmpty || !visibleText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        let segments = MessageContentParser.parse(message)
+        if !segments.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
-                ForEach(message.imageAttachments) { attachment in
-                    messageImage(attachment)
-                }
-                ForEach(message.fileAttachments) { file in
-                    codeBlock(title: "FILE · \(file.fileName)", content: file.previewText, language: file.codeLanguageHint)
-                }
-                if !visibleText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    streamingGradientText(visibleText)
-                        .font(.system(size: 18, weight: .regular))
-                        .lineSpacing(5)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                    streamingSegmentView(segment)
                 }
             }
         } else if let fallback = fallbackPlainText {
@@ -312,6 +303,25 @@ struct MessageBubbleView: View {
                 .frame(width: 7, height: 7)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityLabel("正在接收流式内容")
+        }
+    }
+
+    @ViewBuilder
+    private func streamingSegmentView(_ segment: MessageSegment) -> some View {
+        switch segment {
+        case .text(let text):
+            if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                streamingGradientText(text)
+                    .font(.system(size: 18, weight: .regular))
+                    .lineSpacing(5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        case .code(let language, let content):
+            codeBlock(title: (language ?? "code").uppercased(), content: content, language: language)
+        case .file(let name, let language, let content):
+            codeBlock(title: "FILE · \(name)", content: content, language: language)
+        case .image(let attachment):
+            messageImage(attachment)
         }
     }
 
