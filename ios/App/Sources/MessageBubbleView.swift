@@ -49,7 +49,20 @@ struct MessageBubbleView: View {
         .sheet(item: $pendingPythonRun) { payload in
             pythonInputSheet(payload: payload)
         }
+        .onAppear {
+            if message.isStreaming {
+                startStreamingDotBreathing()
+            }
+        }
+        .onChange(of: message.isStreaming) { _, newValue in
+            if newValue {
+                startStreamingDotBreathing()
+            } else {
+                stopStreamingDotBreathing()
+            }
+        }
         .onDisappear {
+            stopStreamingDotBreathing()
             cancelAllPythonRuns()
         }
     }
@@ -264,11 +277,7 @@ struct MessageBubbleView: View {
         let segments = MessageContentParser.parse(message)
         if segments.isEmpty {
             if message.isStreaming {
-                HStack(alignment: .center, spacing: 6) {
-                    Text("正在接收流式内容…")
-                        .foregroundStyle(.secondary)
-                    streamingTailDot
-                }
+                streamingStandaloneIndicator
             } else if let fallback = fallbackPlainText {
                 SelectableLinkTextView(
                     text: fallback,
@@ -308,13 +317,8 @@ struct MessageBubbleView: View {
     }
 
     private var streamingStandaloneIndicator: some View {
-        HStack(alignment: .center, spacing: 6) {
-            Text("正在生成…")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.secondary)
-            streamingTailDot
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        streamingTailDot
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var streamingTailDot: some View {
@@ -323,13 +327,6 @@ struct MessageBubbleView: View {
             .frame(width: 6, height: 6)
             .scaleEffect(streamingDotPulse ? 1.0 : 0.62)
             .opacity(streamingDotPulse ? 0.95 : 0.28)
-            .animation(.easeInOut(duration: 0.58).repeatForever(autoreverses: true), value: streamingDotPulse)
-            .onAppear {
-                streamingDotPulse = true
-            }
-            .onDisappear {
-                streamingDotPulse = false
-            }
             .accessibilityHidden(true)
     }
 
@@ -356,17 +353,24 @@ struct MessageBubbleView: View {
         switch segment {
         case .text(let text):
             if message.isStreaming {
-                HStack(alignment: .lastTextBaseline, spacing: 6) {
+                if showsStreamingTailDot {
+                    (
+                        Text(text)
+                            .font(.system(size: 18, weight: .regular))
+                        + Text(" ●")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(Color.secondary.opacity(streamingDotPulse ? 0.95 : 0.28))
+                    )
+                        .lineSpacing(5)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
                     Text(text)
                         .font(.system(size: 18, weight: .regular))
                         .lineSpacing(5)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    if showsStreamingTailDot {
-                        streamingTailDot
-                    }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 SelectableLinkTextView(
                     text: text,
@@ -383,6 +387,17 @@ struct MessageBubbleView: View {
         case .image(let attachment):
             messageImage(attachment)
         }
+    }
+
+    private func startStreamingDotBreathing() {
+        streamingDotPulse = false
+        withAnimation(.easeInOut(duration: 0.58).repeatForever(autoreverses: true)) {
+            streamingDotPulse = true
+        }
+    }
+
+    private func stopStreamingDotBreathing() {
+        streamingDotPulse = false
     }
 
     private func codeBlock(title: String, content: String, language: String? = nil) -> some View {
