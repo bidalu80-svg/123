@@ -476,7 +476,7 @@ struct ChatScreen: View {
                 }
                 .onChange(of: viewModel.streamScrollTrigger) { _, _ in
                     if isPinnedToBottom {
-                        scrollToBottomReliable(proxy, animated: false)
+                        scrollToBottom(proxy, animated: false)
                     }
                 }
 
@@ -839,7 +839,7 @@ struct ChatScreen: View {
         if !fromAPI.isEmpty {
             return fromAPI
         }
-        let fallback = ["gpt-5.4-pro", "gpt-5.4", "gpt-5.2", "gpt-4.1"]
+        let fallback = ["gpt-5.4", "gpt-5.2", "gpt-4.1"]
         var merged: [String] = [viewModel.config.model]
         for model in fallback where !merged.contains(model) {
             merged.append(model)
@@ -1636,6 +1636,11 @@ struct ChatScreen: View {
                     scrollDownByStep(scrollView)
                 }
             }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                if let scrollView = messageScrollView {
+                    scrollDownByStep(scrollView)
+                }
+            }
             return
         }
 
@@ -1703,14 +1708,36 @@ private struct HeaderTrailingWidthPreferenceKey: PreferenceKey {
 private struct ScrollViewResolver: UIViewRepresentable {
     let onResolve: (UIScrollView) -> Void
 
-    func makeUIView(context: Context) -> UIView {
-        UIView(frame: .zero)
+    func makeUIView(context: Context) -> ResolverView {
+        let view = ResolverView(frame: .zero)
+        view.onResolve = onResolve
+        return view
     }
 
-    func updateUIView(_ uiView: UIView, context: Context) {
-        DispatchQueue.main.async {
-            guard let scrollView = uiView.enclosingScrollView else { return }
-            onResolve(scrollView)
+    func updateUIView(_ uiView: ResolverView, context: Context) {
+        uiView.onResolve = onResolve
+        uiView.resolveRepeatedly()
+    }
+
+    final class ResolverView: UIView {
+        var onResolve: ((UIScrollView) -> Void)?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            resolveRepeatedly()
+        }
+
+        func resolveRepeatedly(remainingAttempts: Int = 8) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { [weak self] in
+                guard let self else { return }
+                if let scrollView = self.enclosingScrollView {
+                    self.onResolve?(scrollView)
+                    return
+                }
+                if remainingAttempts > 0 {
+                    self.resolveRepeatedly(remainingAttempts: remainingAttempts - 1)
+                }
+            }
         }
     }
 }
