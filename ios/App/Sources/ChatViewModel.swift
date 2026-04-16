@@ -184,14 +184,22 @@ final class ChatViewModel: ObservableObject {
         )
         inflightTargetContext = targetContext
 
+        let placeholderID = UUID()
+        let placeholder = ChatMessage(
+            id: placeholderID,
+            role: .assistant,
+            content: "",
+            isStreaming: config.streamEnabled && config.endpointMode == .chatCompletions
+        )
+
         var historyBeforeSend: [ChatMessage] = []
         if isPrivateMode {
             historyBeforeSend = privateMessages
-            privateMessages.append(userMessage)
+            privateMessages.append(contentsOf: [userMessage, placeholder])
             messages = privateMessages
         } else if let current = currentSessionIndex {
             historyBeforeSend = sessions[current].messages
-            sessions[current].messages.append(userMessage)
+            sessions[current].messages.append(contentsOf: [userMessage, placeholder])
             sessions[current].updatedAt = Date()
             sessions[current].title = buildSessionTitle(from: sessions[current])
             messages = sessions[current].messages
@@ -201,14 +209,6 @@ final class ChatViewModel: ObservableObject {
         draftImageAttachments = []
         draftFileAttachment = nil
 
-        let placeholderID = UUID()
-        let placeholder = ChatMessage(
-            id: placeholderID,
-            role: .assistant,
-            content: "",
-            isStreaming: config.streamEnabled && config.endpointMode == .chatCompletions
-        )
-        appendMessageToTargetSession(placeholder, target: targetContext)
         persistSessions()
         signalStreamScroll(force: true)
         beginBackgroundSendTask()

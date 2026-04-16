@@ -469,7 +469,9 @@ struct ChatScreen: View {
                         isPinnedToBottom = true
                     }
                     if isPinnedToBottom || lastMessage.role == .user {
-                        scrollToBottomReliable(proxy, animated: true)
+                        DispatchQueue.main.async {
+                            scrollToBottomReliable(proxy, animated: false)
+                        }
                     }
                 }
                 .onChange(of: viewModel.streamScrollTrigger) { _, _ in
@@ -1629,13 +1631,20 @@ struct ChatScreen: View {
 
     private func scrollDownOnePage(proxy: ScrollViewProxy) {
         guard let scrollView = messageScrollView else {
-            isPinnedToBottom = true
-            scrollToBottomReliable(proxy, animated: true)
+            DispatchQueue.main.async {
+                if let scrollView = messageScrollView {
+                    scrollDownByStep(scrollView)
+                }
+            }
             return
         }
 
+        scrollDownByStep(scrollView)
+    }
+
+    private func scrollDownByStep(_ scrollView: UIScrollView) {
         let viewportHeight = scrollView.bounds.height
-        let pageStep = max(viewportHeight * 0.82, 220)
+        let pageStep = min(max(viewportHeight * 0.32, 140), 240)
         let maxOffsetY = max(
             -scrollView.adjustedContentInset.top,
             scrollView.contentSize.height - viewportHeight + scrollView.adjustedContentInset.bottom
