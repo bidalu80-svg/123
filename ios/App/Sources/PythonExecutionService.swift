@@ -339,6 +339,9 @@ private final class LocalPythonInterpreter {
             if line.raw.hasPrefix("elif ") || line.raw == "else:" {
                 throw PythonExecutionError.unsupportedSyntax("第\(line.number)行 elif/else 必须跟在 if 后面")
             }
+            if isExceptHeader(line.raw) || line.raw == "finally:" {
+                throw PythonExecutionError.unsupportedSyntax("第\(line.number)行 except/finally 必须跟在 try 后面")
+            }
 
             if line.raw.hasPrefix("for ") {
                 index = try executeFor(lines: lines, index: index)
@@ -352,6 +355,10 @@ private final class LocalPythonInterpreter {
 
             if line.raw.hasPrefix("while ") {
                 index = try executeWhile(lines: lines, index: index)
+                continue
+            }
+            if line.raw == "try:" {
+                index = try executeTry(lines: lines, index: index)
                 continue
             }
 
@@ -382,6 +389,23 @@ private final class LocalPythonInterpreter {
             return
         }
 
+        if let appendCall = try parseAppendCall(raw, line: line.number) {
+            guard let current = env[appendCall.name] else {
+                throw PythonExecutionError.runtime("第\(line.number)行变量未定义：\(appendCall.name)")
+            }
+            guard case .list(var values) = current else {
+                throw PythonExecutionError.runtime("第\(line.number)行 .append() 仅支持列表变量")
+            }
+            let args = try splitTopLevelComma(appendCall.argument)
+            guard args.count == 1 else {
+                throw PythonExecutionError.runtime("第\(line.number)行 append() 仅支持 1 个参数")
+            }
+            let value = try evalExpr(args[0], line: line.number)
+            values.append(value)
+            env[appendCall.name] = .list(values)
+            return
+        }
+
         if let assign = try parseAssignment(raw, line: line.number) {
             let value = try evalExpr(assign.expr, line: line.number)
             env[assign.name] = value
@@ -389,6 +413,81 @@ private final class LocalPythonInterpreter {
         }
 
         _ = try evalExpr(raw, line: line.number)
+    }
+
+    private func executeTry(lines: [Line], index: Int) throws -> Int {
+        let line = lines[index]
+        guard line.raw == "try:" else {
+            throw PythonExecutionError.unsupportedSyntax("第\(line.number)行 try 语法无效")
+        }
+
+        let baseIndent = line.indent
+        let tryBodyStart = index + 1
+        guard tryBodyStart < lines.count, lines[tryBodyStart].indent == baseIndent + 1 else {
+            throw PythonExecutionError.unsupportedSyntax("第\(line.number)行 try 缺少缩进代码块")
+        }
+        let tryBodyEnd = blockEnd(lines: lines, from: tryBodyStart, indent: baseIndent + 1)
+
+        var cursor = tryBodyEnd
+        var exceptBlocks: [(lineNumber: Int, start: Int, end: Int)] = []
+
+        while cursor < lines.count,
+              lines[cursor].indent == baseIndent,
+              isExceptHeader(lines[cursor].raw) {
+            let exceptLine = lines[cursor]
+            let bodyStart = cursor + 1
+            guard bodyStart < lines.count, lines[bodyStart].indent == baseIndent + 1 else {
+                throw PythonExecutionError.unsupportedSyntax("第\(exceptLine.number)行 except 缺少缩进代码块")
+            }
+            let bodyEnd = blockEnd(lines: lines, from: bodyStart, indent: baseIndent + 1)
+            exceptBlocks.append((lineNumber: exceptLine.number, start: bodyStart, end: bodyEnd))
+            cursor = bodyEnd
+        }
+
+        var finallyBlock: (lineNumber: Int, start: Int, end: Int)?
+        if cursor < lines.count, lines[cursor].indent == baseIndent, lines[cursor].raw == "finally:" {
+            let finallyLine = lines[cursor]
+            let bodyStart = cursor + 1
+            guard bodyStart < lines.count, lines[bodyStart].indent == baseIndent + 1 else {
+                throw PythonExecutionError.unsupportedSyntax("第\(finallyLine.number)行 finally 缺少缩进代码块")
+            }
+            let bodyEnd = blockEnd(lines: lines, from: bodyStart, indent: baseIndent + 1)
+            finallyBlock = (lineNumber: finallyLine.number, start: bodyStart, end: bodyEnd)
+            cursor = bodyEnd
+        }
+
+        if exceptBlocks.isEmpty && finallyBlock == nil {
+            throw PythonExecutionError.unsupportedSyntax("第\(line.number)行 try 需要至少一个 except 或 finally")
+        }
+
+        var outcomeError: Error?
+        do {
+            _ = try runBlock(lines: lines, start: tryBodyStart, indent: baseIndent + 1)
+        } catch {
+            outcomeError = error
+        }
+
+        if outcomeError is PythonExecutionError, let firstExcept = exceptBlocks.first {
+            do {
+                _ = try runBlock(lines: lines, start: firstExcept.start, indent: baseIndent + 1)
+                outcomeError = nil
+            } catch {
+                outcomeError = error
+            }
+        }
+
+        if let finallyBlock {
+            do {
+                _ = try runBlock(lines: lines, start: finallyBlock.start, indent: baseIndent + 1)
+            } catch {
+                outcomeError = error
+            }
+        }
+
+        if let outcomeError {
+            throw outcomeError
+        }
+        return cursor
     }
 
     private func executeIf(lines: [Line], index: Int) throws -> Int {
@@ -580,6 +679,23 @@ private final class LocalPythonInterpreter {
         return result
     }
 
+    private func isExceptHeader(_ raw: String) -> Bool {
+        raw == "except:" || (raw.hasPrefix("except ") && raw.hasSuffix(":"))
+    }
+
+    private func parseAppendCall(_ raw: String, line: Int) throws -> (name: String, argument: String)? {
+        guard raw.hasSuffix(")"), let range = raw.range(of: ".append(") else {
+            return nil
+        }
+        let name = raw[..<range.lowerBound].trimmingCharacters(in: .whitespaces)
+        let argument = raw[range.upperBound..<raw.index(before: raw.endIndex)].trimmingCharacters(in: .whitespaces)
+        guard isIdentifier(String(name)) else { return nil }
+        guard !argument.isEmpty else {
+            throw PythonExecutionError.runtime("第\(line)行 append() 缺少参数")
+        }
+        return (String(name), String(argument))
+    }
+
     private func parseAssignment(_ raw: String, line: Int) throws -> (name: String, expr: String)? {
         if raw.contains("==") || raw.contains("!=") || raw.contains("<=") || raw.contains(">=") {
             return nil
@@ -632,6 +748,10 @@ private final class LocalPythonInterpreter {
         if expr == "True" { return .bool(true) }
         if expr == "False" { return .bool(false) }
         if expr == "None" { return .none }
+        if expr.hasPrefix("not ") {
+            let inner = String(expr.dropFirst(4)).trimmingCharacters(in: .whitespacesAndNewlines)
+            return .bool(!(try evalExpr(inner, line: line).isTruthy))
+        }
 
         if expr.hasPrefix("input("), expr.hasSuffix(")") {
             let inner = String(expr.dropFirst(6).dropLast())
@@ -651,8 +771,9 @@ private final class LocalPythonInterpreter {
             switch value {
             case .string(let text): return .number(Double(text.count))
             case .list(let values): return .number(Double(values.count))
+            case .dict(let values): return .number(Double(values.count))
             default:
-                throw PythonExecutionError.runtime("第\(line)行 len() 仅支持字符串或列表")
+                throw PythonExecutionError.runtime("第\(line)行 len() 仅支持字符串、列表或字典")
             }
         }
 
@@ -688,6 +809,14 @@ private final class LocalPythonInterpreter {
             let parts = try splitTopLevelComma(inner)
             let values = try parts.map { try evalExpr($0, line: line) }
             return .list(values)
+        }
+
+        if expr.hasPrefix("{"), expr.hasSuffix("}") {
+            return try evalDictLiteral(expr, line: line)
+        }
+
+        if let subscriptValue = try evalSubscript(expr, line: line) {
+            return subscriptValue
         }
 
         if let value = env[expr] {
@@ -745,6 +874,137 @@ private final class LocalPythonInterpreter {
         }
     }
 
+    private func evalDictLiteral(_ expr: String, line: Int) throws -> Value {
+        let inner = String(expr.dropFirst().dropLast())
+        if inner.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return .dict([:])
+        }
+
+        let pairs = try splitTopLevelComma(inner)
+        var result: [String: Value] = [:]
+        for pair in pairs {
+            guard let colon = topLevelColonIndex(in: pair) else {
+                throw PythonExecutionError.unsupportedSyntax("第\(line)行字典语法错误：缺少冒号")
+            }
+            let keyExpr = String(pair[..<colon]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let valueExpr = String(pair[pair.index(after: colon)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !keyExpr.isEmpty, !valueExpr.isEmpty else {
+                throw PythonExecutionError.unsupportedSyntax("第\(line)行字典语法错误：键值不能为空")
+            }
+
+            let keyValue = try evalExpr(keyExpr, line: line)
+            let key = dictionaryKeyString(from: keyValue)
+            let value = try evalExpr(valueExpr, line: line)
+            result[key] = value
+        }
+        return .dict(result)
+    }
+
+    private func dictionaryKeyString(from value: Value) -> String {
+        switch value {
+        case .string(let text):
+            return text
+        case .number(let n):
+            return n.rounded() == n ? String(Int(n)) : String(n)
+        case .bool(let b):
+            return b ? "True" : "False"
+        case .none:
+            return "None"
+        case .list, .dict:
+            return value.rendered
+        }
+    }
+
+    private func evalSubscript(_ expr: String, line: Int) throws -> Value? {
+        guard expr.hasSuffix("]"), let openBracket = expr.firstIndex(of: "[") else {
+            return nil
+        }
+
+        let rawName = String(expr[..<openBracket]).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isIdentifier(rawName) else { return nil }
+
+        let contentStart = expr.index(after: openBracket)
+        let contentEnd = expr.index(before: expr.endIndex)
+        guard contentStart <= contentEnd else {
+            throw PythonExecutionError.runtime("第\(line)行下标访问缺少索引")
+        }
+        let indexExpr = String(expr[contentStart...contentEnd]).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !indexExpr.isEmpty else {
+            throw PythonExecutionError.runtime("第\(line)行下标访问缺少索引")
+        }
+
+        guard let container = env[rawName] else {
+            throw PythonExecutionError.runtime("第\(line)行变量未定义：\(rawName)")
+        }
+        let indexValue = try evalExpr(indexExpr, line: line)
+
+        switch container {
+        case .list(let values):
+            guard let idx = indexValue.intValue else {
+                throw PythonExecutionError.runtime("第\(line)行列表索引必须是整数")
+            }
+            let actual = idx >= 0 ? idx : values.count + idx
+            guard actual >= 0, actual < values.count else {
+                throw PythonExecutionError.runtime("第\(line)行列表索引越界")
+            }
+            return values[actual]
+        case .string(let text):
+            guard let idx = indexValue.intValue else {
+                throw PythonExecutionError.runtime("第\(line)行字符串索引必须是整数")
+            }
+            let chars = Array(text)
+            let actual = idx >= 0 ? idx : chars.count + idx
+            guard actual >= 0, actual < chars.count else {
+                throw PythonExecutionError.runtime("第\(line)行字符串索引越界")
+            }
+            return .string(String(chars[actual]))
+        case .dict(let values):
+            let key = dictionaryKeyString(from: indexValue)
+            guard let value = values[key] else {
+                throw PythonExecutionError.runtime("第\(line)行字典不存在键：\(key)")
+            }
+            return value
+        default:
+            throw PythonExecutionError.runtime("第\(line)行下标访问仅支持列表、字符串或字典")
+        }
+    }
+
+    private func topLevelColonIndex(in raw: String) -> String.Index? {
+        var depth = 0
+        var inSingle = false
+        var inDouble = false
+
+        var index = raw.startIndex
+        while index < raw.endIndex {
+            let ch = raw[index]
+            if ch == "'", !inDouble {
+                inSingle.toggle()
+                index = raw.index(after: index)
+                continue
+            }
+            if ch == "\"", !inSingle {
+                inDouble.toggle()
+                index = raw.index(after: index)
+                continue
+            }
+            if inSingle || inDouble {
+                index = raw.index(after: index)
+                continue
+            }
+
+            if ch == "(" || ch == "[" || ch == "{" {
+                depth += 1
+            } else if ch == ")" || ch == "]" || ch == "}" {
+                depth -= 1
+            } else if ch == ":", depth == 0 {
+                return index
+            }
+            index = raw.index(after: index)
+        }
+
+        return nil
+    }
+
     private func splitTopLevelComma(_ raw: String) throws -> [String] {
         var result: [String] = []
         var current = ""
@@ -757,8 +1017,8 @@ private final class LocalPythonInterpreter {
             if ch == "\"", !inSingle { inDouble.toggle(); current.append(ch); continue }
             if inSingle || inDouble { current.append(ch); continue }
 
-            if ch == "(" || ch == "[" { depth += 1; current.append(ch); continue }
-            if ch == ")" || ch == "]" { depth -= 1; current.append(ch); continue }
+            if ch == "(" || ch == "[" || ch == "{" { depth += 1; current.append(ch); continue }
+            if ch == ")" || ch == "]" || ch == "}" { depth -= 1; current.append(ch); continue }
 
             if ch == ",", depth == 0 {
                 let trimmed = current.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -793,6 +1053,7 @@ private enum Value: Equatable {
     case string(String)
     case bool(Bool)
     case list([Value])
+    case dict([String: Value])
     case none
 
     var numberValue: Double? {
@@ -815,6 +1076,7 @@ private enum Value: Equatable {
         case .string(let s): return !s.isEmpty
         case .bool(let b): return b
         case .list(let values): return !values.isEmpty
+        case .dict(let values): return !values.isEmpty
         case .none: return false
         }
     }
@@ -828,6 +1090,13 @@ private enum Value: Equatable {
         case .bool(let b): return b ? "True" : "False"
         case .list(let values):
             return "[" + values.map { $0.rendered }.joined(separator: ", ") + "]"
+        case .dict(let values):
+            let pairs = values.keys.sorted().map { key -> String in
+                let escaped = key.replacingOccurrences(of: "'", with: "\\'")
+                let value = values[key]?.rendered ?? "None"
+                return "'\(escaped)': \(value)"
+            }
+            return "{" + pairs.joined(separator: ", ") + "}"
         case .none: return "None"
         }
     }
