@@ -80,7 +80,7 @@ actor RealtimeContextProvider {
     private let weatherTTL: TimeInterval = 15 * 60
     private let marketTTL: TimeInterval = 5 * 60
     private let hotNewsTTL: TimeInterval = 10 * 60
-    private let realtimeLineTimeout: TimeInterval = 2.2
+    private let realtimeLineTimeout: TimeInterval = 1.6
 
     init(session: URLSession? = nil) {
         if let session {
@@ -97,25 +97,45 @@ actor RealtimeContextProvider {
 
     func prewarm(config: ChatConfig, now: Date = Date()) async {
         guard config.realtimeContextEnabled else { return }
-        _ = await buildSystemContext(config: config, userPrompt: nil, now: now)
+        async let weatherWarm: String? = resolveLineWithTimeout(seconds: realtimeLineTimeout) { [self] in
+            await makeWeatherContextLine(config: config, userPrompt: "天气", now: now)
+        }
+        async let marketWarm: String? = resolveLineWithTimeout(seconds: realtimeLineTimeout) { [self] in
+            await makeMarketContextLine(config: config, userPrompt: "股市油价金价", now: now)
+        }
+        async let hotNewsWarm: String? = resolveLineWithTimeout(seconds: realtimeLineTimeout) { [self] in
+            await makeHotNewsContextLine(config: config, userPrompt: "新闻热点", now: now)
+        }
+        _ = await (weatherWarm, marketWarm, hotNewsWarm)
     }
 
     func buildSystemContext(config: ChatConfig, userPrompt: String? = nil, now: Date = Date()) async -> String? {
         guard config.realtimeContextEnabled else { return nil }
+        let wantsDateTime = shouldInjectDateTimeContext(for: userPrompt)
+        let wantsWeather = config.weatherContextEnabled && shouldInjectWeatherContext(for: userPrompt)
+        let wantsMarket = config.marketContextEnabled && shouldInjectMarketContext(for: userPrompt)
+        let wantsHotNews = config.hotNewsContextEnabled && shouldInjectHotNewsContext(for: userPrompt)
+        let wantsFuel = (userPrompt != nil) && shouldInjectChinaFuelPrice(for: userPrompt ?? "")
+
+        guard wantsDateTime || wantsWeather || wantsMarket || wantsHotNews || wantsFuel else {
+            return nil
+        }
 
         var lines: [String] = []
         lines.append("以下是系统实时信息（仅供当前回答参考）：")
-        lines.append(buildDateTimeLine(now: now))
+        if wantsDateTime {
+            lines.append(buildDateTimeLine(now: now))
+        }
 
         // Build external realtime context in parallel to reduce first-message latency.
         async let weatherLine = resolveLineWithTimeout(seconds: realtimeLineTimeout) { [self] in
-            await makeWeatherContextLine(config: config, now: now)
+            await makeWeatherContextLine(config: config, userPrompt: userPrompt, now: now)
         }
         async let marketLine = resolveLineWithTimeout(seconds: realtimeLineTimeout) { [self] in
             await makeMarketContextLine(config: config, userPrompt: userPrompt, now: now)
         }
         async let hotNewsLine = resolveLineWithTimeout(seconds: realtimeLineTimeout) { [self] in
-            await makeHotNewsContextLine(config: config, now: now)
+            await makeHotNewsContextLine(config: config, userPrompt: userPrompt, now: now)
         }
         async let fuelLine = resolveLineWithTimeout(seconds: realtimeLineTimeout) { [self] in
             await makeChinaFuelContextLine(userPrompt: userPrompt, now: now)
@@ -163,8 +183,9 @@ actor RealtimeContextProvider {
         }
     }
 
-    private func makeWeatherContextLine(config: ChatConfig, now: Date) async -> String? {
+    private func makeWeatherContextLine(config: ChatConfig, userPrompt: String?, now: Date) async -> String? {
         guard config.weatherContextEnabled else { return nil }
+        guard shouldInjectWeatherContext(for: userPrompt) else { return nil }
         let location = config.weatherLocation.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !location.isEmpty else { return nil }
 
@@ -176,6 +197,7 @@ actor RealtimeContextProvider {
 
     private func makeMarketContextLine(config: ChatConfig, userPrompt: String?, now: Date) async -> String? {
         guard config.marketContextEnabled else { return nil }
+        guard shouldInjectMarketContext(for: userPrompt) else { return nil }
         let inferredSymbols = inferSymbols(from: userPrompt ?? "")
         let symbols = mergeSymbols(parseSymbols(config.marketSymbols), inferredSymbols)
         guard !symbols.isEmpty else { return nil }
@@ -186,8 +208,9 @@ actor RealtimeContextProvider {
         return "市场价格：暂时获取失败。"
     }
 
-    private func makeHotNewsContextLine(config: ChatConfig, now: Date) async -> String? {
+    private func makeHotNewsContextLine(config: ChatConfig, userPrompt: String?, now: Date) async -> String? {
         guard config.hotNewsContextEnabled else { return nil }
+        guard shouldInjectHotNewsContext(for: userPrompt) else { return nil }
 
         if let newsBlock = try? await fetchHotNewsSummary(count: config.hotNewsCount, now: now) {
             return newsBlock
@@ -210,6 +233,45 @@ actor RealtimeContextProvider {
             return true
         }
         return false
+    }
+
+    private func shouldInjectDateTimeContext(for prompt: String?) -> Bool {
+        let lowered = (prompt ?? "").lowercased()
+        guard !lowered.isEmpty else { return false }
+        let keywords = [
+            "现在几点", "几点", "时间", "日期", "今天几号", "星期几", "当前时间",
+            "what time", "current time", "date today", "today date", "time now"
+        ]
+        return keywords.contains { lowered.contains($0) }
+    }
+
+    private func shouldInjectWeatherContext(for prompt: String?) -> Bool {
+        let lowered = (prompt ?? "").lowercased()
+        guard !lowered.isEmpty else { return false }
+        let keywords = [
+            "天气", "温度", "气温", "下雨", "降雨", "风速", "湿度", "体感", "forecast", "weather", "temperature", "rain"
+        ]
+        return keywords.contains { lowered.contains($0) }
+    }
+
+    private func shouldInjectMarketContext(for prompt: String?) -> Bool {
+        let lowered = (prompt ?? "").lowercased()
+        guard !lowered.isEmpty else { return false }
+        if !inferSymbols(from: lowered).isEmpty { return true }
+        let keywords = [
+            "股市", "股票", "指数", "大盘", "行情", "市值", "油价", "金价", "汇率", "币价", "期货",
+            "market", "stock", "stocks", "index", "indices", "price", "prices", "forex", "crypto", "commodity"
+        ]
+        return keywords.contains { lowered.contains($0) }
+    }
+
+    private func shouldInjectHotNewsContext(for prompt: String?) -> Bool {
+        let lowered = (prompt ?? "").lowercased()
+        guard !lowered.isEmpty else { return false }
+        let keywords = [
+            "新闻", "热点", "热搜", "时事", "最新消息", "发生了什么", "头条", "news", "headline", "headlines", "breaking", "latest"
+        ]
+        return keywords.contains { lowered.contains($0) }
     }
 
     private func fetchChinaFuelSummary(from prompt: String, now: Date) async throws -> String {
