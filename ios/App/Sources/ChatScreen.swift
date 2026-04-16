@@ -35,7 +35,6 @@ struct ChatScreen: View {
     @State private var isPinnedToBottom = true
     @State private var starterPromptDeck: [(title: String, subtitle: String)] = []
     @State private var sidebarDragOffset: CGFloat = 0
-    @State private var isSidebarDragging = false
     @State private var recentAssets: [PHAsset] = []
     @State private var recentThumbnails: [String: UIImage] = [:]
     @State private var sidebarAnimationLock = false
@@ -48,40 +47,21 @@ struct ChatScreen: View {
 
     var body: some View {
         ZStack(alignment: .leading) {
-            sessionSidebar
-
             mainContent
                 .overlay {
                     if sidebarRevealWidth > 0.01 {
                         Color.black.opacity(0.16 * sidebarRevealProgress)
                             .ignoresSafeArea()
-                            .allowsHitTesting(false)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                setSidebarOpen(false)
+                            }
                     }
                 }
-                .clipShape(
-                    RoundedRectangle(cornerRadius: (isSidebarDragging ? 18 : 40) * sidebarRevealProgress, style: .continuous)
-                )
-                .shadow(
-                    color: Color.black.opacity(0.18 * sidebarRevealProgress),
-                    radius: (isSidebarDragging ? 12 : 24) * sidebarRevealProgress,
-                    x: 0,
-                    y: 0
-                )
-                .offset(x: mainContentOffsetX)
 
-            if sidebarRevealWidth > 0.01 {
-                HStack(spacing: 0) {
-                    Color.clear
-                        .frame(width: sidebarWidth)
-                        .allowsHitTesting(false)
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            setSidebarOpen(false)
-                        }
-                }
-                .ignoresSafeArea()
-            }
+            sessionSidebar
+                .offset(x: sidebarRevealWidth - sidebarWidth)
+                .zIndex(2)
         }
         .navigationBarHidden(true)
         .simultaneousGesture(sidebarDragGesture)
@@ -1171,11 +1151,6 @@ struct ChatScreen: View {
         return min(max(sidebarRevealWidth / sidebarWidth, 0), 1)
     }
 
-    private var mainContentOffsetX: CGFloat {
-        guard sidebarRevealWidth > 0 else { return 0 }
-        return max(sidebarRevealWidth - 1, 0)
-    }
-
     private var sidebarDragGesture: some Gesture {
         DragGesture(minimumDistance: 8, coordinateSpace: .local)
             .onChanged { value in
@@ -1187,7 +1162,6 @@ struct ChatScreen: View {
                     return
                 }
 
-                isSidebarDragging = true
                 if isSidebarOpen {
                     sidebarDragOffset = min(0, value.translation.width)
                 } else {
@@ -1195,9 +1169,6 @@ struct ChatScreen: View {
                 }
             }
             .onEnded { value in
-                defer {
-                    isSidebarDragging = false
-                }
                 guard abs(value.translation.width) > abs(value.translation.height) * 1.35 else {
                     settleSidebar(to: isSidebarOpen)
                     return

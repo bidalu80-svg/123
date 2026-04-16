@@ -112,7 +112,7 @@ struct ChatConfig: Codable, Equatable {
         marketSymbols: "GC=F,CL=F,BZ=F,SI=F,HG=F,^GSPC,^IXIC,^DJI,^RUT,^N225,^HSI,^FTSE,^GDAXI,AAPL,NVDA,TSLA,MSFT,AMZN",
         hotNewsContextEnabled: false,
         hotNewsCount: 6,
-        memoryModeEnabled: true,
+        memoryModeEnabled: false,
         soundEffectsEnabled: true
     )
 
@@ -138,7 +138,7 @@ struct ChatConfig: Codable, Equatable {
         marketSymbols: String = "GC=F,CL=F,BZ=F,SI=F,HG=F,^GSPC,^IXIC,^DJI,^RUT,^N225,^HSI,^FTSE,^GDAXI,AAPL,NVDA,TSLA,MSFT,AMZN",
         hotNewsContextEnabled: Bool = false,
         hotNewsCount: Int = 6,
-        memoryModeEnabled: Bool = true,
+        memoryModeEnabled: Bool = false,
         soundEffectsEnabled: Bool = true
     ) {
         self.apiURL = apiURL
@@ -189,7 +189,7 @@ struct ChatConfig: Codable, Equatable {
         marketSymbols = try c.decodeIfPresent(String.self, forKey: .marketSymbols) ?? "GC=F,CL=F,BZ=F,SI=F,HG=F,^GSPC,^IXIC,^DJI,^RUT,^N225,^HSI,^FTSE,^GDAXI,AAPL,NVDA,TSLA,MSFT,AMZN"
         hotNewsContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .hotNewsContextEnabled) ?? false
         hotNewsCount = try c.decodeIfPresent(Int.self, forKey: .hotNewsCount) ?? 6
-        memoryModeEnabled = try c.decodeIfPresent(Bool.self, forKey: .memoryModeEnabled) ?? true
+        memoryModeEnabled = try c.decodeIfPresent(Bool.self, forKey: .memoryModeEnabled) ?? false
         soundEffectsEnabled = try c.decodeIfPresent(Bool.self, forKey: .soundEffectsEnabled) ?? true
     }
 

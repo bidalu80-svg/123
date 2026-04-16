@@ -295,24 +295,23 @@ struct MessageBubbleView: View {
                     codeBlock(title: "FILE · \(file.fileName)", content: file.previewText, language: file.codeLanguageHint)
                 }
                 if !visibleText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Text(visibleText)
+                    streamingGradientText(visibleText)
                         .font(.system(size: 18, weight: .regular))
                         .lineSpacing(5)
-                        .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
                 }
             }
         } else if let fallback = fallbackPlainText {
-            Text(fallback)
+            streamingGradientText(fallback)
                 .font(.system(size: 18, weight: .regular))
                 .lineSpacing(5)
-                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .textSelection(.enabled)
         } else {
-            Text("正在接收流式内容…")
-                .foregroundStyle(.secondary)
+            Circle()
+                .fill(Color.black)
+                .frame(width: 7, height: 7)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityLabel("正在接收流式内容")
         }
     }
 
@@ -339,6 +338,37 @@ struct MessageBubbleView: View {
         case .image(let attachment):
             messageImage(attachment)
         }
+    }
+
+    private func streamingGradientText(_ value: String) -> Text {
+        let parts = splitStreamingGradientText(value)
+        var rendered = Text(verbatim: parts.head).foregroundColor(.primary)
+
+        if !parts.mid.isEmpty {
+            rendered = rendered + Text(verbatim: parts.mid).foregroundColor(Color.primary.opacity(0.72))
+        }
+        if !parts.tip.isEmpty {
+            rendered = rendered + Text(verbatim: parts.tip).foregroundColor(Color.secondary.opacity(0.5))
+        }
+        return rendered
+    }
+
+    private func splitStreamingGradientText(_ value: String) -> (head: String, mid: String, tip: String) {
+        let total = value.count
+        guard total > 0 else { return ("", "", "") }
+
+        let tipCount = min(3, total)
+        let midCount = min(8, max(total - tipCount, 0))
+        let headCount = max(total - tipCount - midCount, 0)
+
+        let headEnd = value.index(value.startIndex, offsetBy: headCount)
+        let midEnd = value.index(headEnd, offsetBy: midCount)
+
+        return (
+            String(value[..<headEnd]),
+            String(value[headEnd..<midEnd]),
+            String(value[midEnd...])
+        )
     }
 
     @ViewBuilder
