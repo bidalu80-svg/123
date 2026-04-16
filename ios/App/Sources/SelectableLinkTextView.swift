@@ -6,6 +6,7 @@ struct SelectableLinkTextView: UIViewRepresentable {
     var textColor: UIColor = .label
     var linkColor: UIColor = .secondaryLabel
     var font: UIFont = .systemFont(ofSize: 17, weight: .regular)
+    private static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -32,6 +33,16 @@ struct SelectableLinkTextView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: UITextView, context: Context) {
+        let coordinator = context.coordinator
+        let shouldRebuildText =
+            coordinator.lastText != text
+            || coordinator.lastFontPointSize != font.pointSize
+            || !coordinator.lastTextColor.isEqual(textColor)
+            || !coordinator.lastLinkColor.isEqual(linkColor)
+        if !shouldRebuildText {
+            return
+        }
+
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineSpacing = 5
 
@@ -42,7 +53,7 @@ struct SelectableLinkTextView: UIViewRepresentable {
         ]
 
         let attributed = NSMutableAttributedString(string: text, attributes: attrs)
-        if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) {
+        if let detector = Self.linkDetector {
             let nsText = text as NSString
             let fullRange = NSRange(location: 0, length: nsText.length)
             detector.enumerateMatches(in: text, options: [], range: fullRange) { match, _, _ in
@@ -59,7 +70,15 @@ struct SelectableLinkTextView: UIViewRepresentable {
             }
         }
 
+        uiView.linkTextAttributes = [
+            .foregroundColor: linkColor,
+            .underlineStyle: 0
+        ]
         uiView.attributedText = attributed
+        coordinator.lastText = text
+        coordinator.lastFontPointSize = font.pointSize
+        coordinator.lastTextColor = textColor
+        coordinator.lastLinkColor = linkColor
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
@@ -70,6 +89,11 @@ struct SelectableLinkTextView: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
+        var lastText: String = ""
+        var lastFontPointSize: CGFloat = 0
+        var lastTextColor: UIColor = .clear
+        var lastLinkColor: UIColor = .clear
+
         func textView(
             _ textView: UITextView,
             shouldInteractWith URL: URL,

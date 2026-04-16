@@ -14,6 +14,11 @@ struct ChatRequestBuilder {
     3) 避免把很多短句直接逐行堆叠成“无指示文本块”。
     4) 用户明确要求纯文本或其他格式时，以用户要求为准。
     """
+    private static let maxHistoryMessages = 22
+    private static let maxHistoryCharacters = 42_000
+    private static let maxSingleHistoryMessageChars = 7_000
+    private static let maxHistoryFilePreviewChars = 2_400
+    private static let keepInlineImageHistoryDepth = 1
 
     static func makeRequest(
         config: ChatConfig,
@@ -84,7 +89,93 @@ struct ChatRequestBuilder {
             ])
         }
 
-        return prefix + history.map(\.apiPayload) + [message.apiPayload]
+        let compactHistory = compactHistoryForRequest(history)
+        return prefix + compactHistory.map(\.apiPayload) + [message.apiPayload]
+    }
+
+    private static func compactHistoryForRequest(_ history: [ChatMessage]) -> [ChatMessage] {
+        guard !history.isEmpty else { return [] }
+
+        var selected: [ChatMessage] = []
+        var budget = 0
+        var keptInlineImageMessages = 0
+
+        for original in history.reversed() {
+            let allowInlineImageData = keptInlineImageMessages < keepInlineImageHistoryDepth
+            let compact = compactHistoryMessage(original, allowInlineImageData: allowInlineImageData)
+            let weight = historyWeight(compact)
+            let reachesLimit = selected.count >= maxHistoryMessages || (budget + weight > maxHistoryCharacters)
+            if !selected.isEmpty && reachesLimit {
+                break
+            }
+
+            selected.append(compact)
+            budget += weight
+            if compact.imageAttachments.contains(where: { $0.requestURLString.hasPrefix("data:") }) {
+                keptInlineImageMessages += 1
+            }
+        }
+
+        return Array(selected.reversed())
+    }
+
+    private static func compactHistoryMessage(_ message: ChatMessage, allowInlineImageData: Bool) -> ChatMessage {
+        var compact = message
+        compact.content = compactTextForHistory(compact.content)
+
+        if compact.fileAttachments.count > 2 {
+            compact.fileAttachments = Array(compact.fileAttachments.prefix(2))
+            compact.content = appendHistoryHint(
+                compact.content,
+                hint: "[历史附件较多，已仅保留最近 2 个附件内容以提升响应速度。]"
+            )
+        }
+        compact.fileAttachments = compact.fileAttachments.map { file in
+            var clipped = file
+            if clipped.textContent.count > maxHistoryFilePreviewChars {
+                clipped.textContent = String(clipped.textContent.prefix(maxHistoryFilePreviewChars))
+                    + "\n\n[历史附件内容已截断]"
+            }
+            clipped.binaryBase64 = nil
+            return clipped
+        }
+
+        let inlineDataImages = compact.imageAttachments.filter { $0.requestURLString.hasPrefix("data:") }
+        if !allowInlineImageData && !inlineDataImages.isEmpty {
+            compact.imageAttachments.removeAll { $0.requestURLString.hasPrefix("data:") }
+            compact.content = appendHistoryHint(
+                compact.content,
+                hint: "[历史消息含 \(inlineDataImages.count) 张本地图片，本轮为提速已省略其二进制内容。]"
+            )
+        }
+
+        return compact
+    }
+
+    private static func compactTextForHistory(_ raw: String) -> String {
+        if raw.count <= maxSingleHistoryMessageChars {
+            return raw
+        }
+        return String(raw.prefix(maxSingleHistoryMessageChars)) + "\n\n[历史文本已截断]"
+    }
+
+    private static func appendHistoryHint(_ content: String, hint: String) -> String {
+        if content.contains(hint) {
+            return content
+        }
+        if content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return hint
+        }
+        return content + "\n\n" + hint
+    }
+
+    private static func historyWeight(_ message: ChatMessage) -> Int {
+        let textWeight = min(message.content.count, maxSingleHistoryMessageChars)
+        let fileWeight = message.fileAttachments.reduce(0) { partial, file in
+            partial + min(file.textContent.count, maxHistoryFilePreviewChars)
+        }
+        let imageWeight = message.imageAttachments.count * 640
+        return textWeight + fileWeight + imageWeight + 180
     }
 
     static func makeModelsRequest(config: ChatConfig) throws -> URLRequest {
@@ -406,6 +497,29 @@ final class ChatService {
 
                 var fullReply = ""
                 var imageURLs = Set<String>()
+                var pendingDeltaText = ""
+                var pendingImageURLs = Set<String>()
+                var lastEmitAt = Date.distantPast
+                let streamEmitInterval: TimeInterval = 0.045
+
+                func emitPending(force: Bool = false) {
+                    guard !pendingDeltaText.isEmpty || !pendingImageURLs.isEmpty else { return }
+                    let now = Date()
+                    if !force && now.timeIntervalSince(lastEmitAt) < streamEmitInterval {
+                        return
+                    }
+                    onEvent(
+                        StreamChunk(
+                            rawLine: "",
+                            deltaText: pendingDeltaText,
+                            imageURLs: Array(pendingImageURLs),
+                            isDone: false
+                        )
+                    )
+                    pendingDeltaText = ""
+                    pendingImageURLs.removeAll()
+                    lastEmitAt = now
+                }
 
                 for try await line in bytes.lines {
                     try Task.checkCancellation()
@@ -414,15 +528,16 @@ final class ChatService {
 
                     if !chunk.deltaText.isEmpty {
                         fullReply += chunk.deltaText
+                        pendingDeltaText += chunk.deltaText
                     }
                     if !chunk.imageURLs.isEmpty {
                         chunk.imageURLs.forEach { imageURLs.insert($0) }
+                        chunk.imageURLs.forEach { pendingImageURLs.insert($0) }
                     }
 
-                    if !chunk.deltaText.isEmpty || !chunk.imageURLs.isEmpty {
-                        onEvent(chunk)
-                    }
+                    emitPending()
                 }
+                emitPending(force: true)
 
                 let cleaned = ResponseCleaner.cleanAssistantText(fullReply)
                 let images = imageURLs.map { ChatImageAttachment(dataURL: $0, mimeType: "image/*", remoteURL: $0) }

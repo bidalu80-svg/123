@@ -65,6 +65,63 @@ final class ChatServiceTests: XCTestCase {
         XCTAssertEqual((content[2]["image_url"] as? [String: String])?["url"], attachments[1].requestURLString)
     }
 
+    func testBuildRequestTrimsLongHistoryToKeepPayloadResponsive() throws {
+        let config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
+        let longText = String(repeating: "历史上下文内容。", count: 1200)
+        let history: [ChatMessage] = (0..<40).map { index in
+            ChatMessage(
+                role: index.isMultiple(of: 2) ? .user : .assistant,
+                content: "\(index):\(longText)"
+            )
+        }
+        let requestMessage = ChatMessage(role: .user, content: "继续")
+
+        let request = try ChatRequestBuilder.makeRequest(config: config, history: history, message: requestMessage)
+        let payload = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+        let messages = try XCTUnwrap(json["messages"] as? [[String: Any]])
+
+        // system + trimmed history + latest message
+        XCTAssertLessThanOrEqual(messages.count, 24)
+    }
+
+    func testBuildRequestDropsOlderInlineImageDataFromHistoryForSpeed() throws {
+        let config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
+        let older = ChatMessage(
+            role: .user,
+            content: "旧图片",
+            imageAttachments: [ChatImageAttachment(dataURL: "data:image/png;base64,old111", mimeType: "image/png")]
+        )
+        let latestWithImage = ChatMessage(
+            role: .user,
+            content: "新图片",
+            imageAttachments: [ChatImageAttachment(dataURL: "data:image/png;base64,new222", mimeType: "image/png")]
+        )
+        let history = [older, ChatMessage(role: .assistant, content: "收到"), latestWithImage]
+        let requestMessage = ChatMessage(role: .user, content: "继续分析")
+
+        let request = try ChatRequestBuilder.makeRequest(config: config, history: history, message: requestMessage)
+        let payload = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+        let messages = try XCTUnwrap(json["messages"] as? [[String: Any]])
+
+        var inlineImageCount = 0
+        for message in messages {
+            guard let content = message["content"] as? [[String: Any]] else { continue }
+            for item in content where (item["type"] as? String) == "image_url" {
+                let image = item["image_url"] as? [String: Any]
+                let url = image?["url"] as? String
+                if let url, url.hasPrefix("data:image") {
+                    inlineImageCount += 1
+                }
+            }
+        }
+
+        XCTAssertEqual(inlineImageCount, 1)
+        let plainTextMessages = messages.compactMap { $0["content"] as? String }.joined(separator: "\n")
+        XCTAssertTrue(plainTextMessages.contains("本轮为提速已省略其二进制内容"))
+    }
+
     func testChatImageAttachmentDecodeSupportsURLSafeBase64WithoutPadding() {
         let original = Data([0x89, 0x50, 0x4E, 0x47, 0x00, 0xFE, 0x2F, 0x10])
         let compact = original.base64EncodedString()

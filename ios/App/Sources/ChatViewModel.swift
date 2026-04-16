@@ -5,6 +5,16 @@ import Network
 
 @MainActor
 final class ChatViewModel: ObservableObject {
+    private struct StreamTargetContext: Sendable {
+        let isPrivateMode: Bool
+        let sessionID: UUID?
+    }
+
+    private struct PendingStreamDelta {
+        var deltaText: String
+        var imageURLs: [String]
+    }
+
     @Published var config: ChatConfig {
         didSet {
             updateCurrentModelAvailability()
@@ -41,8 +51,13 @@ final class ChatViewModel: ObservableObject {
     private let service: ChatService
     private var autoSaveEnabled = false
     private let streamScrollThrottleInterval: TimeInterval = 0.11
+    private let streamUIFlushInterval: TimeInterval = 0.085
     private var lastStreamScrollSignal: Date = .distantPast
     private var inflightSendTask: Task<ChatReply, Error>?
+    private var inflightTargetContext: StreamTargetContext?
+    private var pendingStreamDeltas: [UUID: PendingStreamDelta] = [:]
+    private var pendingStreamTargets: [UUID: StreamTargetContext] = [:]
+    private var streamFlushTask: Task<Void, Never>?
     private var privateMessages: [ChatMessage] = []
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
     private var pathMonitor: NWPathMonitor?
@@ -151,6 +166,7 @@ final class ChatViewModel: ObservableObject {
         }
         defer {
             inflightSendTask = nil
+            clearInflightStreamState()
             isSending = false
             persistSessions()
             endBackgroundSendTask()
@@ -162,6 +178,11 @@ final class ChatViewModel: ObservableObject {
             imageAttachments: images,
             fileAttachments: file.map { [$0] } ?? []
         )
+        let targetContext = StreamTargetContext(
+            isPrivateMode: isPrivateMode,
+            sessionID: isPrivateMode ? nil : currentSessionID
+        )
+        inflightTargetContext = targetContext
 
         var historyBeforeSend: [ChatMessage] = []
         if isPrivateMode {
@@ -187,7 +208,7 @@ final class ChatViewModel: ObservableObject {
             content: "",
             isStreaming: config.streamEnabled && config.endpointMode == .chatCompletions
         )
-        appendMessageToCurrentSession(placeholder)
+        appendMessageToTargetSession(placeholder, target: targetContext)
         persistSessions()
         signalStreamScroll(force: true)
         beginBackgroundSendTask()
@@ -199,7 +220,7 @@ final class ChatViewModel: ObservableObject {
                 message: userMessage,
                 onEvent: { [weak self] chunk in
                     Task { @MainActor in
-                        self?.appendStreamingChunk(chunk, to: placeholderID)
+                        self?.appendStreamingChunk(chunk, to: placeholderID, target: targetContext)
                     }
                 }
             )
@@ -208,17 +229,20 @@ final class ChatViewModel: ObservableObject {
 
         do {
             let reply = try await task.value
-            finishStreamingMessage(id: placeholderID, reply: reply)
+            flushPendingStreamUpdates(force: true)
+            finishStreamingMessage(id: placeholderID, reply: reply, target: targetContext)
             statusMessage = "\(config.endpointMode.title)请求成功"
             appendLog("接口测试成功：\(config.endpointMode.title)已返回结果。")
         } catch is CancellationError {
-            finishCancellation(id: placeholderID)
+            flushPendingStreamUpdates(force: true)
+            finishCancellation(id: placeholderID, target: targetContext)
         } catch {
-            if hasRenderableContent(for: placeholderID) {
-                finishInterruption(id: placeholderID, error: error)
+            flushPendingStreamUpdates(force: true)
+            if hasRenderableContent(for: placeholderID, target: targetContext) {
+                finishInterruption(id: placeholderID, error: error, target: targetContext)
             } else {
-                removeMessage(id: placeholderID)
-                removeMessage(id: userMessage.id)
+                removeMessage(id: placeholderID, target: targetContext)
+                removeMessage(id: userMessage.id, target: targetContext)
                 errorMessage = error.localizedDescription
                 statusMessage = "发送失败"
                 appendLog("聊天测试失败：\(error.localizedDescription)")
@@ -227,6 +251,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     func stopGenerating() {
+        flushPendingStreamUpdates(force: true)
         inflightSendTask?.cancel()
         inflightSendTask = nil
         endBackgroundSendTask()
@@ -235,6 +260,8 @@ final class ChatViewModel: ObservableObject {
     func regenerateLastAssistantReply() async {
         guard !isPrivateMode else { return }
         guard !isSending, isNetworkReachable, let index = currentSessionIndex else { return }
+        let targetContext = StreamTargetContext(isPrivateMode: false, sessionID: sessions[index].id)
+        inflightTargetContext = targetContext
 
         let sessionMessages = sessions[index].messages
         guard let lastUserIndex = sessionMessages.lastIndex(where: { $0.role == .user }) else { return }
@@ -253,6 +280,7 @@ final class ChatViewModel: ObservableObject {
         }
         defer {
             inflightSendTask = nil
+            clearInflightStreamState()
             isSending = false
             persistSessions()
             endBackgroundSendTask()
@@ -265,7 +293,7 @@ final class ChatViewModel: ObservableObject {
             content: "",
             isStreaming: config.streamEnabled && config.endpointMode == .chatCompletions
         )
-        appendMessageToCurrentSession(placeholder)
+        appendMessageToTargetSession(placeholder, target: targetContext)
         persistSessions()
         signalStreamScroll(force: true)
         beginBackgroundSendTask()
@@ -277,7 +305,7 @@ final class ChatViewModel: ObservableObject {
                 message: userMessage,
                 onEvent: { [weak self] chunk in
                     Task { @MainActor in
-                        self?.appendStreamingChunk(chunk, to: placeholderID)
+                        self?.appendStreamingChunk(chunk, to: placeholderID, target: targetContext)
                     }
                 }
             )
@@ -286,16 +314,19 @@ final class ChatViewModel: ObservableObject {
 
         do {
             let reply = try await task.value
-            finishStreamingMessage(id: placeholderID, reply: reply)
+            flushPendingStreamUpdates(force: true)
+            finishStreamingMessage(id: placeholderID, reply: reply, target: targetContext)
             statusMessage = "重新生成成功"
             appendLog("聊天测试：已重新生成上一条回复。")
         } catch is CancellationError {
-            finishCancellation(id: placeholderID)
+            flushPendingStreamUpdates(force: true)
+            finishCancellation(id: placeholderID, target: targetContext)
         } catch {
-            if hasRenderableContent(for: placeholderID) {
-                finishInterruption(id: placeholderID, error: error)
+            flushPendingStreamUpdates(force: true)
+            if hasRenderableContent(for: placeholderID, target: targetContext) {
+                finishInterruption(id: placeholderID, error: error, target: targetContext)
             } else {
-                removeMessage(id: placeholderID)
+                removeMessage(id: placeholderID, target: targetContext)
                 errorMessage = error.localizedDescription
                 statusMessage = "重新生成失败"
                 appendLog("重新生成失败：\(error.localizedDescription)")
@@ -561,54 +592,100 @@ final class ChatViewModel: ObservableObject {
         sessions.firstIndex { $0.id == currentSessionID }
     }
 
-    private func appendStreamingChunk(_ chunk: StreamChunk, to id: UUID) {
-        if isPrivateMode {
-            guard let msgIndex = privateMessages.firstIndex(where: { $0.id == id }) else { return }
+    private func appendStreamingChunk(_ chunk: StreamChunk, to id: UUID, target: StreamTargetContext) {
+        guard !chunk.deltaText.isEmpty || !chunk.imageURLs.isEmpty else { return }
 
-            if !chunk.deltaText.isEmpty {
-                privateMessages[msgIndex].content += chunk.deltaText
+        var pending = pendingStreamDeltas[id] ?? PendingStreamDelta(deltaText: "", imageURLs: [])
+        if !chunk.deltaText.isEmpty {
+            pending.deltaText += chunk.deltaText
+        }
+        if !chunk.imageURLs.isEmpty {
+            for rawURL in chunk.imageURLs {
+                let cleaned = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
+                if cleaned.isEmpty || pending.imageURLs.contains(cleaned) { continue }
+                pending.imageURLs.append(cleaned)
+            }
+        }
+        pendingStreamDeltas[id] = pending
+        pendingStreamTargets[id] = target
+        schedulePendingStreamFlushIfNeeded()
+    }
+
+    private func schedulePendingStreamFlushIfNeeded() {
+        guard streamFlushTask == nil else { return }
+        let interval = max(0.02, streamUIFlushInterval)
+        streamFlushTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+            await MainActor.run {
+                self?.flushPendingStreamUpdates()
+                self?.streamFlushTask = nil
+            }
+        }
+    }
+
+    private func flushPendingStreamUpdates(force: Bool = false) {
+        guard !pendingStreamDeltas.isEmpty else { return }
+        if force {
+            streamFlushTask?.cancel()
+            streamFlushTask = nil
+        }
+
+        let pending = pendingStreamDeltas
+        let targets = pendingStreamTargets
+        pendingStreamDeltas.removeAll()
+        pendingStreamTargets.removeAll()
+
+        for (id, delta) in pending {
+            guard !delta.deltaText.isEmpty || !delta.imageURLs.isEmpty else { continue }
+            guard let target = targets[id] ?? inflightTargetContext else { continue }
+            applyPendingStreamDelta(delta, to: id, target: target)
+        }
+    }
+
+    private func applyPendingStreamDelta(_ delta: PendingStreamDelta, to id: UUID, target: StreamTargetContext) {
+        if target.isPrivateMode {
+            guard let msgIndex = privateMessages.firstIndex(where: { $0.id == id }) else { return }
+            if !delta.deltaText.isEmpty {
+                privateMessages[msgIndex].content += delta.deltaText
                 privateMessages[msgIndex].isStreaming = config.streamEnabled
             }
-
-            if !chunk.imageURLs.isEmpty {
-                let newImages = chunk.imageURLs.map { ChatImageAttachment(dataURL: $0, mimeType: "image/*", remoteURL: $0) }
+            if !delta.imageURLs.isEmpty {
+                let newImages = delta.imageURLs.map { ChatImageAttachment(dataURL: $0, mimeType: "image/*", remoteURL: $0) }
                 privateMessages[msgIndex].imageAttachments.append(contentsOf: newImages)
                 privateMessages[msgIndex].imageAttachments = deduplicateImages(privateMessages[msgIndex].imageAttachments)
             }
-
-            messages = privateMessages
+            syncVisibleMessagesIfNeeded(for: target)
             signalStreamScroll()
             return
         }
 
-        guard let index = currentSessionIndex,
+        guard let index = sessionIndex(for: target),
               let msgIndex = sessions[index].messages.firstIndex(where: { $0.id == id }) else { return }
 
-        if !chunk.deltaText.isEmpty {
-            sessions[index].messages[msgIndex].content += chunk.deltaText
+        if !delta.deltaText.isEmpty {
+            sessions[index].messages[msgIndex].content += delta.deltaText
             sessions[index].messages[msgIndex].isStreaming = config.streamEnabled
         }
-
-        if !chunk.imageURLs.isEmpty {
-            let newImages = chunk.imageURLs.map { ChatImageAttachment(dataURL: $0, mimeType: "image/*", remoteURL: $0) }
+        if !delta.imageURLs.isEmpty {
+            let newImages = delta.imageURLs.map { ChatImageAttachment(dataURL: $0, mimeType: "image/*", remoteURL: $0) }
             sessions[index].messages[msgIndex].imageAttachments.append(contentsOf: newImages)
             sessions[index].messages[msgIndex].imageAttachments = deduplicateImages(sessions[index].messages[msgIndex].imageAttachments)
         }
 
         sessions[index].updatedAt = Date()
-        messages = sessions[index].messages
+        syncVisibleMessagesIfNeeded(for: target)
         signalStreamScroll()
     }
 
-    private func finishStreamingMessage(id: UUID, reply: ChatReply) {
-        if isPrivateMode {
+    private func finishStreamingMessage(id: UUID, reply: ChatReply, target: StreamTargetContext) {
+        if target.isPrivateMode {
             guard let msgIndex = privateMessages.firstIndex(where: { $0.id == id }) else { return }
             privateMessages[msgIndex].content = reply.text
             privateMessages[msgIndex].imageAttachments = deduplicateImages(
                 privateMessages[msgIndex].imageAttachments + reply.imageAttachments
             )
             privateMessages[msgIndex].isStreaming = false
-            messages = privateMessages
+            syncVisibleMessagesIfNeeded(for: target)
             signalStreamScroll(force: true)
             if config.soundEffectsEnabled {
                 SoundEffectPlayer.playReplyComplete()
@@ -616,7 +693,7 @@ final class ChatViewModel: ObservableObject {
             return
         }
 
-        guard let index = currentSessionIndex,
+        guard let index = sessionIndex(for: target),
               let msgIndex = sessions[index].messages.firstIndex(where: { $0.id == id }) else { return }
 
         sessions[index].messages[msgIndex].content = reply.text
@@ -626,28 +703,28 @@ final class ChatViewModel: ObservableObject {
         sessions[index].messages[msgIndex].isStreaming = false
         sessions[index].updatedAt = Date()
         sessions[index].title = buildSessionTitle(from: sessions[index])
-        messages = sessions[index].messages
+        syncVisibleMessagesIfNeeded(for: target)
         signalStreamScroll(force: true)
         if config.soundEffectsEnabled {
             SoundEffectPlayer.playReplyComplete()
         }
     }
 
-    private func finishCancellation(id: UUID) {
-        if isPrivateMode {
+    private func finishCancellation(id: UUID, target: StreamTargetContext) {
+        if target.isPrivateMode {
             guard let msgIndex = privateMessages.firstIndex(where: { $0.id == id }) else { return }
             privateMessages[msgIndex].isStreaming = false
             if privateMessages[msgIndex].content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
                 privateMessages[msgIndex].imageAttachments.isEmpty {
                 privateMessages.remove(at: msgIndex)
             }
-            messages = privateMessages
+            syncVisibleMessagesIfNeeded(for: target)
             statusMessage = "已停止生成"
             appendLog("私密聊天：已停止本次生成。")
             return
         }
 
-        guard let index = currentSessionIndex,
+        guard let index = sessionIndex(for: target),
               let msgIndex = sessions[index].messages.firstIndex(where: { $0.id == id }) else { return }
 
         sessions[index].messages[msgIndex].isStreaming = false
@@ -658,57 +735,87 @@ final class ChatViewModel: ObservableObject {
 
         sessions[index].updatedAt = Date()
         sessions[index].title = buildSessionTitle(from: sessions[index])
-        messages = sessions[index].messages
+        syncVisibleMessagesIfNeeded(for: target)
         statusMessage = "已停止生成"
         appendLog("聊天测试：用户已停止本次生成。")
     }
 
-    private func finishInterruption(id: UUID, error: Error) {
-        if isPrivateMode {
+    private func finishInterruption(id: UUID, error: Error, target: StreamTargetContext) {
+        if target.isPrivateMode {
             guard let msgIndex = privateMessages.firstIndex(where: { $0.id == id }) else { return }
             privateMessages[msgIndex].isStreaming = false
-            messages = privateMessages
+            syncVisibleMessagesIfNeeded(for: target)
             statusMessage = "连接中断，已保留已生成内容"
             appendLog("私密聊天中断：\(error.localizedDescription)")
             return
         }
 
-        guard let index = currentSessionIndex,
+        guard let index = sessionIndex(for: target),
               let msgIndex = sessions[index].messages.firstIndex(where: { $0.id == id }) else { return }
 
         sessions[index].messages[msgIndex].isStreaming = false
         sessions[index].updatedAt = Date()
         sessions[index].title = buildSessionTitle(from: sessions[index])
-        messages = sessions[index].messages
+        syncVisibleMessagesIfNeeded(for: target)
         statusMessage = "连接中断，已保留已生成内容"
         appendLog("聊天中断：\(error.localizedDescription)")
     }
 
-    private func appendMessageToCurrentSession(_ message: ChatMessage) {
-        if isPrivateMode {
+    private func appendMessageToTargetSession(_ message: ChatMessage, target: StreamTargetContext) {
+        if target.isPrivateMode {
             privateMessages.append(message)
-            messages = privateMessages
+            syncVisibleMessagesIfNeeded(for: target)
             return
         }
 
-        guard let index = currentSessionIndex else { return }
+        guard let index = sessionIndex(for: target) else { return }
         sessions[index].messages.append(message)
         sessions[index].updatedAt = Date()
-        messages = sessions[index].messages
+        syncVisibleMessagesIfNeeded(for: target)
     }
 
-    private func removeMessage(id: UUID) {
-        if isPrivateMode {
+    private func removeMessage(id: UUID, target: StreamTargetContext) {
+        if target.isPrivateMode {
             privateMessages.removeAll { $0.id == id }
-            messages = privateMessages
+            syncVisibleMessagesIfNeeded(for: target)
             return
         }
 
-        guard let index = currentSessionIndex else { return }
+        guard let index = sessionIndex(for: target) else { return }
         sessions[index].messages.removeAll { $0.id == id }
         sessions[index].updatedAt = Date()
         sessions[index].title = buildSessionTitle(from: sessions[index])
+        syncVisibleMessagesIfNeeded(for: target)
+    }
+
+    private func sessionIndex(for target: StreamTargetContext) -> Int? {
+        guard let sessionID = target.sessionID else { return nil }
+        return sessions.firstIndex { $0.id == sessionID }
+    }
+
+    private func syncVisibleMessagesIfNeeded(for target: StreamTargetContext) {
+        if target.isPrivateMode {
+            if isPrivateMode {
+                messages = privateMessages
+            }
+            return
+        }
+
+        guard !isPrivateMode,
+              let sessionID = target.sessionID,
+              currentSessionID == sessionID,
+              let index = sessionIndex(for: target) else {
+            return
+        }
         messages = sessions[index].messages
+    }
+
+    private func clearInflightStreamState() {
+        streamFlushTask?.cancel()
+        streamFlushTask = nil
+        pendingStreamDeltas.removeAll()
+        pendingStreamTargets.removeAll()
+        inflightTargetContext = nil
     }
 
     private func appendLog(_ log: String) {
@@ -769,15 +876,15 @@ final class ChatViewModel: ObservableObject {
         return result
     }
 
-    private func hasRenderableContent(for id: UUID) -> Bool {
-        if isPrivateMode {
+    private func hasRenderableContent(for id: UUID, target: StreamTargetContext) -> Bool {
+        if target.isPrivateMode {
             guard let msgIndex = privateMessages.firstIndex(where: { $0.id == id }) else { return false }
             let message = privateMessages[msgIndex]
             let text = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
             return !text.isEmpty || !message.imageAttachments.isEmpty
         }
 
-        guard let index = currentSessionIndex,
+        guard let index = sessionIndex(for: target),
               let msgIndex = sessions[index].messages.firstIndex(where: { $0.id == id }) else { return false }
 
         let message = sessions[index].messages[msgIndex]

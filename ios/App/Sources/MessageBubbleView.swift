@@ -236,9 +236,20 @@ struct MessageBubbleView: View {
     @ViewBuilder
     private var userMessageContent: some View {
         let segments = MessageContentParser.parse(message)
-        if segments.isEmpty && message.isStreaming {
-            Text("正在发送…")
-                .foregroundStyle(.secondary)
+        if segments.isEmpty {
+            if message.isStreaming {
+                Text("正在发送…")
+                    .foregroundStyle(.secondary)
+            } else if let fallback = fallbackPlainText {
+                Text(fallback)
+                    .font(.system(size: 18, weight: .regular))
+                    .lineSpacing(5)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            } else {
+                Text("（内容为空）")
+                    .foregroundStyle(.secondary)
+            }
         } else {
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
@@ -252,9 +263,22 @@ struct MessageBubbleView: View {
     @ViewBuilder
     private var content: some View {
         let segments = MessageContentParser.parse(message)
-        if segments.isEmpty && message.isStreaming {
-            Text("正在接收流式内容…")
-                .foregroundStyle(.secondary)
+        if segments.isEmpty {
+            if message.isStreaming {
+                Text("正在接收流式内容…")
+                    .foregroundStyle(.secondary)
+            } else if let fallback = fallbackPlainText {
+                SelectableLinkTextView(
+                    text: fallback,
+                    textColor: UIColor.label,
+                    linkColor: UIColor.systemGray,
+                    font: .systemFont(ofSize: 18, weight: .regular)
+                )
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Text("（空响应）")
+                    .foregroundStyle(.secondary)
+            }
         } else {
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
@@ -262,6 +286,13 @@ struct MessageBubbleView: View {
                 }
             }
         }
+    }
+
+    private var fallbackPlainText: String? {
+        let normalized = message.content
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalized.isEmpty ? nil : normalized
     }
 
     @ViewBuilder
