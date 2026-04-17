@@ -59,17 +59,14 @@ struct MessageBubbleView: View {
     }
 
     private var assistantMessageView: some View {
-        HStack(alignment: .top, spacing: 10) {
-            assistantIdentityIcon
-                .padding(.top, 2)
+        VStack(alignment: .leading, spacing: 6) {
+            assistantIdentityHeader
 
-            VStack(alignment: .leading, spacing: 6) {
-                content
+            content
 
-                if showsAssistantActionBar {
-                    assistantActionBar
-                        .padding(.top, 2)
-                }
+            if showsAssistantActionBar {
+                assistantActionBar
+                    .padding(.top, 2)
             }
         }
         .padding(.horizontal, 2)
@@ -77,7 +74,18 @@ struct MessageBubbleView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    @ViewBuilder
+    private var assistantIdentityHeader: some View {
+        HStack(spacing: 7) {
+            assistantIdentityIcon
+
+            Text("IEXA")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private var assistantIdentityIcon: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 5, style: .continuous)

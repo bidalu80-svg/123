@@ -2061,6 +2061,7 @@ private final class NativeStreamingAssistantView: UIView {
     private let containerStack = UIStackView()
     private let identityStack = UIStackView()
     private let identityIconView = UIImageView()
+    private let identityNameLabel = UILabel()
     private let textView = UITextView()
     private let imageProgressStack = UIStackView()
     private let imageProgressCard = ImageGenerationProgressCardView()
@@ -2239,7 +2240,7 @@ private final class NativeStreamingAssistantView: UIView {
 
         identityStack.axis = .horizontal
         identityStack.alignment = .center
-        identityStack.spacing = 0
+        identityStack.spacing = 7
 
         identityIconView.translatesAutoresizingMaskIntoConstraints = false
         identityIconView.image = UIImage(systemName: "sparkles")
@@ -2254,7 +2255,13 @@ private final class NativeStreamingAssistantView: UIView {
             identityIconView.widthAnchor.constraint(equalToConstant: 18),
             identityIconView.heightAnchor.constraint(equalToConstant: 18)
         ])
+
+        identityNameLabel.text = "IEXA"
+        identityNameLabel.font = .systemFont(ofSize: 14, weight: .semibold)
+        identityNameLabel.textColor = .label
+
         identityStack.addArrangedSubview(identityIconView)
+        identityStack.addArrangedSubview(identityNameLabel)
         identityStack.addArrangedSubview(UIView())
         containerStack.addArrangedSubview(identityStack)
 
