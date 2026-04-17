@@ -955,41 +955,82 @@ private struct GeneratedImageRevealCard<Content: View>: View {
     let revealID: String
     let content: Content
     @Environment(\.colorScheme) private var colorScheme
-    @State private var revealProgress: CGFloat = 0
+    @State private var stageOneProgress: CGFloat = 0
+    @State private var stageTwoProgress: CGFloat = 0
+    @State private var scanProgress: CGFloat = -0.08
+    @State private var revealSequence: Int = 0
 
     init(revealID: String, @ViewBuilder content: () -> Content) {
         self.revealID = revealID
         self.content = content()
     }
 
+    private var combinedProgress: CGFloat {
+        min(1, (stageOneProgress * 0.66) + (stageTwoProgress * 0.34))
+    }
+
+    private var contentOpacity: Double {
+        Double(min(1, 0.14 + (stageOneProgress * 0.58) + (stageTwoProgress * 0.28)))
+    }
+
+    private var contentBlur: CGFloat {
+        max(0, (1 - stageOneProgress) * 9 + (1 - stageTwoProgress) * 3)
+    }
+
+    private var placeholderOpacity: Double {
+        Double(max(0, 1 - ((stageOneProgress * 0.7) + (stageTwoProgress * 0.5))))
+    }
+
+    private var scanOpacity: Double {
+        Double(max(0, min(1, 0.92 - (stageTwoProgress * 0.56))))
+    }
+
+    private var revealFinished: Bool {
+        stageTwoProgress >= 0.999
+    }
+
     var body: some View {
         ZStack {
-            TimelineView(.animation(minimumInterval: 0.12, paused: revealProgress >= 1)) { timeline in
+            TimelineView(.animation(minimumInterval: 0.12, paused: revealFinished)) { timeline in
                 ImageGenerationPlaceholderPattern(phase: timeline.date.timeIntervalSinceReferenceDate)
             }
-            .opacity(Double(max(0, 1 - revealProgress * 1.2)))
+            .opacity(placeholderOpacity)
 
             content
-                .opacity(Double(revealProgress))
-                .scaleEffect(1.02 - 0.02 * revealProgress)
+                .opacity(contentOpacity)
+                .blur(radius: contentBlur)
+                .scaleEffect(1.028 - (0.028 * combinedProgress))
         }
         .overlay {
             GeometryReader { proxy in
                 let height = max(proxy.size.height, 1)
-                let offsetY = -26 + (height + 52) * revealProgress
+                let offsetY = -64 + (height + 128) * scanProgress
 
-                LinearGradient(
-                    colors: [
-                        .clear,
-                        Color.white.opacity(colorScheme == .dark ? 0.24 : 0.42),
-                        .clear
-                    ],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-                .frame(height: 42)
+                ZStack {
+                    LinearGradient(
+                        colors: [
+                            .clear,
+                            Color.white.opacity(colorScheme == .dark ? 0.30 : 0.58),
+                            .clear
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                    .frame(height: 56)
+
+                    LinearGradient(
+                        colors: [
+                            .clear,
+                            Color.white.opacity(colorScheme == .dark ? 0.14 : 0.26),
+                            .clear
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                    .frame(height: 126)
+                }
                 .offset(y: offsetY)
-                .opacity(revealProgress < 0.99 ? 1 : 0)
+                .opacity(scanOpacity)
                 .blendMode(colorScheme == .dark ? .screen : .plusLighter)
             }
         }
@@ -1007,9 +1048,24 @@ private struct GeneratedImageRevealCard<Content: View>: View {
     }
 
     private func startReveal() {
-        revealProgress = 0
-        withAnimation(.easeOut(duration: 1.18)) {
-            revealProgress = 1
+        revealSequence += 1
+        let sequence = revealSequence
+
+        stageOneProgress = 0
+        stageTwoProgress = 0
+        scanProgress = -0.08
+
+        withAnimation(.easeOut(duration: 0.58)) {
+            stageOneProgress = 1
+            scanProgress = 0.52
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.42) {
+            guard sequence == revealSequence else { return }
+            withAnimation(.easeInOut(duration: 0.88)) {
+                stageTwoProgress = 1
+                scanProgress = 1.06
+            }
         }
     }
 }
