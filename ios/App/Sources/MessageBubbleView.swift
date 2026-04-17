@@ -284,9 +284,7 @@ struct MessageBubbleView: View {
     @ViewBuilder
     private var streamingContent: some View {
         let displayText = normalizedStreamingText(message.content)
-        var streamingMessage = message
-        streamingMessage.content = displayText
-        let segments = MessageContentParser.parse(streamingMessage)
+        let segments = parsedStreamingSegments(for: displayText)
 
         if segments.isEmpty {
             if !message.imageAttachments.isEmpty {
@@ -326,6 +324,19 @@ struct MessageBubbleView: View {
 
     private func normalizedStreamingText(_ raw: String) -> String {
         raw.replacingOccurrences(of: "\r\n", with: "\n")
+    }
+
+    private func parsedStreamingSegments(for displayText: String) -> [MessageSegment] {
+        let streamingMessage = ChatMessage(
+            id: message.id,
+            role: message.role,
+            content: displayText,
+            createdAt: message.createdAt,
+            isStreaming: true,
+            imageAttachments: message.imageAttachments,
+            fileAttachments: message.fileAttachments
+        )
+        return MessageContentParser.parse(streamingMessage)
     }
 
     private var fallbackPlainText: String? {
