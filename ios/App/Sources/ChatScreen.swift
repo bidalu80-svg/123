@@ -10,6 +10,7 @@ struct ChatScreen: View {
 
     private let sidebarWidth: CGFloat = 286
     private let edgeDragActivationWidth: CGFloat = 28
+    private let headerCenterMinHorizontalInset: CGFloat = 76
     private let maxRenderedMessages = 120
     private let maxRenderedCharacters = 260_000
     private let maxSingleRenderedMessageChars = 80_000
@@ -40,6 +41,8 @@ struct ChatScreen: View {
     @StateObject private var speechToText = SpeechToTextService(localeIdentifier: "zh-CN")
     @State private var speechDraftPrefix = ""
     @State private var showInitialConfigSheet = false
+    @State private var headerLeadingWidth: CGFloat = 36
+    @State private var headerTrailingWidth: CGFloat = 108
     @State private var transcriptMetrics = ChatTranscriptMetrics()
     @State private var transcriptCommandSequence = 0
     @State private var transcriptCommand: ChatTranscriptCommand?
@@ -209,46 +212,70 @@ struct ChatScreen: View {
     }
 
     private var header: some View {
-        HStack(spacing: 12) {
-            headerLeadingControls
-
+        VStack(spacing: 8) {
             Text("IEXA")
-                .font(.system(size: 18, weight: .semibold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .center)
 
-            if !viewModel.isNetworkReachable {
-                Circle()
-                    .fill(Color.red)
-                    .frame(width: 7, height: 7)
-                    .accessibilityLabel("离线")
+            ZStack {
+                HStack(spacing: 10) {
+                    headerLeadingControls
+                        .background(
+                            GeometryReader { proxy in
+                                Color.clear.preference(
+                                    key: HeaderLeadingWidthPreferenceKey.self,
+                                    value: proxy.size.width
+                                )
+                            }
+                        )
+
+                    Spacer(minLength: 0)
+
+                    headerTrailingControls
+                        .background(
+                            GeometryReader { proxy in
+                                Color.clear.preference(
+                                    key: HeaderTrailingWidthPreferenceKey.self,
+                                    value: proxy.size.width
+                                )
+                            }
+                        )
+                }
+                .zIndex(0)
+
+                headerModelSelector
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.horizontal, headerCenterHorizontalInset)
+                    .zIndex(1)
             }
-
-            Spacer(minLength: 0)
-
-            Button {
-                viewModel.createNewSession()
-            } label: {
-                Image(systemName: "square.and.pencil")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(.primary)
-                    .frame(width: 36, height: 36)
-            }
-            .buttonStyle(.plain)
-
-            headerMoreControls
         }
         .padding(.horizontal, 8)
         .padding(.top, 2)
         .padding(.bottom, 4)
+        .onPreferenceChange(HeaderLeadingWidthPreferenceKey.self) { newValue in
+            let width = ceil(newValue)
+            if width > 0, abs(width - headerLeadingWidth) > 0.5 {
+                headerLeadingWidth = width
+            }
+        }
+        .onPreferenceChange(HeaderTrailingWidthPreferenceKey.self) { newValue in
+            let width = ceil(newValue)
+            if width > 0, abs(width - headerTrailingWidth) > 0.5 {
+                headerTrailingWidth = width
+            }
+        }
+    }
+
+    private var headerCenterHorizontalInset: CGFloat {
+        max(headerCenterMinHorizontalInset, max(headerLeadingWidth, headerTrailingWidth) + 10)
     }
 
     private var headerLeadingControls: some View {
         Button {
             setSidebarOpen(!isSidebarOpen)
         } label: {
-            Image(systemName: "line.3.horizontal")
-                .font(.system(size: 18, weight: .medium))
+            TwoLineMenuIcon()
                 .foregroundStyle(.primary)
                 .frame(width: 34, height: 34)
         }
@@ -293,81 +320,104 @@ struct ChatScreen: View {
                 }
             }
         } label: {
-            HStack(spacing: 7) {
+            HStack(spacing: 6) {
                 Circle()
                     .fill(viewModel.isCurrentModelAvailable ? Color.green : Color.red)
                     .frame(width: 7, height: 7)
                 Text(modelVendorSubtitle(viewModel.config.model, apiURL: viewModel.config.normalizedBaseURL))
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 12, weight: .semibold))
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 10, weight: .semibold))
             }
             .foregroundStyle(.primary)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
             .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                Capsule(style: .continuous)
                     .fill(Color(.secondarySystemBackground))
             )
         }
         .buttonStyle(.plain)
     }
 
-    private var headerMoreControls: some View {
-        Menu {
-            Section("接口模式") {
-                ForEach(APIEndpointMode.allCases, id: \.self) { mode in
-                    Button {
-                        viewModel.config.endpointMode = mode
-                    } label: {
-                        if viewModel.config.endpointMode == mode {
-                            Label(mode.title, systemImage: "checkmark")
-                        } else {
-                            Text(mode.title)
-                        }
-                    }
+    private var headerTrailingControls: some View {
+        HStack(spacing: 8) {
+            if !viewModel.isNetworkReachable {
+                Text("离线")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.red)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(Color.red.opacity(0.1))
+                    )
+            }
+
+            Button {
+                viewModel.setPrivateMode(!viewModel.isPrivateMode)
+            } label: {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .fill(
+                            viewModel.isPrivateMode
+                                ? Color(red: 0.14, green: 0.21, blue: 0.38)
+                                : Color(.secondarySystemBackground)
+                        )
+
+                    Image("PrivateModeIcon")
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 30, height: 30)
+                        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        .opacity(viewModel.isPrivateMode ? 1 : 0.72)
+                }
+                .frame(width: 36, height: 36)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .stroke(
+                            viewModel.isPrivateMode
+                                ? Color(red: 0.29, green: 0.44, blue: 0.78)
+                                : Color.black.opacity(0.1),
+                            lineWidth: 0.9
+                        )
                 }
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel(viewModel.isPrivateMode ? "关闭私密聊天" : "开启私密聊天")
 
-            Divider()
-
-            Button(viewModel.isLoadingModels ? "拉取模型中…" : "拉取模型列表", systemImage: "arrow.triangle.2.circlepath") {
-                Task { await viewModel.refreshAvailableModels() }
+            Menu {
+                Button("新建会话", systemImage: "square.and.pencil") {
+                    viewModel.createNewSession()
+                }
+                Button("配置", systemImage: "gearshape") {
+                    showSettingsSheet = true
+                }
+                Button("测试中心", systemImage: "checkmark.circle") {
+                    showTestSheet = true
+                }
+                Divider()
+                Button("示例", systemImage: "wand.and.stars") {
+                    viewModel.loadDemoContent()
+                }
+                Button("清空", systemImage: "trash") {
+                    viewModel.clearCurrentSessionMessages()
+                }
+                Button("停止", systemImage: "stop.circle") {
+                    viewModel.stopGenerating()
+                }
+                .disabled(!viewModel.isSending)
+            } label: {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .frame(width: 36, height: 36)
             }
-            .disabled(viewModel.isLoadingModels)
-
-            Button(viewModel.isPrivateMode ? "关闭私密聊天" : "开启私密聊天", systemImage: viewModel.isPrivateMode ? "lock.open" : "lock") {
-                viewModel.setPrivateMode(!viewModel.isPrivateMode)
-            }
-
-            Button("配置", systemImage: "gearshape") {
-                showSettingsSheet = true
-            }
-            Button("测试中心", systemImage: "checkmark.circle") {
-                showTestSheet = true
-            }
-
-            Divider()
-
-            Button("示例", systemImage: "wand.and.stars") {
-                viewModel.loadDemoContent()
-            }
-            Button("清空", systemImage: "trash") {
-                viewModel.clearCurrentSessionMessages()
-            }
-            Button("停止", systemImage: "stop.circle") {
-                viewModel.stopGenerating()
-            }
-            .disabled(!viewModel.isSending)
-        } label: {
-            Image(systemName: "ellipsis")
-                .font(.system(size: 19, weight: .medium))
-                .foregroundStyle(.primary)
-                .frame(width: 36, height: 36)
+            .buttonStyle(.plain)
         }
-        .buttonStyle(.plain)
+        .frame(minWidth: 36, alignment: .trailing)
     }
 
 
@@ -1665,6 +1715,22 @@ struct ChatScreen: View {
     }
 }
 
+private struct HeaderLeadingWidthPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+private struct HeaderTrailingWidthPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 private struct ChatTranscriptMetrics: Equatable {
     var canScroll: Bool = false
     var isAtBottom: Bool = true
@@ -2561,6 +2627,17 @@ private struct InitialConfigSheet: View {
         }
         .navigationTitle("欢迎使用 IEXA")
         .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct TwoLineMenuIcon: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Capsule(style: .continuous)
+                .frame(width: 18, height: 2.6)
+            Capsule(style: .continuous)
+                .frame(width: 12, height: 2.6)
+        }
     }
 }
 
