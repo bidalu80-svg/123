@@ -254,7 +254,8 @@ final class ChatViewModel: ObservableObject {
             id: placeholderID,
             role: .assistant,
             content: "",
-            isStreaming: isStreamingPlaceholderEnabled(for: config.endpointMode)
+            isStreaming: isStreamingPlaceholderEnabled(for: config.endpointMode),
+            isImageGenerationPlaceholder: config.endpointMode == .imageGenerations
         )
 
         var historyBeforeSend: [ChatMessage] = []
@@ -357,7 +358,8 @@ final class ChatViewModel: ObservableObject {
             id: placeholderID,
             role: .assistant,
             content: "",
-            isStreaming: isStreamingPlaceholderEnabled(for: config.endpointMode)
+            isStreaming: isStreamingPlaceholderEnabled(for: config.endpointMode),
+            isImageGenerationPlaceholder: config.endpointMode == .imageGenerations
         )
         appendMessageToTargetSession(placeholder, target: targetContext)
         persistSessions()
@@ -707,13 +709,17 @@ final class ChatViewModel: ObservableObject {
         let generation = activeStreamGeneration
         let buffer = StreamBuffer(maxBufferedCharacters: 120_000)
         let state = ActiveStreamState(messageID: messageID, target: target, buffer: buffer)
+        let isLowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
+        let refreshInterval: TimeInterval = isLowPowerMode ? 0.08 : 0.05
+        let maxCharactersPerFrame = isLowPowerMode ? 36 : 50
+        let maxCharactersFetchedPerTick = isLowPowerMode ? 900 : 1_400
 
         let renderer = StreamRenderer(
             buffer: buffer,
             configuration: StreamRenderer.Configuration(
-                refreshInterval: 0.05,
-                maxCharactersPerFrame: 50,
-                maxCharactersFetchedPerTick: 1_400
+                refreshInterval: refreshInterval,
+                maxCharactersPerFrame: maxCharactersPerFrame,
+                maxCharactersFetchedPerTick: maxCharactersFetchedPerTick
             ),
             onBackgroundBatch: nil,
             onFrameRender: { [weak self] delta in
@@ -782,11 +788,13 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func applyPendingStreamDelta(_ delta: PendingStreamDelta, to id: UUID, target: StreamTargetContext) {
+        let shouldKeepStreamingState = isStreamingPlaceholderEnabled(for: config.endpointMode)
+
         if target.isPrivateMode {
             guard let msgIndex = privateMessages.firstIndex(where: { $0.id == id }) else { return }
             if !delta.deltaText.isEmpty {
                 privateMessages[msgIndex].content += delta.deltaText
-                privateMessages[msgIndex].isStreaming = config.streamEnabled
+                privateMessages[msgIndex].isStreaming = shouldKeepStreamingState
             }
             if !delta.imageURLs.isEmpty {
                 let newImages = delta.imageURLs.map { ChatImageAttachment(dataURL: $0, mimeType: "image/*", remoteURL: $0) }
@@ -803,7 +811,7 @@ final class ChatViewModel: ObservableObject {
 
         if !delta.deltaText.isEmpty {
             sessions[index].messages[msgIndex].content += delta.deltaText
-            sessions[index].messages[msgIndex].isStreaming = config.streamEnabled
+            sessions[index].messages[msgIndex].isStreaming = shouldKeepStreamingState
         }
         if !delta.imageURLs.isEmpty {
             let newImages = delta.imageURLs.map { ChatImageAttachment(dataURL: $0, mimeType: "image/*", remoteURL: $0) }
@@ -824,6 +832,7 @@ final class ChatViewModel: ObservableObject {
                 privateMessages[msgIndex].imageAttachments + reply.imageAttachments
             )
             privateMessages[msgIndex].isStreaming = false
+            privateMessages[msgIndex].isImageGenerationPlaceholder = false
             syncVisibleMessagesIfNeeded(for: target)
             signalStreamScroll(force: true)
             if config.soundEffectsEnabled {
@@ -840,6 +849,7 @@ final class ChatViewModel: ObservableObject {
             sessions[index].messages[msgIndex].imageAttachments + reply.imageAttachments
         )
         sessions[index].messages[msgIndex].isStreaming = false
+        sessions[index].messages[msgIndex].isImageGenerationPlaceholder = false
         sessions[index].updatedAt = Date()
         sessions[index].title = buildSessionTitle(from: sessions[index])
         syncVisibleMessagesIfNeeded(for: target)
@@ -853,6 +863,7 @@ final class ChatViewModel: ObservableObject {
         if target.isPrivateMode {
             guard let msgIndex = privateMessages.firstIndex(where: { $0.id == id }) else { return }
             privateMessages[msgIndex].isStreaming = false
+            privateMessages[msgIndex].isImageGenerationPlaceholder = false
             if privateMessages[msgIndex].content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
                 privateMessages[msgIndex].imageAttachments.isEmpty {
                 privateMessages.remove(at: msgIndex)
@@ -867,6 +878,7 @@ final class ChatViewModel: ObservableObject {
               let msgIndex = sessions[index].messages.firstIndex(where: { $0.id == id }) else { return }
 
         sessions[index].messages[msgIndex].isStreaming = false
+        sessions[index].messages[msgIndex].isImageGenerationPlaceholder = false
         if sessions[index].messages[msgIndex].content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
             sessions[index].messages[msgIndex].imageAttachments.isEmpty {
             sessions[index].messages.remove(at: msgIndex)
@@ -883,6 +895,7 @@ final class ChatViewModel: ObservableObject {
         if target.isPrivateMode {
             guard let msgIndex = privateMessages.firstIndex(where: { $0.id == id }) else { return }
             privateMessages[msgIndex].isStreaming = false
+            privateMessages[msgIndex].isImageGenerationPlaceholder = false
             syncVisibleMessagesIfNeeded(for: target)
             statusMessage = "连接中断，已保留已生成内容"
             appendLog("私密聊天中断：\(error.localizedDescription)")
@@ -893,6 +906,7 @@ final class ChatViewModel: ObservableObject {
               let msgIndex = sessions[index].messages.firstIndex(where: { $0.id == id }) else { return }
 
         sessions[index].messages[msgIndex].isStreaming = false
+        sessions[index].messages[msgIndex].isImageGenerationPlaceholder = false
         sessions[index].updatedAt = Date()
         sessions[index].title = buildSessionTitle(from: sessions[index])
         syncVisibleMessagesIfNeeded(for: target)

@@ -887,12 +887,26 @@ struct ChatScreen: View {
         let source = viewModel.messages
         guard !source.isEmpty else { return [] }
 
+        var forceIncludeIDs = Set<UUID>()
+        if let last = source.last {
+            forceIncludeIDs.insert(last.id)
+            if last.role == .assistant, source.count >= 2 {
+                let previous = source[source.count - 2]
+                if previous.role == .user {
+                    forceIncludeIDs.insert(previous.id)
+                }
+            }
+        }
+
         var selected: [ChatMessage] = []
         var budget = 0
 
         for message in source.reversed() {
             let weight = renderWeight(for: message)
-            if !selected.isEmpty && (selected.count >= maxRenderedMessages || budget + weight > maxRenderedCharacters) {
+            let shouldForceInclude = forceIncludeIDs.contains(message.id)
+            if !selected.isEmpty &&
+                !shouldForceInclude &&
+                (selected.count >= maxRenderedMessages || budget + weight > maxRenderedCharacters) {
                 break
             }
             selected.append(message)
@@ -1960,6 +1974,9 @@ private final class NativeStreamingAssistantView: UIView {
     private let iconView = UIImageView()
     private let nameLabel = UILabel()
     private let textView = UITextView()
+    private let imageProgressStack = UIStackView()
+    private let imageProgressCard = ImageGenerationProgressCardView()
+    private let imageProgressLabel = UILabel()
 
     private var currentMessageID: UUID?
     private var currentSourceText = ""
@@ -1980,6 +1997,22 @@ private final class NativeStreamingAssistantView: UIView {
     }
 
     func apply(message: ChatMessage) {
+        let shouldShowImageProgress =
+            message.isImageGenerationPlaceholder
+            && message.imageAttachments.isEmpty
+
+        imageProgressStack.isHidden = !shouldShowImageProgress
+        textView.isHidden = shouldShowImageProgress
+
+        if shouldShowImageProgress {
+            currentMessageID = message.id
+            currentSourceText = ""
+            pendingLayoutCharacters = 0
+            invalidateIntrinsicContentSize()
+            setNeedsLayout()
+            return
+        }
+
         let sourceText: String
         if !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             sourceText = Self.normalizedStreamingText(message.content)
@@ -1990,10 +2023,11 @@ private final class NativeStreamingAssistantView: UIView {
         }
 
         if currentMessageID == message.id, sourceText.hasPrefix(currentSourceText) {
-            let suffix = String(sourceText.dropFirst(currentSourceText.count))
-            if !suffix.isEmpty {
-                let appendedVisibleCharacters = appendStreamingText(suffix)
-                if shouldInvalidateLayout(forRawSuffix: suffix, appendedVisibleCharacters: appendedVisibleCharacters) {
+            let rawSuffix = String(sourceText.dropFirst(currentSourceText.count))
+            if !rawSuffix.isEmpty {
+                let displaySuffix = Self.streamingDisplayDeltaText(rawSuffix)
+                let appendedVisibleCharacters = appendStreamingText(displaySuffix)
+                if shouldInvalidateLayout(forRawSuffix: displaySuffix, appendedVisibleCharacters: appendedVisibleCharacters) {
                     invalidateIntrinsicContentSize()
                     setNeedsLayout()
                 }
@@ -2001,9 +2035,10 @@ private final class NativeStreamingAssistantView: UIView {
         } else {
             resetParserState()
             textView.attributedText = NSAttributedString()
-            let appendedVisibleCharacters = appendStreamingText(sourceText)
+            let displayText = Self.streamingDisplayDeltaText(sourceText)
+            let appendedVisibleCharacters = appendStreamingText(displayText)
             pendingLayoutCharacters = 0
-            if appendedVisibleCharacters > 0 || !sourceText.isEmpty {
+            if appendedVisibleCharacters > 0 || !displayText.isEmpty {
                 invalidateIntrinsicContentSize()
                 setNeedsLayout()
             }
@@ -2018,6 +2053,8 @@ private final class NativeStreamingAssistantView: UIView {
         currentSourceText = ""
         pendingLayoutCharacters = 0
         resetParserState()
+        imageProgressStack.isHidden = true
+        textView.isHidden = false
         textView.attributedText = nil
         invalidateIntrinsicContentSize()
     }
@@ -2027,6 +2064,15 @@ private final class NativeStreamingAssistantView: UIView {
         guard textWidth > 1 else {
             return CGSize(width: UIView.noIntrinsicMetric, height: 44)
         }
+
+        if !imageProgressStack.isHidden {
+            let labelSize = imageProgressLabel.sizeThatFits(
+                CGSize(width: textWidth, height: .greatestFiniteMagnitude)
+            )
+            let totalHeight = 18 + 6 + 300 + 10 + ceil(labelSize.height) + 16
+            return CGSize(width: UIView.noIntrinsicMetric, height: totalHeight)
+        }
+
         let fitted = textView.sizeThatFits(CGSize(width: textWidth, height: .greatestFiniteMagnitude))
         let totalHeight = 18 + 6 + fitted.height + 16
         return CGSize(width: UIView.noIntrinsicMetric, height: totalHeight)
@@ -2072,6 +2118,25 @@ private final class NativeStreamingAssistantView: UIView {
         headerStack.addArrangedSubview(nameLabel)
         headerStack.addArrangedSubview(UIView())
         containerStack.addArrangedSubview(headerStack)
+
+        imageProgressStack.axis = .vertical
+        imageProgressStack.alignment = .leading
+        imageProgressStack.spacing = 10
+        imageProgressStack.isHidden = true
+
+        imageProgressCard.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            imageProgressCard.widthAnchor.constraint(equalToConstant: 300),
+            imageProgressCard.heightAnchor.constraint(equalToConstant: 300)
+        ])
+
+        imageProgressLabel.text = "正在生成图片…"
+        imageProgressLabel.font = .systemFont(ofSize: 14, weight: .semibold)
+        imageProgressLabel.textColor = .secondaryLabel
+
+        imageProgressStack.addArrangedSubview(imageProgressCard)
+        imageProgressStack.addArrangedSubview(imageProgressLabel)
+        containerStack.addArrangedSubview(imageProgressStack)
 
         textView.isEditable = false
         textView.isSelectable = true
@@ -2200,6 +2265,71 @@ private final class NativeStreamingAssistantView: UIView {
 
     private static func normalizedStreamingText(_ raw: String) -> String {
         raw.replacingOccurrences(of: "\r\n", with: "\n")
+    }
+
+    private static func streamingDisplayDeltaText(_ raw: String) -> String {
+        var text = normalizedStreamingText(raw)
+        text = text.replacingOccurrences(of: "(?m)^\\s{0,3}#{1,6}\\s*", with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?m)^\\s*[-*•]\\s+", with: "• ", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?m)^\\s*\\d+[\\.)、]\\s+", with: "• ", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?m)^\\s*>\\s?", with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?m)^\\s*([-*_])\\1{2,}\\s*$", with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?<!`)`([^`\\n]+)`(?!`)", with: "$1", options: .regularExpression)
+        text = text.replacingOccurrences(of: "**", with: "")
+        text = text.replacingOccurrences(of: "__", with: "")
+        text = text.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
+        return text
+    }
+}
+
+private final class ImageGenerationProgressCardView: UIView {
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = UIColor.secondarySystemBackground
+        layer.cornerRadius = 16
+        layer.masksToBounds = true
+        layer.borderWidth = 1
+        layer.borderColor = UIColor.black.withAlphaComponent(0.08).cgColor
+        isOpaque = false
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func draw(_ rect: CGRect) {
+        guard let context = UIGraphicsGetCurrentContext() else { return }
+        context.saveGState()
+        defer { context.restoreGState() }
+
+        let dotColor = UIColor.label.withAlphaComponent(traitCollection.userInterfaceStyle == .dark ? 0.24 : 0.20)
+        context.setFillColor(dotColor.cgColor)
+
+        let spacing: CGFloat = 18
+        let radius: CGFloat = 1.25
+        var y: CGFloat = 12
+        while y < rect.height - 8 {
+            var x: CGFloat = 12
+            while x < rect.width - 8 {
+                context.fillEllipse(
+                    in: CGRect(
+                        x: x - radius,
+                        y: y - radius,
+                        width: radius * 2,
+                        height: radius * 2
+                    )
+                )
+                x += spacing
+            }
+            y += spacing
+        }
+    }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        layer.borderColor = UIColor.black.withAlphaComponent(traitCollection.userInterfaceStyle == .dark ? 0.14 : 0.08).cgColor
+        setNeedsDisplay()
     }
 }
 

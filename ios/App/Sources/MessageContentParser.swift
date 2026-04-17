@@ -6,6 +6,7 @@ enum MessageSegment: Equatable {
     case code(language: String?, content: String)
     case image(ChatImageAttachment)
     case file(name: String, language: String?, content: String)
+    case divider
 }
 
 enum MessageContentParser {
@@ -99,6 +100,26 @@ enum MessageContentParser {
     }
 
     private static func parseInlineImages(in text: String) -> [MessageSegment] {
+        let dividerTokens = splitMarkdownDividers(in: text)
+        if dividerTokens.contains(where: {
+            if case .divider = $0 { return true }
+            return false
+        }) {
+            var mergedSegments: [MessageSegment] = []
+            for token in dividerTokens {
+                switch token {
+                case .text(let chunk):
+                    mergedSegments.append(contentsOf: parseInlineImagesInSingleChunk(chunk))
+                case .divider:
+                    mergedSegments.append(.divider)
+                }
+            }
+            return mergedSegments
+        }
+        return parseInlineImagesInSingleChunk(text)
+    }
+
+    private static func parseInlineImagesInSingleChunk(_ text: String) -> [MessageSegment] {
         let tokenPattern = "\(markdownImagePattern)|(\(bareURLPattern))|(\(dataImagePattern))"
         guard let regex = try? NSRegularExpression(pattern: tokenPattern) else {
             return [.text(cleanMarkdownForDisplay(text))]
@@ -166,6 +187,41 @@ enum MessageContentParser {
         return results
     }
 
+    private enum DividerToken {
+        case text(String)
+        case divider
+    }
+
+    private static func splitMarkdownDividers(in text: String) -> [DividerToken] {
+        guard let regex = try? NSRegularExpression(pattern: "(?m)^\\s*([-*_])\\1{2,}\\s*$") else {
+            return [.text(text)]
+        }
+
+        let nsRange = NSRange(text.startIndex..<text.endIndex, in: text)
+        let matches = regex.matches(in: text, range: nsRange)
+        guard !matches.isEmpty else {
+            return [.text(text)]
+        }
+
+        var tokens: [DividerToken] = []
+        var cursor = text.startIndex
+
+        for match in matches {
+            guard let range = Range(match.range, in: text) else { continue }
+            if range.lowerBound > cursor {
+                tokens.append(.text(String(text[cursor..<range.lowerBound])))
+            }
+            tokens.append(.divider)
+            cursor = range.upperBound
+        }
+
+        if cursor < text.endIndex {
+            tokens.append(.text(String(text[cursor...])))
+        }
+
+        return tokens
+    }
+
     private static func findMatches(in text: String, pattern: String) -> [String] {
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
         let nsRange = NSRange(text.startIndex..<text.endIndex, in: text)
@@ -217,17 +273,8 @@ enum MessageContentParser {
 
     private static func cleanMarkdownForDisplay(_ raw: String) -> String {
         var text = raw
-        text = text.replacingOccurrences(of: "(?m)^\\s{0,3}#{1,6}\\s*", with: "", options: .regularExpression)
-        text = text.replacingOccurrences(of: "(?m)^\\s*[-*•]\\s+", with: "• ", options: .regularExpression)
-        text = text.replacingOccurrences(of: "(?m)^\\s*\\d+[\\.)、]\\s+", with: "• ", options: .regularExpression)
-        text = text.replacingOccurrences(of: "(?m)^\\s*>\\s?", with: "", options: .regularExpression)
-        text = text.replacingOccurrences(of: "(?m)^\\s*([-*_])\\1{2,}\\s*$", with: "", options: .regularExpression)
-        text = text.replacingOccurrences(of: "**", with: "")
-        text = text.replacingOccurrences(of: "__", with: "")
-        text = text.replacingOccurrences(of: "`", with: "")
         text = text.replacingOccurrences(of: "\r\n", with: "\n")
         text = text.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
-        text = autoBulletizePlainLineGroups(text)
         text = expandGitHubRepositoryLinks(in: text)
         return text
     }

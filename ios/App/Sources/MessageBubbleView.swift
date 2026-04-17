@@ -259,7 +259,9 @@ struct MessageBubbleView: View {
 
     @ViewBuilder
     private var content: some View {
-        if message.isStreaming {
+        if message.isImageGenerationPlaceholder && message.imageAttachments.isEmpty {
+            imageGenerationProgressCard
+        } else if message.isStreaming {
             streamingContent
         } else {
             let segments = MessageContentParser.parse(message)
@@ -284,22 +286,26 @@ struct MessageBubbleView: View {
     @ViewBuilder
     private var streamingContent: some View {
         let displayText = normalizedStreamingText(message.content)
-        let segments = parsedStreamingSegments(for: displayText)
+        if message.isImageGenerationPlaceholder && message.imageAttachments.isEmpty {
+            imageGenerationProgressCard
+        } else {
+            let segments = parsedStreamingSegments(for: displayText)
 
-        if segments.isEmpty {
-            if !message.imageAttachments.isEmpty {
-                VStack(alignment: .leading, spacing: 10) {
-                    ForEach(message.imageAttachments) { attachment in
-                        messageImage(attachment)
+            if segments.isEmpty {
+                if !message.imageAttachments.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(message.imageAttachments) { attachment in
+                            messageImage(attachment)
+                        }
                     }
+                } else {
+                    streamingWaitingDot
                 }
             } else {
-                streamingWaitingDot
-            }
-        } else {
-            VStack(alignment: .leading, spacing: 10) {
-                ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
-                    segmentView(segment)
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                        segmentView(segment)
+                    }
                 }
             }
         }
@@ -333,10 +339,36 @@ struct MessageBubbleView: View {
             content: displayText,
             createdAt: message.createdAt,
             isStreaming: true,
+            isImageGenerationPlaceholder: message.isImageGenerationPlaceholder,
             imageAttachments: message.imageAttachments,
             fileAttachments: message.fileAttachments
         )
         return MessageContentParser.parse(streamingMessage)
+    }
+
+    private var imageGenerationProgressCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TimelineView(.animation(minimumInterval: 0.12, paused: false)) { timeline in
+                ImageGenerationPlaceholderPattern(phase: timeline.date.timeIntervalSinceReferenceDate)
+            }
+            .frame(width: 300, height: 300, alignment: .center)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.black.opacity(colorScheme == .dark ? 0.14 : 0.08), lineWidth: 1)
+            )
+
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("正在生成图片…")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 4)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityLabel("生图中")
     }
 
     private var fallbackPlainText: String? {
@@ -361,6 +393,8 @@ struct MessageBubbleView: View {
             codeBlock(title: "FILE · \(name)", content: content, language: language)
         case .image(let attachment):
             messageImage(attachment)
+        case .divider:
+            sectionDivider
         }
     }
 
@@ -375,7 +409,15 @@ struct MessageBubbleView: View {
             codeBlock(title: "FILE · \(name)", content: content, language: language)
         case .image(let attachment):
             messageImage(attachment)
+        case .divider:
+            sectionDivider
         }
+    }
+
+    private var sectionDivider: some View {
+        Divider()
+            .overlay(Color.black.opacity(colorScheme == .dark ? 0.2 : 0.1))
+            .padding(.vertical, 8)
     }
 
     private func selectableTextContent(_ text: String) -> some View {
@@ -383,7 +425,8 @@ struct MessageBubbleView: View {
             text: text,
             textColor: UIColor.label,
             linkColor: UIColor.systemGray,
-            font: .systemFont(ofSize: 18, weight: .regular)
+            font: .systemFont(ofSize: 17, weight: .regular),
+            renderMarkdown: message.role == .assistant && !message.isStreaming
         )
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -398,11 +441,11 @@ struct MessageBubbleView: View {
         let runOutput = codeRunOutputs[copyToken]
         let runError = codeRunErrors[copyToken]
 
-        return VStack(alignment: .leading, spacing: 8) {
+        return VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text(title)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.primary.opacity(0.92))
                 Spacer()
                 if canRunPython {
                     Button(isRunning ? "结束运行" : "运行") {
@@ -448,8 +491,8 @@ struct MessageBubbleView: View {
             SelectableCodeTextView(
                 text: content,
                 textColor: UIColor.label,
-                font: .monospacedSystemFont(ofSize: 13, weight: .regular),
-                lineSpacing: 2
+                font: .monospacedSystemFont(ofSize: 15, weight: .regular),
+                lineSpacing: 3.5
             )
             .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -509,10 +552,15 @@ struct MessageBubbleView: View {
                 )
             }
         }
-        .padding(10)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 13)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(codeBackgroundColor)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(codeCardBorderColor, lineWidth: 1)
         )
     }
 
@@ -719,11 +767,22 @@ struct MessageBubbleView: View {
     private var codeBackgroundColor: Color {
         switch codeThemeMode {
         case .vscodeDark:
-            return Color(red: 0.12, green: 0.12, blue: 0.12)
+            return Color(red: 0.10, green: 0.10, blue: 0.11)
         case .githubLight:
-            return Color(red: 0.96, green: 0.97, blue: 0.99)
+            return Color(red: 0.95, green: 0.95, blue: 0.96)
         case .followApp:
-            return colorScheme == .dark ? Color(red: 0.12, green: 0.12, blue: 0.12) : Color(red: 0.96, green: 0.97, blue: 0.99)
+            return colorScheme == .dark ? Color(red: 0.10, green: 0.10, blue: 0.11) : Color(red: 0.95, green: 0.95, blue: 0.96)
+        }
+    }
+
+    private var codeCardBorderColor: Color {
+        switch codeThemeMode {
+        case .vscodeDark:
+            return Color.white.opacity(0.16)
+        case .githubLight:
+            return Color.black.opacity(0.08)
+        case .followApp:
+            return colorScheme == .dark ? Color.white.opacity(0.16) : Color.black.opacity(0.08)
         }
     }
 
@@ -827,6 +886,56 @@ struct MessageBubbleView: View {
         if let remote = attachment.renderURLString,
            let normalized = normalizedRemoteURLString(remote) {
             activeImagePreview = ImagePreviewPayload(source: .remote(urlString: normalized))
+        }
+    }
+}
+
+private struct ImageGenerationPlaceholderPattern: View {
+    let phase: TimeInterval
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(.secondarySystemBackground))
+
+            Canvas { context, size in
+                let spacing: CGFloat = 18
+                let radius: CGFloat = 1.35
+                var y: CGFloat = 12
+
+                while y < size.height - 8 {
+                    var x: CGFloat = 12
+                    while x < size.width - 8 {
+                        let wave = sin((x * 0.08) + (y * 0.07) + phase * 2.8)
+                        let opacity = 0.18 + ((wave + 1) * 0.5) * 0.32
+                        let dotRect = CGRect(
+                            x: x - radius,
+                            y: y - radius,
+                            width: radius * 2,
+                            height: radius * 2
+                        )
+                        context.fill(
+                            Path(ellipseIn: dotRect),
+                            with: .color(Color.primary.opacity(opacity))
+                        )
+                        x += spacing
+                    }
+                    y += spacing
+                }
+            }
+            .padding(2)
+
+            LinearGradient(
+                colors: [
+                    .clear,
+                    Color.white.opacity(0.22),
+                    .clear
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .blendMode(.screen)
+            .opacity(0.55)
         }
     }
 }
