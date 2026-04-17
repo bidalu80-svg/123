@@ -59,17 +59,44 @@ struct MessageBubbleView: View {
     }
 
     private var assistantMessageView: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            content
+        HStack(alignment: .top, spacing: 10) {
+            assistantIdentityIcon
+                .padding(.top, 2)
 
-            if showsAssistantActionBar {
-                assistantActionBar
-                    .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 6) {
+                content
+
+                if showsAssistantActionBar {
+                    assistantActionBar
+                        .padding(.top, 2)
+                }
             }
         }
         .padding(.horizontal, 2)
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var assistantIdentityIcon: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(Color.black)
+
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .stroke(Color.white.opacity(0.16), lineWidth: 0.8)
+
+            HStack(spacing: 1) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.96))
+                Image(systemName: "sparkles")
+                    .font(.system(size: 5, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.86))
+                    .offset(y: 2)
+            }
+        }
+        .frame(width: 18, height: 18)
     }
 
     private var assistantActionBar: some View {

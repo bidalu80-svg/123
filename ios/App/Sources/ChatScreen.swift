@@ -1993,6 +1993,8 @@ private final class NativeStreamingAssistantView: UIView {
     }
 
     private let containerStack = UIStackView()
+    private let identityStack = UIStackView()
+    private let identityIconView = UIImageView()
     private let textView = UITextView()
     private let imageProgressStack = UIStackView()
     private let imageProgressCard = ImageGenerationProgressCardView()
@@ -2138,18 +2140,18 @@ private final class NativeStreamingAssistantView: UIView {
             let labelSize = imageProgressLabel.sizeThatFits(
                 CGSize(width: textWidth, height: .greatestFiniteMagnitude)
             )
-            let baseHeight: CGFloat = 8 + 300 + 10 + 14
+            let baseHeight: CGFloat = 8 + 18 + 6 + 300 + 10 + 14
             let totalHeight = baseHeight + ceil(labelSize.height)
             return CGSize(width: UIView.noIntrinsicMetric, height: totalHeight)
         }
 
         if !waitingDotStack.isHidden {
-            let totalHeight: CGFloat = 8 + 14 + 14
+            let totalHeight: CGFloat = 8 + 18 + 6 + 14 + 14
             return CGSize(width: UIView.noIntrinsicMetric, height: totalHeight)
         }
 
         let fitted = textView.sizeThatFits(CGSize(width: textWidth, height: .greatestFiniteMagnitude))
-        let totalHeight = 10 + fitted.height + 14
+        let totalHeight = 10 + 18 + 6 + fitted.height + 14
         return CGSize(width: UIView.noIntrinsicMetric, height: totalHeight)
     }
 
@@ -2168,6 +2170,27 @@ private final class NativeStreamingAssistantView: UIView {
             containerStack.topAnchor.constraint(equalTo: topAnchor, constant: 8),
             containerStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
         ])
+
+        identityStack.axis = .horizontal
+        identityStack.alignment = .center
+        identityStack.spacing = 0
+
+        identityIconView.translatesAutoresizingMaskIntoConstraints = false
+        identityIconView.image = UIImage(systemName: "sparkles")
+        identityIconView.tintColor = .white
+        identityIconView.contentMode = .center
+        identityIconView.backgroundColor = .black
+        identityIconView.layer.cornerRadius = 5
+        identityIconView.layer.masksToBounds = true
+        identityIconView.layer.borderWidth = 0.8
+        identityIconView.layer.borderColor = UIColor.white.withAlphaComponent(0.16).cgColor
+        NSLayoutConstraint.activate([
+            identityIconView.widthAnchor.constraint(equalToConstant: 18),
+            identityIconView.heightAnchor.constraint(equalToConstant: 18)
+        ])
+        identityStack.addArrangedSubview(identityIconView)
+        identityStack.addArrangedSubview(UIView())
+        containerStack.addArrangedSubview(identityStack)
 
         imageProgressStack.axis = .vertical
         imageProgressStack.alignment = .leading
