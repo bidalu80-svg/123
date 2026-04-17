@@ -500,14 +500,15 @@ final class ChatService {
                     throw ChatServiceError.httpError(httpResponse.statusCode)
                 }
 
-                var fullReply = ""
+                var fullReplyParts: [String] = []
                 var imageURLs = Set<String>()
-                var pendingDeltaText = ""
+                var pendingDeltaParts: [String] = []
                 var pendingImageURLs = Set<String>()
                 var lastEmitAt = Date.distantPast
                 let streamEmitInterval: TimeInterval = 0.03
 
                 func emitPending(force: Bool = false) {
+                    let pendingDeltaText = pendingDeltaParts.joined()
                     guard !pendingDeltaText.isEmpty || !pendingImageURLs.isEmpty else { return }
                     let now = Date()
                     if !force && now.timeIntervalSince(lastEmitAt) < streamEmitInterval {
@@ -521,7 +522,7 @@ final class ChatService {
                             isDone: false
                         )
                     )
-                    pendingDeltaText = ""
+                    pendingDeltaParts.removeAll(keepingCapacity: true)
                     pendingImageURLs.removeAll()
                     lastEmitAt = now
                 }
@@ -532,8 +533,8 @@ final class ChatService {
                     if chunk.isDone { break }
 
                     if !chunk.deltaText.isEmpty {
-                        fullReply += chunk.deltaText
-                        pendingDeltaText += chunk.deltaText
+                        fullReplyParts.append(chunk.deltaText)
+                        pendingDeltaParts.append(chunk.deltaText)
                     }
                     if !chunk.imageURLs.isEmpty {
                         chunk.imageURLs.forEach { imageURLs.insert($0) }
@@ -544,6 +545,7 @@ final class ChatService {
                 }
                 emitPending(force: true)
 
+                let fullReply = fullReplyParts.joined()
                 let cleaned = ResponseCleaner.cleanAssistantText(fullReply)
                 let images = imageURLs.map { ChatImageAttachment(dataURL: $0, mimeType: "image/*", remoteURL: $0) }
                 if cleaned.isEmpty && images.isEmpty {

@@ -284,22 +284,26 @@ struct MessageBubbleView: View {
     @ViewBuilder
     private var streamingContent: some View {
         let displayText = normalizedStreamingText(message.content)
-        if !displayText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            SelectableLinkTextView(
-                text: displayText,
-                textColor: UIColor.label,
-                linkColor: UIColor.systemGray,
-                font: .systemFont(ofSize: 18, weight: .regular)
-            )
-                .frame(maxWidth: .infinity, alignment: .leading)
-        } else if !message.imageAttachments.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
-                ForEach(message.imageAttachments) { attachment in
-                    messageImage(attachment)
+        var streamingMessage = message
+        streamingMessage.content = displayText
+        let segments = MessageContentParser.parse(streamingMessage)
+
+        if segments.isEmpty {
+            if !message.imageAttachments.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(message.imageAttachments) { attachment in
+                        messageImage(attachment)
+                    }
                 }
+            } else {
+                streamingWaitingDot
             }
         } else {
-            streamingWaitingDot
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                    segmentView(segment)
+                }
+            }
         }
     }
 
@@ -430,19 +434,13 @@ struct MessageBubbleView: View {
                 .animation(.easeInOut(duration: 0.16), value: isCopied)
             }
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                if message.isStreaming {
-                    Text(content)
-                        .font(.system(.footnote, design: .monospaced))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
-                } else {
-                    Text(CodeHighlighter.highlighted(content, language: language, colorScheme: colorScheme, codeThemeMode: codeThemeMode))
-                        .font(.system(.footnote, design: .monospaced))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
-                }
-            }
+            SelectableCodeTextView(
+                text: content,
+                textColor: UIColor.label,
+                font: .monospacedSystemFont(ofSize: 13, weight: .regular),
+                lineSpacing: 2
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             if isRunning {
                 HStack(spacing: 8) {

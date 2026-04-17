@@ -16,12 +16,17 @@ final class ChatViewModel: ObservableObject {
     }
 
     private final class ActiveStreamState {
+        private static let maxCharactersPerCommit = 180
+        private static let minimumCommitInterval: TimeInterval = 0.09
+
         let messageID: UUID
         let target: StreamTargetContext
         let buffer: StreamBuffer
         var renderer: StreamRenderer?
         private(set) var pendingImageURLs: [String] = []
         private var pendingImageSet: Set<String> = []
+        private var pendingText = ""
+        private var lastCommitAt = Date.distantPast
 
         init(messageID: UUID, target: StreamTargetContext, buffer: StreamBuffer) {
             self.messageID = messageID
@@ -48,6 +53,30 @@ final class ChatViewModel: ObservableObject {
         func clearPendingImages() {
             pendingImageURLs = []
             pendingImageSet.removeAll()
+            pendingText.removeAll(keepingCapacity: false)
+            lastCommitAt = .distantPast
+        }
+
+        func coalesceTextDelta(_ deltaText: String, force: Bool = false) -> String {
+            if !deltaText.isEmpty {
+                pendingText.append(deltaText)
+            }
+
+            guard !pendingText.isEmpty else { return "" }
+
+            let now = Date()
+            let shouldCommit =
+                force
+                || pendingText.contains("\n")
+                || pendingText.count >= Self.maxCharactersPerCommit
+                || now.timeIntervalSince(lastCommitAt) >= Self.minimumCommitInterval
+
+            guard shouldCommit else { return "" }
+
+            let output = pendingText
+            pendingText.removeAll(keepingCapacity: true)
+            lastCommitAt = now
+            return output
         }
     }
 
@@ -684,7 +713,7 @@ final class ChatViewModel: ObservableObject {
             configuration: StreamRenderer.Configuration(
                 refreshInterval: 0.05,
                 maxCharactersPerFrame: 50,
-                maxCharactersFetchedPerTick: 50
+                maxCharactersFetchedPerTick: 1_400
             ),
             onBackgroundBatch: nil,
             onFrameRender: { [weak self] delta in
@@ -716,10 +745,14 @@ final class ChatViewModel: ObservableObject {
         guard let active = activeStreamState else { return }
 
         let images = includePendingImages ? active.consumePendingImageURLs() : []
-        guard !deltaText.isEmpty || !images.isEmpty else { return }
+        let coalescedText = active.coalesceTextDelta(
+            deltaText,
+            force: includePendingImages && deltaText.isEmpty
+        )
+        guard !coalescedText.isEmpty || !images.isEmpty else { return }
 
         applyPendingStreamDelta(
-            PendingStreamDelta(deltaText: deltaText, imageURLs: images),
+            PendingStreamDelta(deltaText: coalescedText, imageURLs: images),
             to: active.messageID,
             target: active.target
         )
@@ -729,7 +762,8 @@ final class ChatViewModel: ObservableObject {
         guard let active = activeStreamState else { return }
 
         if applyRemaining {
-            let remainingText = active.buffer.consume(maxCharacters: Int.max).joined()
+            let tailText = active.buffer.consume(maxCharacters: Int.max).joined()
+            let remainingText = active.coalesceTextDelta(tailText, force: true)
             let remainingImages = active.consumePendingImageURLs()
             if !remainingText.isEmpty || !remainingImages.isEmpty {
                 applyPendingStreamDelta(

@@ -1950,6 +1950,11 @@ private struct ScrollsToTopConfigurator: UIViewRepresentable {
 }
 
 private final class NativeStreamingAssistantView: UIView {
+    private enum RenderStyle {
+        case body
+        case code
+    }
+
     private let containerStack = UIStackView()
     private let headerStack = UIStackView()
     private let iconView = UIImageView()
@@ -1959,6 +1964,10 @@ private final class NativeStreamingAssistantView: UIView {
     private var currentMessageID: UUID?
     private var currentSourceText = ""
     private var pendingLayoutCharacters = 0
+    private var pendingFenceTickCount = 0
+    private var inCodeBlock = false
+    private var waitingForCodeLanguageLine = false
+    private var languageProbe = ""
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -1983,17 +1992,21 @@ private final class NativeStreamingAssistantView: UIView {
         if currentMessageID == message.id, sourceText.hasPrefix(currentSourceText) {
             let suffix = String(sourceText.dropFirst(currentSourceText.count))
             if !suffix.isEmpty {
-                textView.textStorage.append(NSAttributedString(string: suffix, attributes: textAttributes))
-                if shouldInvalidateLayout(forAppendedSuffix: suffix) {
+                let appendedVisibleCharacters = appendStreamingText(suffix)
+                if shouldInvalidateLayout(forRawSuffix: suffix, appendedVisibleCharacters: appendedVisibleCharacters) {
                     invalidateIntrinsicContentSize()
                     setNeedsLayout()
                 }
             }
         } else {
-            textView.attributedText = NSAttributedString(string: sourceText, attributes: textAttributes)
+            resetParserState()
+            textView.attributedText = NSAttributedString()
+            let appendedVisibleCharacters = appendStreamingText(sourceText)
             pendingLayoutCharacters = 0
-            invalidateIntrinsicContentSize()
-            setNeedsLayout()
+            if appendedVisibleCharacters > 0 || !sourceText.isEmpty {
+                invalidateIntrinsicContentSize()
+                setNeedsLayout()
+            }
         }
 
         currentMessageID = message.id
@@ -2004,6 +2017,7 @@ private final class NativeStreamingAssistantView: UIView {
         currentMessageID = nil
         currentSourceText = ""
         pendingLayoutCharacters = 0
+        resetParserState()
         textView.attributedText = nil
         invalidateIntrinsicContentSize()
     }
@@ -2063,7 +2077,7 @@ private final class NativeStreamingAssistantView: UIView {
         textView.isSelectable = true
         textView.isScrollEnabled = false
         textView.adjustsFontForContentSizeCategory = true
-        textView.dataDetectorTypes = [.link]
+        textView.dataDetectorTypes = []
         textView.backgroundColor = .clear
         textView.textContainerInset = .zero
         textView.textContainer.lineFragmentPadding = 0
@@ -2072,9 +2086,10 @@ private final class NativeStreamingAssistantView: UIView {
         containerStack.addArrangedSubview(textView)
     }
 
-    private var textAttributes: [NSAttributedString.Key: Any] {
+    private var bodyTextAttributes: [NSAttributedString.Key: Any] {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineSpacing = 5
+        paragraph.paragraphSpacing = 2
         return [
             .font: UIFont.systemFont(ofSize: 18, weight: .regular),
             .foregroundColor: UIColor.label,
@@ -2082,8 +2097,100 @@ private final class NativeStreamingAssistantView: UIView {
         ]
     }
 
-    private func shouldInvalidateLayout(forAppendedSuffix suffix: String) -> Bool {
-        pendingLayoutCharacters += suffix.count
+    private var codeTextAttributes: [NSAttributedString.Key: Any] {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = 3
+        paragraph.paragraphSpacing = 4
+        return [
+            .font: UIFont.monospacedSystemFont(ofSize: 14, weight: .regular),
+            .foregroundColor: UIColor.label,
+            .backgroundColor: UIColor.secondarySystemBackground,
+            .paragraphStyle: paragraph
+        ]
+    }
+
+    private func appendStreamingText(_ rawText: String) -> Int {
+        guard !rawText.isEmpty else { return 0 }
+
+        var visibleAppended = 0
+        var runText = ""
+        var runStyle: RenderStyle = inCodeBlock ? .code : .body
+
+        func flushRun() {
+            guard !runText.isEmpty else { return }
+            let attributes = runStyle == .code ? codeTextAttributes : bodyTextAttributes
+            textView.textStorage.append(NSAttributedString(string: runText, attributes: attributes))
+            visibleAppended += runText.count
+            runText.removeAll(keepingCapacity: true)
+        }
+
+        func appendPendingBackticksAsLiteral() {
+            guard pendingFenceTickCount > 0 else { return }
+            runStyle = inCodeBlock ? .code : .body
+            runText.append(String(repeating: "`", count: pendingFenceTickCount))
+            pendingFenceTickCount = 0
+        }
+
+        for character in rawText {
+            if character == "`" {
+                pendingFenceTickCount += 1
+                if pendingFenceTickCount == 3 {
+                    flushRun()
+                    pendingFenceTickCount = 0
+                    inCodeBlock.toggle()
+                    waitingForCodeLanguageLine = inCodeBlock
+                    languageProbe.removeAll(keepingCapacity: false)
+                    runStyle = inCodeBlock ? .code : .body
+                }
+                continue
+            }
+
+            appendPendingBackticksAsLiteral()
+
+            if inCodeBlock && waitingForCodeLanguageLine {
+                if character == "\n" {
+                    waitingForCodeLanguageLine = false
+                    languageProbe.removeAll(keepingCapacity: false)
+                } else if character == " " || character == "\t" || languageProbe.count >= 20 {
+                    waitingForCodeLanguageLine = false
+                    let fallback = languageProbe + String(character)
+                    languageProbe.removeAll(keepingCapacity: false)
+                    if !fallback.isEmpty {
+                        let nextStyle: RenderStyle = .code
+                        if nextStyle != runStyle {
+                            flushRun()
+                            runStyle = nextStyle
+                        }
+                        runText.append(fallback)
+                    }
+                } else {
+                    languageProbe.append(character)
+                }
+                continue
+            }
+
+            let nextStyle: RenderStyle = inCodeBlock ? .code : .body
+            if nextStyle != runStyle {
+                flushRun()
+                runStyle = nextStyle
+            }
+            runText.append(character)
+        }
+
+        flushRun()
+        return visibleAppended
+    }
+
+    private func resetParserState() {
+        pendingFenceTickCount = 0
+        inCodeBlock = false
+        waitingForCodeLanguageLine = false
+        languageProbe.removeAll(keepingCapacity: false)
+    }
+
+    private func shouldInvalidateLayout(forRawSuffix suffix: String, appendedVisibleCharacters: Int) -> Bool {
+        guard appendedVisibleCharacters > 0 else { return false }
+        pendingLayoutCharacters += appendedVisibleCharacters
         if suffix.contains("\n") || pendingLayoutCharacters >= 96 {
             pendingLayoutCharacters = 0
             return true

@@ -56,21 +56,47 @@ struct SelectableLinkTextView: UIViewRepresentable {
             .paragraphStyle: paragraph
         ]
 
-        let attributed = NSMutableAttributedString(string: text, attributes: attrs)
-        if let detector = Self.linkDetector {
-            let nsText = text as NSString
-            let fullRange = NSRange(location: 0, length: nsText.length)
-            detector.enumerateMatches(in: text, options: [], range: fullRange) { match, _, _ in
-                guard let match, let url = match.url else { return }
-                attributed.addAttributes(
-                    [
-                        .link: url,
-                        .foregroundColor: linkColor,
-                        .underlineStyle: 0,
-                        .font: UIFont.systemFont(ofSize: font.pointSize, weight: .semibold)
-                    ],
-                    range: match.range
-                )
+        let fullTextChangedShape = coordinator.lastText.isEmpty || !text.hasPrefix(coordinator.lastText)
+        if fullTextChangedShape {
+            let attributed = NSMutableAttributedString(string: text, attributes: attrs)
+            if let detector = Self.linkDetector {
+                let nsText = text as NSString
+                let fullRange = NSRange(location: 0, length: nsText.length)
+                detector.enumerateMatches(in: text, options: [], range: fullRange) { match, _, _ in
+                    guard let match, let url = match.url else { return }
+                    attributed.addAttributes(
+                        [
+                            .link: url,
+                            .foregroundColor: linkColor,
+                            .underlineStyle: 0,
+                            .font: UIFont.systemFont(ofSize: font.pointSize, weight: .semibold)
+                        ],
+                        range: match.range
+                    )
+                }
+            }
+            uiView.attributedText = attributed
+        } else {
+            let suffix = String(text.dropFirst(coordinator.lastText.count))
+            if !suffix.isEmpty {
+                let appended = NSMutableAttributedString(string: suffix, attributes: attrs)
+                if let detector = Self.linkDetector {
+                    let nsText = suffix as NSString
+                    let fullRange = NSRange(location: 0, length: nsText.length)
+                    detector.enumerateMatches(in: suffix, options: [], range: fullRange) { match, _, _ in
+                        guard let match, let url = match.url else { return }
+                        appended.addAttributes(
+                            [
+                                .link: url,
+                                .foregroundColor: linkColor,
+                                .underlineStyle: 0,
+                                .font: UIFont.systemFont(ofSize: font.pointSize, weight: .semibold)
+                            ],
+                            range: match.range
+                        )
+                    }
+                }
+                uiView.textStorage.append(appended)
             }
         }
 
@@ -78,7 +104,6 @@ struct SelectableLinkTextView: UIViewRepresentable {
             .foregroundColor: linkColor,
             .underlineStyle: 0
         ]
-        uiView.attributedText = attributed
         coordinator.lastText = text
         coordinator.lastFontPointSize = font.pointSize
         coordinator.lastTextColor = textColor
