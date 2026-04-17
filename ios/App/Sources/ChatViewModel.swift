@@ -980,6 +980,10 @@ final class ChatViewModel: ObservableObject {
     private func finalizedAssistantContent(existingContent: String, fallbackReplyText: String) -> String {
         let existing = existingContent.trimmingCharacters(in: .whitespacesAndNewlines)
         if !existing.isEmpty {
+            let normalizedExisting = normalizedFinalStreamingText(existingContent)
+            if !normalizedExisting.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return normalizedExisting
+            }
             return existingContent
         }
         return fallbackReplyText
