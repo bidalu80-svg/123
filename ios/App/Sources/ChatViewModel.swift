@@ -86,7 +86,7 @@ final class ChatViewModel: ObservableObject {
 
     private let service: ChatService
     private var autoSaveEnabled = false
-    private let streamScrollThrottleInterval: TimeInterval = 0.12
+    private let streamScrollThrottleInterval: TimeInterval = 0.18
     private var lastStreamScrollSignal: Date = .distantPast
     private var inflightSendTask: Task<ChatReply, Error>?
     private var inflightTargetContext: StreamTargetContext?
@@ -676,22 +676,18 @@ final class ChatViewModel: ObservableObject {
             ),
             onBackgroundBatch: nil,
             onFrameRender: { [weak self] delta in
-                Task { @MainActor in
-                    self?.applyRenderedStreamDeltaForActiveSession(
-                        delta,
-                        generation: generation,
-                        includePendingImages: true
-                    )
-                }
+                self?.applyRenderedStreamDeltaForActiveSession(
+                    delta,
+                    generation: generation,
+                    includePendingImages: true
+                )
             },
             onDrainComplete: { [weak self] in
-                Task { @MainActor in
-                    self?.applyRenderedStreamDeltaForActiveSession(
-                        "",
-                        generation: generation,
-                        includePendingImages: true
-                    )
-                }
+                self?.applyRenderedStreamDeltaForActiveSession(
+                    "",
+                    generation: generation,
+                    includePendingImages: true
+                )
             }
         )
         state.renderer = renderer

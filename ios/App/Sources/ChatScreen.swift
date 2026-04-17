@@ -1797,7 +1797,8 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
         ) {
             self.onMetricsChanged = onMetricsChanged
 
-            if historyVersion != lastHistoryVersion {
+            let historyChanged = historyVersion != lastHistoryVersion
+            if historyChanged {
                 UIView.performWithoutAnimation {
                     historyHostingController.rootView = historyContent
                     historyHostingController.view.invalidateIntrinsicContentSize()
@@ -1824,16 +1825,18 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
                 lastStreamingSignature = nil
             }
 
+            var commandChanged = false
             if let command, command.id != lastAppliedCommandID {
                 pendingCommand = command
+                commandChanged = true
             }
+
             view.setNeedsLayout()
-            DispatchQueue.main.async { [weak self] in
-                self?.view.setNeedsLayout()
-                self?.view.layoutIfNeeded()
-                self?.applyPendingCommandIfNeeded()
-                self?.reportMetrics()
+            if historyChanged || commandChanged {
+                view.layoutIfNeeded()
+                applyPendingCommandIfNeeded()
             }
+            reportMetrics()
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
@@ -1954,7 +1957,8 @@ private final class NativeStreamingAssistantView: UIView {
     private let textView = UITextView()
 
     private var currentMessageID: UUID?
-    private var currentRenderedText = ""
+    private var currentSourceText = ""
+    private var pendingLayoutCharacters = 0
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -1967,40 +1971,48 @@ private final class NativeStreamingAssistantView: UIView {
     }
 
     func apply(message: ChatMessage) {
-        let renderedText: String
+        let sourceText: String
         if !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            renderedText = Self.cleanStreamingMarkdownText(message.content)
+            sourceText = Self.normalizedStreamingText(message.content)
         } else if !message.imageAttachments.isEmpty {
-            renderedText = "正在接收图片…"
+            sourceText = "正在接收图片…"
         } else {
-            renderedText = ""
+            sourceText = ""
         }
 
-        if currentMessageID == message.id, renderedText.hasPrefix(currentRenderedText) {
-            let suffix = String(renderedText.dropFirst(currentRenderedText.count))
+        if currentMessageID == message.id, sourceText.hasPrefix(currentSourceText) {
+            let suffix = String(sourceText.dropFirst(currentSourceText.count))
             if !suffix.isEmpty {
                 textView.textStorage.append(NSAttributedString(string: suffix, attributes: textAttributes))
+                if shouldInvalidateLayout(forAppendedSuffix: suffix) {
+                    invalidateIntrinsicContentSize()
+                    setNeedsLayout()
+                }
             }
         } else {
-            textView.attributedText = NSAttributedString(string: renderedText, attributes: textAttributes)
+            textView.attributedText = NSAttributedString(string: sourceText, attributes: textAttributes)
+            pendingLayoutCharacters = 0
+            invalidateIntrinsicContentSize()
+            setNeedsLayout()
         }
 
         currentMessageID = message.id
-        currentRenderedText = renderedText
-        invalidateIntrinsicContentSize()
-        setNeedsLayout()
+        currentSourceText = sourceText
     }
 
     func reset() {
         currentMessageID = nil
-        currentRenderedText = ""
+        currentSourceText = ""
+        pendingLayoutCharacters = 0
         textView.attributedText = nil
         invalidateIntrinsicContentSize()
     }
 
     override var intrinsicContentSize: CGSize {
-        layoutIfNeeded()
         let textWidth = max(bounds.width - 12, 0)
+        guard textWidth > 1 else {
+            return CGSize(width: UIView.noIntrinsicMetric, height: 44)
+        }
         let fitted = textView.sizeThatFits(CGSize(width: textWidth, height: .greatestFiniteMagnitude))
         let totalHeight = 18 + 6 + fitted.height + 16
         return CGSize(width: UIView.noIntrinsicMetric, height: totalHeight)
@@ -2048,13 +2060,15 @@ private final class NativeStreamingAssistantView: UIView {
         containerStack.addArrangedSubview(headerStack)
 
         textView.isEditable = false
-        textView.isSelectable = false
+        textView.isSelectable = true
         textView.isScrollEnabled = false
+        textView.adjustsFontForContentSizeCategory = true
+        textView.dataDetectorTypes = [.link]
         textView.backgroundColor = .clear
         textView.textContainerInset = .zero
         textView.textContainer.lineFragmentPadding = 0
         textView.textContainer.widthTracksTextView = true
-        textView.panGestureRecognizer.isEnabled = false
+        textView.panGestureRecognizer.isEnabled = true
         containerStack.addArrangedSubview(textView)
     }
 
@@ -2068,17 +2082,17 @@ private final class NativeStreamingAssistantView: UIView {
         ]
     }
 
-    private static func cleanStreamingMarkdownText(_ raw: String) -> String {
-        raw
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "**", with: "")
-            .replacingOccurrences(of: "__", with: "")
-            .replacingOccurrences(of: "`", with: "")
-            .replacingOccurrences(of: "```", with: "")
-            .replacingOccurrences(of: #"(?m)^\s{0,3}#{1,6}\s+"#, with: "", options: .regularExpression)
-            .replacingOccurrences(of: #"(?m)^\s*>\s?"#, with: "", options: .regularExpression)
-            .replacingOccurrences(of: #"(?m)^\s*[-*]\s+"#, with: "• ", options: .regularExpression)
-            .replacingOccurrences(of: #"(?m)^\s*(\d+)\.\s+"#, with: "$1. ", options: .regularExpression)
+    private func shouldInvalidateLayout(forAppendedSuffix suffix: String) -> Bool {
+        pendingLayoutCharacters += suffix.count
+        if suffix.contains("\n") || pendingLayoutCharacters >= 96 {
+            pendingLayoutCharacters = 0
+            return true
+        }
+        return false
+    }
+
+    private static func normalizedStreamingText(_ raw: String) -> String {
+        raw.replacingOccurrences(of: "\r\n", with: "\n")
     }
 }
 

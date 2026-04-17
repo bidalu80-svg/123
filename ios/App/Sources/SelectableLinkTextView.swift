@@ -31,8 +31,8 @@ struct SelectableLinkTextView: UIViewRepresentable {
             .foregroundColor: linkColor,
             .underlineStyle: 0
         ]
-        // Keep text selectable, but let the parent chat ScrollView own vertical dragging.
-        view.panGestureRecognizer.isEnabled = false
+        // Keep selection gestures enabled so users can long-press and select partial text.
+        view.panGestureRecognizer.isEnabled = true
         return view
     }
 

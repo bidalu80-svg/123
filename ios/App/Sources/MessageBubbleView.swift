@@ -275,11 +275,14 @@ struct MessageBubbleView: View {
 
     @ViewBuilder
     private var streamingContent: some View {
-        let displayText = cleanStreamingMarkdownText(message.content)
+        let displayText = normalizedStreamingText(message.content)
         if !displayText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            streamingGradientText(displayText)
-                .font(.system(size: 18, weight: .regular))
-                .lineSpacing(5)
+            SelectableLinkTextView(
+                text: displayText,
+                textColor: UIColor.label,
+                linkColor: UIColor.systemGray,
+                font: .systemFont(ofSize: 18, weight: .regular)
+            )
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else if !message.imageAttachments.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
@@ -309,17 +312,8 @@ struct MessageBubbleView: View {
             .accessibilityLabel("正在接收流式内容")
     }
 
-    private func cleanStreamingMarkdownText(_ raw: String) -> String {
-        raw
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "**", with: "")
-            .replacingOccurrences(of: "__", with: "")
-            .replacingOccurrences(of: "`", with: "")
-            .replacingOccurrences(of: "```", with: "")
-            .replacingOccurrences(of: #"(?m)^\s{0,3}#{1,6}\s+"#, with: "", options: .regularExpression)
-            .replacingOccurrences(of: #"(?m)^\s*>\s?"#, with: "", options: .regularExpression)
-            .replacingOccurrences(of: #"(?m)^\s*[-*]\s+"#, with: "• ", options: .regularExpression)
-            .replacingOccurrences(of: #"(?m)^\s*(\d+)\.\s+"#, with: "$1. ", options: .regularExpression)
+    private func normalizedStreamingText(_ raw: String) -> String {
+        raw.replacingOccurrences(of: "\r\n", with: "\n")
     }
 
     private var fallbackPlainText: String? {
@@ -345,37 +339,6 @@ struct MessageBubbleView: View {
         case .image(let attachment):
             messageImage(attachment)
         }
-    }
-
-    private func streamingGradientText(_ value: String) -> Text {
-        let parts = splitStreamingGradientText(value)
-        var rendered = Text(verbatim: parts.head).foregroundColor(.primary)
-
-        if !parts.mid.isEmpty {
-            rendered = rendered + Text(verbatim: parts.mid).foregroundColor(Color.primary.opacity(0.72))
-        }
-        if !parts.tip.isEmpty {
-            rendered = rendered + Text(verbatim: parts.tip).foregroundColor(Color.secondary.opacity(0.5))
-        }
-        return rendered
-    }
-
-    private func splitStreamingGradientText(_ value: String) -> (head: String, mid: String, tip: String) {
-        let total = value.count
-        guard total > 0 else { return ("", "", "") }
-
-        let tipCount = min(3, total)
-        let midCount = min(8, max(total - tipCount, 0))
-        let headCount = max(total - tipCount - midCount, 0)
-
-        let headEnd = value.index(value.startIndex, offsetBy: headCount)
-        let midEnd = value.index(headEnd, offsetBy: midCount)
-
-        return (
-            String(value[..<headEnd]),
-            String(value[headEnd..<midEnd]),
-            String(value[midEnd...])
-        )
     }
 
     @ViewBuilder
