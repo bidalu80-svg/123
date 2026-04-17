@@ -135,8 +135,7 @@ struct SelectableLinkTextView: UIViewRepresentable {
                             [
                                 .link: url,
                                 .foregroundColor: linkColor,
-                                .underlineStyle: 0,
-                                .font: UIFont.systemFont(ofSize: font.pointSize, weight: .semibold)
+                                .underlineStyle: 0
                             ],
                             range: match.range
                         )
@@ -156,8 +155,7 @@ struct SelectableLinkTextView: UIViewRepresentable {
                                 [
                                     .link: url,
                                     .foregroundColor: linkColor,
-                                    .underlineStyle: 0,
-                                    .font: UIFont.systemFont(ofSize: font.pointSize, weight: .semibold)
+                                    .underlineStyle: 0
                                 ],
                                 range: match.range
                             )
@@ -245,18 +243,8 @@ struct SelectableLinkTextView: UIViewRepresentable {
 
                 output.addAttribute(.foregroundColor, value: textColor, range: fullRange)
                 output.addAttribute(.paragraphStyle, value: paragraph, range: fullRange)
-
-                output.enumerateAttribute(.font, in: fullRange) { value, range, _ in
-                    if value == nil {
-                        output.addAttribute(.font, value: font, range: range)
-                    }
-                }
-                applyHeadingTypography(
-                    to: output,
-                    sourceMarkdown: trimmed,
-                    baseFont: font,
-                    textColor: textColor
-                )
+                // Keep all assistant text in a unified regular weight.
+                output.addAttribute(.font, value: font, range: fullRange)
 
                 if let detector = Self.linkDetector {
                     let renderedText = output.string
