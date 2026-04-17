@@ -2078,8 +2078,6 @@ private final class NativeStreamingAssistantView: UIView {
     private var waitingForCodeLanguageLine = false
     private var languageProbe = ""
     private var waitingDotAnimationRunning = false
-    private let streamRevealLayer = CAGradientLayer()
-    private var lastRevealAnimationAt: CFTimeInterval = 0
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -2142,7 +2140,6 @@ private final class NativeStreamingAssistantView: UIView {
             if !rawSuffix.isEmpty {
                 let displaySuffix = Self.streamingDisplayDeltaText(rawSuffix)
                 let appendedVisibleCharacters = appendStreamingText(displaySuffix)
-                triggerStreamRevealAnimationIfNeeded(appendedVisibleCharacters: appendedVisibleCharacters)
                 if shouldInvalidateLayout(forRawSuffix: displaySuffix, appendedVisibleCharacters: appendedVisibleCharacters) {
                     invalidateIntrinsicContentSize()
                     setNeedsLayout()
@@ -2153,7 +2150,6 @@ private final class NativeStreamingAssistantView: UIView {
             textView.attributedText = NSAttributedString()
             let displayText = Self.streamingDisplayDeltaText(sourceText)
             let appendedVisibleCharacters = appendStreamingText(displayText)
-            triggerStreamRevealAnimationIfNeeded(appendedVisibleCharacters: appendedVisibleCharacters)
             pendingLayoutCharacters = 0
             if appendedVisibleCharacters > 0 || !displayText.isEmpty {
                 invalidateIntrinsicContentSize()
@@ -2175,26 +2171,15 @@ private final class NativeStreamingAssistantView: UIView {
         stopWaitingDotAnimationIfNeeded()
         textView.isHidden = false
         textView.attributedText = nil
-        streamRevealLayer.removeAllAnimations()
-        streamRevealLayer.opacity = 0
-        lastRevealAnimationAt = 0
         invalidateIntrinsicContentSize()
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        let overlayHeight = max(textView.bounds.height, 1)
-        streamRevealLayer.frame = CGRect(
-            x: -textView.bounds.width,
-            y: 0,
-            width: textView.bounds.width * 3,
-            height: overlayHeight
-        )
     }
 
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
         super.traitCollectionDidChange(previousTraitCollection)
-        configureStreamRevealLayer()
     }
 
     override var intrinsicContentSize: CGSize {
@@ -2308,18 +2293,18 @@ private final class NativeStreamingAssistantView: UIView {
         containerStack.addArrangedSubview(waitingDotStack)
 
         textView.isEditable = false
-        textView.isSelectable = true
+        textView.isSelectable = false
+        textView.isUserInteractionEnabled = false
         textView.isScrollEnabled = false
+        textView.isOpaque = false
         textView.adjustsFontForContentSizeCategory = true
         textView.dataDetectorTypes = []
         textView.backgroundColor = .clear
+        textView.layer.backgroundColor = UIColor.clear.cgColor
         textView.textContainerInset = .zero
         textView.textContainer.lineFragmentPadding = 0
         textView.textContainer.widthTracksTextView = true
-        textView.panGestureRecognizer.isEnabled = true
         textView.layer.masksToBounds = true
-        configureStreamRevealLayer()
-        textView.layer.addSublayer(streamRevealLayer)
         containerStack.addArrangedSubview(textView)
     }
 
@@ -2433,44 +2418,6 @@ private final class NativeStreamingAssistantView: UIView {
             return true
         }
         return false
-    }
-
-    private func configureStreamRevealLayer() {
-        let peakAlpha: CGFloat = traitCollection.userInterfaceStyle == .dark ? 0.12 : 0.16
-        streamRevealLayer.colors = [
-            UIColor.clear.cgColor,
-            UIColor.white.withAlphaComponent(peakAlpha).cgColor,
-            UIColor.clear.cgColor
-        ]
-        streamRevealLayer.locations = [0, 0.48, 1]
-        streamRevealLayer.startPoint = CGPoint(x: 0, y: 0.5)
-        streamRevealLayer.endPoint = CGPoint(x: 1, y: 0.5)
-        streamRevealLayer.opacity = 0
-    }
-
-    private func triggerStreamRevealAnimationIfNeeded(appendedVisibleCharacters: Int) {
-        guard appendedVisibleCharacters > 0 else { return }
-        let now = CACurrentMediaTime()
-        guard now - lastRevealAnimationAt >= 0.14 else { return }
-        lastRevealAnimationAt = now
-
-        streamRevealLayer.removeAllAnimations()
-        streamRevealLayer.opacity = 0
-
-        let fade = CABasicAnimation(keyPath: "opacity")
-        fade.fromValue = 0
-        fade.toValue = 1
-        fade.duration = 0.09
-        fade.autoreverses = true
-        fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        streamRevealLayer.add(fade, forKey: "pulseFade")
-
-        let slide = CABasicAnimation(keyPath: "transform.translation.x")
-        slide.fromValue = -textView.bounds.width * 0.18
-        slide.toValue = textView.bounds.width * 0.18
-        slide.duration = 0.18
-        slide.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        streamRevealLayer.add(slide, forKey: "pulseSlide")
     }
 
     private func startWaitingDotAnimationIfNeeded() {
