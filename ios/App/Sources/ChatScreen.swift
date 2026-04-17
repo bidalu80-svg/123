@@ -2342,7 +2342,6 @@ private final class NativeStreamingAssistantView: UIView {
         return [
             .font: UIFont.monospacedSystemFont(ofSize: 13, weight: .regular),
             .foregroundColor: UIColor.label,
-            .backgroundColor: UIColor.secondarySystemBackground,
             .paragraphStyle: paragraph
         ]
     }
