@@ -87,12 +87,13 @@ struct ChatConfig: Codable, Equatable {
     var marketSymbols: String
     var hotNewsContextEnabled: Bool
     var hotNewsCount: Int
+    var memoryModeEnabled: Bool
     var soundEffectsEnabled: Bool
 
     static let `default` = ChatConfig(
         apiURL: "https://xxx.com",
         apiKey: "",
-        model: "gpt-5.4-pro",
+        model: "gpt-5.4",
         endpointMode: .chatCompletions,
         chatCompletionsPath: ChatConfig.defaultChatCompletionsPath,
         imagesGenerationsPath: ChatConfig.defaultImagesGenerationsPath,
@@ -111,6 +112,7 @@ struct ChatConfig: Codable, Equatable {
         marketSymbols: "GC=F,CL=F,BZ=F,SI=F,HG=F,^GSPC,^IXIC,^DJI,^RUT,^N225,^HSI,^FTSE,^GDAXI,AAPL,NVDA,TSLA,MSFT,AMZN",
         hotNewsContextEnabled: false,
         hotNewsCount: 6,
+        memoryModeEnabled: false,
         soundEffectsEnabled: true
     )
 
@@ -136,6 +138,7 @@ struct ChatConfig: Codable, Equatable {
         marketSymbols: String = "GC=F,CL=F,BZ=F,SI=F,HG=F,^GSPC,^IXIC,^DJI,^RUT,^N225,^HSI,^FTSE,^GDAXI,AAPL,NVDA,TSLA,MSFT,AMZN",
         hotNewsContextEnabled: Bool = false,
         hotNewsCount: Int = 6,
+        memoryModeEnabled: Bool = false,
         soundEffectsEnabled: Bool = true
     ) {
         self.apiURL = apiURL
@@ -159,6 +162,7 @@ struct ChatConfig: Codable, Equatable {
         self.marketSymbols = marketSymbols
         self.hotNewsContextEnabled = hotNewsContextEnabled
         self.hotNewsCount = hotNewsCount
+        self.memoryModeEnabled = memoryModeEnabled
         self.soundEffectsEnabled = soundEffectsEnabled
     }
 
@@ -185,6 +189,7 @@ struct ChatConfig: Codable, Equatable {
         marketSymbols = try c.decodeIfPresent(String.self, forKey: .marketSymbols) ?? "GC=F,CL=F,BZ=F,SI=F,HG=F,^GSPC,^IXIC,^DJI,^RUT,^N225,^HSI,^FTSE,^GDAXI,AAPL,NVDA,TSLA,MSFT,AMZN"
         hotNewsContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .hotNewsContextEnabled) ?? false
         hotNewsCount = try c.decodeIfPresent(Int.self, forKey: .hotNewsCount) ?? 6
+        memoryModeEnabled = try c.decodeIfPresent(Bool.self, forKey: .memoryModeEnabled) ?? false
         soundEffectsEnabled = try c.decodeIfPresent(Bool.self, forKey: .soundEffectsEnabled) ?? true
     }
 
@@ -241,6 +246,8 @@ struct ChatConfig: Codable, Equatable {
 
 enum ChatConfigStore {
     private static let configKey = "chatapp.chat.config"
+    private static let onboardingDoneKey = "chatapp.config.onboarding.done"
+    private static let legacyDefaultModel = "gpt-5.4-pro"
 
     static func load() -> ChatConfig {
         if let data = UserDefaults.standard.data(forKey: configKey),
@@ -249,7 +256,8 @@ enum ChatConfigStore {
         }
 
         let bundleURL = (Bundle.main.object(forInfoDictionaryKey: "CHAT_API_URL") as? String) ?? ChatConfig.default.apiURL
-        let bundleModel = (Bundle.main.object(forInfoDictionaryKey: "CHAT_MODEL") as? String) ?? ChatConfig.default.model
+        let rawBundleModel = (Bundle.main.object(forInfoDictionaryKey: "CHAT_MODEL") as? String) ?? ChatConfig.default.model
+        let bundleModel = migratedModelNameIfNeeded(rawBundleModel)
 
         return ChatConfig(
             apiURL: normalizedBaseURL(bundleURL),
@@ -273,6 +281,7 @@ enum ChatConfigStore {
             marketSymbols: ChatConfig.default.marketSymbols,
             hotNewsContextEnabled: ChatConfig.default.hotNewsContextEnabled,
             hotNewsCount: ChatConfig.default.hotNewsCount,
+            memoryModeEnabled: ChatConfig.default.memoryModeEnabled,
             soundEffectsEnabled: ChatConfig.default.soundEffectsEnabled
         )
     }
@@ -354,10 +363,11 @@ enum ChatConfigStore {
     }
 
     private static func normalize(_ config: ChatConfig) -> ChatConfig {
-        ChatConfig(
+        let normalizedModel = migratedModelNameIfNeeded(config.model)
+        return ChatConfig(
             apiURL: normalizedBaseURL(config.apiURL),
             apiKey: config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines),
-            model: config.model.trimmingCharacters(in: .whitespacesAndNewlines),
+            model: normalizedModel.trimmingCharacters(in: .whitespacesAndNewlines),
             endpointMode: config.endpointMode,
             chatCompletionsPath: normalizeEndpointPath(config.chatCompletionsPath, fallback: ChatConfig.defaultChatCompletionsPath),
             imagesGenerationsPath: normalizeEndpointPath(config.imagesGenerationsPath, fallback: ChatConfig.defaultImagesGenerationsPath),
@@ -378,7 +388,19 @@ enum ChatConfigStore {
             marketSymbols: config.marketSymbols.trimmingCharacters(in: .whitespacesAndNewlines),
             hotNewsContextEnabled: config.hotNewsContextEnabled,
             hotNewsCount: min(max(config.hotNewsCount, 1), 12),
+            memoryModeEnabled: config.memoryModeEnabled,
             soundEffectsEnabled: config.soundEffectsEnabled
         )
+    }
+
+    private static func migratedModelNameIfNeeded(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return trimmed }
+
+        let hasCompletedOnboarding = UserDefaults.standard.bool(forKey: onboardingDoneKey)
+        if !hasCompletedOnboarding && trimmed == legacyDefaultModel {
+            return ChatConfig.default.model
+        }
+        return trimmed
     }
 }
