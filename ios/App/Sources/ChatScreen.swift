@@ -416,6 +416,8 @@ struct ChatScreen: View {
             NativeTranscriptScrollView(
                 historyContent: AnyView(transcriptHistoryContent()),
                 historyVersion: transcriptHistoryVersion,
+                streamingLeadContent: activeStreamingLeadContent,
+                streamingLeadSignature: activeStreamingLeadSignature,
                 streamingMessage: activeStreamingRenderedMessage,
                 command: transcriptCommand,
                 onMetricsChanged: { metrics in
@@ -925,12 +927,48 @@ struct ChatScreen: View {
         return makeDisplaySafeMessage(last, preserveStreamingState: true)
     }
 
+    private var activeStreamingLeadUserMessage: ChatMessage? {
+        guard let active = activeStreamingRenderedMessage,
+              renderedMessages.last?.id == active.id,
+              renderedMessages.count >= 2 else {
+            return nil
+        }
+        let candidate = makeDisplaySafeMessage(renderedMessages[renderedMessages.count - 2])
+        return candidate.role == .user ? candidate : nil
+    }
+
+    private var activeStreamingLeadSignature: String? {
+        activeStreamingLeadUserMessage.map {
+            "\($0.id.uuidString)|\($0.content.count)|\($0.imageAttachments.count)|\($0.fileAttachments.count)"
+        }
+    }
+
+    private var activeStreamingLeadContent: AnyView? {
+        guard let leadUser = activeStreamingLeadUserMessage else { return nil }
+        return AnyView(
+            MessageBubbleView(
+                message: leadUser,
+                codeThemeMode: viewModel.config.codeThemeMode,
+                apiKey: viewModel.config.apiKey,
+                apiBaseURL: viewModel.config.normalizedBaseURL,
+                showsAssistantActionBar: false,
+                onRegenerate: nil
+            )
+            .padding(.horizontal, 12)
+        )
+    }
+
     private var frozenRenderedMessages: [ChatMessage] {
         guard let activeStreamingRenderedMessage,
               renderedMessages.last?.id == activeStreamingRenderedMessage.id else {
             return renderedMessages
         }
-        return Array(renderedMessages.dropLast())
+        var frozen = Array(renderedMessages.dropLast())
+        if let lead = activeStreamingLeadUserMessage,
+           frozen.last?.id == lead.id {
+            frozen.removeLast()
+        }
+        return frozen
     }
 
     private var isRenderingWindowed: Bool {
@@ -1701,6 +1739,8 @@ private struct ChatTranscriptCommand: Equatable {
 private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
     let historyContent: AnyView
     let historyVersion: String
+    let streamingLeadContent: AnyView?
+    let streamingLeadSignature: String?
     let streamingMessage: ChatMessage?
     let command: ChatTranscriptCommand?
     let onMetricsChanged: (ChatTranscriptMetrics) -> Void
@@ -1713,6 +1753,8 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
         uiViewController.update(
             historyContent: historyContent,
             historyVersion: historyVersion,
+            streamingLeadContent: streamingLeadContent,
+            streamingLeadSignature: streamingLeadSignature,
             streamingMessage: streamingMessage,
             command: command,
             onMetricsChanged: onMetricsChanged
@@ -1723,6 +1765,7 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
         private let scrollView = UIScrollView()
         private let stackView = UIStackView()
         private let historyHostingController = UIHostingController(rootView: AnyView(EmptyView()))
+        private let streamingLeadHostingController = UIHostingController(rootView: AnyView(EmptyView()))
         private let streamingView = NativeStreamingAssistantView()
         private let spacerView = UIView()
         private var onMetricsChanged: (ChatTranscriptMetrics) -> Void
@@ -1731,6 +1774,8 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
         private var pendingCommand: ChatTranscriptCommand?
         private var lastHistoryVersion: String?
         private var lastStreamingSignature: String?
+        private var lastStreamingLeadSignature: String?
+        private var lastStreamingMessageID: UUID?
 
         init(onMetricsChanged: @escaping (ChatTranscriptMetrics) -> Void) {
             self.onMetricsChanged = onMetricsChanged
@@ -1776,6 +1821,14 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             stackView.addArrangedSubview(historyHostingController.view)
             historyHostingController.didMove(toParent: self)
 
+            streamingLeadHostingController.sizingOptions = [.intrinsicContentSize]
+            streamingLeadHostingController.view.backgroundColor = .clear
+            streamingLeadHostingController.view.translatesAutoresizingMaskIntoConstraints = false
+            streamingLeadHostingController.view.isHidden = true
+            addChild(streamingLeadHostingController)
+            stackView.addArrangedSubview(streamingLeadHostingController.view)
+            streamingLeadHostingController.didMove(toParent: self)
+
             streamingView.translatesAutoresizingMaskIntoConstraints = false
             streamingView.isHidden = true
             stackView.addArrangedSubview(streamingView)
@@ -1805,6 +1858,8 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
         func update(
             historyContent: AnyView,
             historyVersion: String,
+            streamingLeadContent: AnyView?,
+            streamingLeadSignature: String?,
             streamingMessage: ChatMessage?,
             command: ChatTranscriptCommand?,
             onMetricsChanged: @escaping (ChatTranscriptMetrics) -> Void
@@ -1812,12 +1867,36 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             self.onMetricsChanged = onMetricsChanged
 
             let historyChanged = historyVersion != lastHistoryVersion
-            if historyChanged {
+            let streamingMessageID = streamingMessage?.id
+            let streamingIdentityChanged = streamingMessageID != lastStreamingMessageID
+            if historyChanged || streamingIdentityChanged {
                 UIView.performWithoutAnimation {
                     historyHostingController.rootView = historyContent
                     historyHostingController.view.invalidateIntrinsicContentSize()
                 }
                 lastHistoryVersion = historyVersion
+                lastStreamingMessageID = streamingMessageID
+            }
+
+            var streamingLeadChanged = false
+            if let streamingLeadContent {
+                let normalizedLeadSignature = streamingLeadSignature ?? "streaming-lead-visible"
+                if normalizedLeadSignature != lastStreamingLeadSignature || streamingLeadHostingController.view.isHidden {
+                    UIView.performWithoutAnimation {
+                        streamingLeadHostingController.rootView = streamingLeadContent
+                        streamingLeadHostingController.view.invalidateIntrinsicContentSize()
+                        streamingLeadHostingController.view.isHidden = false
+                    }
+                    lastStreamingLeadSignature = normalizedLeadSignature
+                    streamingLeadChanged = true
+                }
+            } else if !streamingLeadHostingController.view.isHidden || lastStreamingLeadSignature != nil {
+                UIView.performWithoutAnimation {
+                    streamingLeadHostingController.rootView = AnyView(EmptyView())
+                    streamingLeadHostingController.view.isHidden = true
+                }
+                lastStreamingLeadSignature = nil
+                streamingLeadChanged = true
             }
 
             let newStreamingSignature = streamingMessage.map {
@@ -1846,7 +1925,7 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             }
 
             view.setNeedsLayout()
-            if historyChanged || commandChanged {
+            if historyChanged || commandChanged || streamingLeadChanged || streamingIdentityChanged {
                 view.layoutIfNeeded()
                 applyPendingCommandIfNeeded()
             }
