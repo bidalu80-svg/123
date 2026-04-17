@@ -499,7 +499,7 @@ struct ChatScreen: View {
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .padding(.horizontal, 18)
         .padding(.top, 14)
-        .padding(.bottom, activeStreamingRenderedMessage == nil ? 18 : 2)
+        .padding(.bottom, 8)
     }
 
     private var composer: some View {
@@ -1786,6 +1786,7 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
         private var lastStreamingSignature: String?
         private var lastStreamingLeadSignature: String?
         private var lastStreamingMessageID: UUID?
+        private var pendingStreamingHideWorkItem: DispatchWorkItem?
 
         init(onMetricsChanged: @escaping (ChatTranscriptMetrics) -> Void) {
             self.onMetricsChanged = onMetricsChanged
@@ -1795,6 +1796,10 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
         @available(*, unavailable)
         required init?(coder: NSCoder) {
             fatalError("init(coder:) has not been implemented")
+        }
+
+        deinit {
+            pendingStreamingHideWorkItem?.cancel()
         }
 
         override func viewDidLoad() {
@@ -1913,6 +1918,8 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
                 "\($0.id.uuidString)|\($0.content.count)|\($0.imageAttachments.count)|\($0.fileAttachments.count)"
             }
             if let streamingMessage {
+                pendingStreamingHideWorkItem?.cancel()
+                pendingStreamingHideWorkItem = nil
                 if newStreamingSignature != lastStreamingSignature || streamingView.isHidden {
                     UIView.performWithoutAnimation {
                         streamingView.isHidden = false
@@ -1921,11 +1928,27 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
                     lastStreamingSignature = newStreamingSignature
                 }
             } else if !streamingView.isHidden || lastStreamingSignature != nil {
-                UIView.performWithoutAnimation {
-                    streamingView.reset()
-                    streamingView.isHidden = true
+                let hideStreamingView: () -> Void = { [weak self] in
+                    guard let self else { return }
+                    UIView.performWithoutAnimation {
+                        self.streamingView.reset()
+                        self.streamingView.isHidden = true
+                    }
+                    self.lastStreamingSignature = nil
+                    self.pendingStreamingHideWorkItem = nil
+                    self.reportMetrics()
                 }
-                lastStreamingSignature = nil
+
+                if historyChanged {
+                    pendingStreamingHideWorkItem?.cancel()
+                    let workItem = DispatchWorkItem(block: hideStreamingView)
+                    pendingStreamingHideWorkItem = workItem
+                    DispatchQueue.main.async(execute: workItem)
+                } else {
+                    pendingStreamingHideWorkItem?.cancel()
+                    pendingStreamingHideWorkItem = nil
+                    hideStreamingView()
+                }
             }
 
             var commandChanged = false
