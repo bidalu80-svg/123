@@ -58,53 +58,17 @@ struct MessageBubbleView: View {
     }
 
     private var assistantMessageView: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            assistantIdentityHeader
-                .padding(.bottom, 6)
-
+        VStack(alignment: .leading, spacing: 6) {
             content
 
             if showsAssistantActionBar {
                 assistantActionBar
-                    .padding(.top, 10)
+                    .padding(.top, 2)
             }
         }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 2)
+        .padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var assistantIdentityHeader: some View {
-        HStack(spacing: 8) {
-            assistantIdentityIcon
-
-            Text("IEXA")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.primary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    @ViewBuilder
-    private var assistantIdentityIcon: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(Color.black)
-
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .stroke(Color.white.opacity(0.16), lineWidth: 0.8)
-
-            HStack(spacing: 1) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 8, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.96))
-                Image(systemName: "sparkles")
-                    .font(.system(size: 5, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.86))
-                    .offset(y: 2)
-            }
-        }
-        .frame(width: 18, height: 18)
     }
 
     private var assistantActionBar: some View {
@@ -213,19 +177,19 @@ struct MessageBubbleView: View {
 
     private var userMessageView: some View {
         HStack {
-            Spacer(minLength: 68)
+            Spacer(minLength: 62)
             userMessageContent
-                .padding(.vertical, 13)
-                .padding(.horizontal, 17)
+                .padding(.vertical, 12)
+                .padding(.horizontal, 16)
                 .background(
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
                         .fill(userBubbleColor)
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
                         .stroke(Color.black.opacity(colorScheme == .dark ? 0.12 : 0.035), lineWidth: 0.8)
                 )
-                .frame(maxWidth: 290, alignment: .trailing)
+                .frame(maxWidth: 312, alignment: .trailing)
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
     }
@@ -239,8 +203,8 @@ struct MessageBubbleView: View {
                     .foregroundStyle(.secondary)
             } else if let fallback = fallbackPlainText {
                 Text(fallback)
-                    .font(.system(size: 18, weight: .regular))
-                    .lineSpacing(5)
+                    .font(.system(size: 16, weight: .regular))
+                    .lineSpacing(4)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
             } else {
@@ -383,8 +347,8 @@ struct MessageBubbleView: View {
         switch segment {
         case .text(let text):
             Text(text)
-                .font(.system(size: 18, weight: .regular))
-                .lineSpacing(5)
+                .font(.system(size: 16, weight: .regular))
+                .lineSpacing(4)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
         case .code(let language, let content):
@@ -416,16 +380,16 @@ struct MessageBubbleView: View {
 
     private var sectionDivider: some View {
         Divider()
-            .overlay(Color.black.opacity(colorScheme == .dark ? 0.2 : 0.1))
-            .padding(.vertical, 8)
+            .overlay(Color.secondary.opacity(colorScheme == .dark ? 0.30 : 0.22))
+            .padding(.vertical, 10)
     }
 
     private func selectableTextContent(_ text: String) -> some View {
         SelectableLinkTextView(
             text: text,
             textColor: UIColor.label,
-            linkColor: UIColor.systemGray,
-            font: .systemFont(ofSize: 17, weight: .regular),
+            linkColor: UIColor.secondaryLabel,
+            font: .systemFont(ofSize: 16, weight: .regular),
             renderMarkdown: message.role == .assistant && !message.isStreaming
         )
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -556,13 +520,13 @@ struct MessageBubbleView: View {
             }
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 13)
+        .padding(.vertical, 12)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(codeBackgroundColor)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(codeCardBorderColor, lineWidth: 1)
         )
     }
@@ -770,11 +734,13 @@ struct MessageBubbleView: View {
     private var codeBackgroundColor: Color {
         switch codeThemeMode {
         case .vscodeDark:
-            return Color(red: 0.10, green: 0.10, blue: 0.11)
+            return Color(red: 0.12, green: 0.12, blue: 0.14)
         case .githubLight:
-            return Color(red: 0.95, green: 0.95, blue: 0.96)
+            return Color(red: 0.97, green: 0.97, blue: 0.975)
         case .followApp:
-            return colorScheme == .dark ? Color(red: 0.10, green: 0.10, blue: 0.11) : Color(red: 0.95, green: 0.95, blue: 0.96)
+            return colorScheme == .dark
+                ? Color(red: 0.12, green: 0.12, blue: 0.14)
+                : Color(red: 0.97, green: 0.97, blue: 0.975)
         }
     }
 
@@ -790,7 +756,9 @@ struct MessageBubbleView: View {
     }
 
     private var userBubbleColor: Color {
-        colorScheme == .dark ? Color(red: 0.18, green: 0.18, blue: 0.2) : Color(red: 0.94, green: 0.94, blue: 0.95)
+        colorScheme == .dark
+            ? Color(red: 0.20, green: 0.20, blue: 0.22)
+            : Color(red: 0.93, green: 0.93, blue: 0.94)
     }
 
     private var saveFeedbackBinding: Binding<Bool> {

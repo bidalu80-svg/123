@@ -10,7 +10,6 @@ struct ChatScreen: View {
 
     private let sidebarWidth: CGFloat = 286
     private let edgeDragActivationWidth: CGFloat = 28
-    private let headerCenterMinHorizontalInset: CGFloat = 76
     private let maxRenderedMessages = 120
     private let maxRenderedCharacters = 260_000
     private let maxSingleRenderedMessageChars = 80_000
@@ -41,8 +40,6 @@ struct ChatScreen: View {
     @StateObject private var speechToText = SpeechToTextService(localeIdentifier: "zh-CN")
     @State private var speechDraftPrefix = ""
     @State private var showInitialConfigSheet = false
-    @State private var headerLeadingWidth: CGFloat = 36
-    @State private var headerTrailingWidth: CGFloat = 108
     @State private var transcriptMetrics = ChatTranscriptMetrics()
     @State private var transcriptCommandSequence = 0
     @State private var transcriptCommand: ChatTranscriptCommand?
@@ -198,74 +195,73 @@ struct ChatScreen: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 composer
             }
-            .background(Color(.systemBackground).ignoresSafeArea())
+            .background(
+                LinearGradient(
+                    colors: [
+                        Color(.systemBackground),
+                        Color(.secondarySystemBackground).opacity(0.22)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+            )
     }
 
     private var header: some View {
         VStack(spacing: 8) {
-            Text("IEXA")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .center)
+            HStack(spacing: 12) {
+                headerLeadingControls
 
-            ZStack {
-                HStack(spacing: 10) {
-                    headerLeadingControls
+                Text("IEXA")
+                    .font(.system(size: 18, weight: .semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+
+                Spacer(minLength: 0)
+
+                Button {
+                    viewModel.createNewSession()
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .frame(width: 36, height: 36)
+                }
+                .buttonStyle(.plain)
+
+                headerMoreControls
+            }
+
+            HStack(spacing: 8) {
+                headerModelSelector
+                    .frame(maxWidth: 260, alignment: .leading)
+
+                if !viewModel.isNetworkReachable {
+                    Text("离线")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Color.red)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
                         .background(
-                            GeometryReader { proxy in
-                                Color.clear.preference(
-                                    key: HeaderLeadingWidthPreferenceKey.self,
-                                    value: proxy.size.width
-                                )
-                            }
-                        )
-
-                    Spacer(minLength: 0)
-
-                    headerTrailingControls
-                        .background(
-                            GeometryReader { proxy in
-                                Color.clear.preference(
-                                    key: HeaderTrailingWidthPreferenceKey.self,
-                                    value: proxy.size.width
-                                )
-                            }
+                            Capsule(style: .continuous)
+                                .fill(Color.red.opacity(0.1))
                         )
                 }
-                .zIndex(0)
-
-                headerModelSelector
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.horizontal, headerCenterHorizontalInset)
-                    .zIndex(1)
+                Spacer(minLength: 0)
             }
         }
         .padding(.horizontal, 8)
         .padding(.top, 2)
         .padding(.bottom, 4)
-        .onPreferenceChange(HeaderLeadingWidthPreferenceKey.self) { newValue in
-            let width = ceil(newValue)
-            if width > 0, abs(width - headerLeadingWidth) > 0.5 {
-                headerLeadingWidth = width
-            }
-        }
-        .onPreferenceChange(HeaderTrailingWidthPreferenceKey.self) { newValue in
-            let width = ceil(newValue)
-            if width > 0, abs(width - headerTrailingWidth) > 0.5 {
-                headerTrailingWidth = width
-            }
-        }
-    }
-
-    private var headerCenterHorizontalInset: CGFloat {
-        max(headerCenterMinHorizontalInset, max(headerLeadingWidth, headerTrailingWidth) + 10)
     }
 
     private var headerLeadingControls: some View {
         Button {
             setSidebarOpen(!isSidebarOpen)
         } label: {
-            TwoLineMenuIcon()
+            Image(systemName: "line.3.horizontal")
+                .font(.system(size: 18, weight: .medium))
                 .foregroundStyle(.primary)
                 .frame(width: 34, height: 34)
         }
@@ -310,104 +306,60 @@ struct ChatScreen: View {
                 }
             }
         } label: {
-            HStack(spacing: 6) {
+            HStack(spacing: 7) {
                 Circle()
                     .fill(viewModel.isCurrentModelAvailable ? Color.green : Color.red)
                     .frame(width: 7, height: 7)
                 Text(modelVendorSubtitle(viewModel.config.model, apiURL: viewModel.config.normalizedBaseURL))
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 10, weight: .semibold))
             }
             .foregroundStyle(.primary)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
             .background(
-                Capsule(style: .continuous)
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .fill(Color(.secondarySystemBackground))
             )
         }
         .buttonStyle(.plain)
     }
 
-    private var headerTrailingControls: some View {
-        HStack(spacing: 8) {
-            if !viewModel.isNetworkReachable {
-                Text("离线")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color.red)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(
-                        Capsule(style: .continuous)
-                            .fill(Color.red.opacity(0.1))
-                    )
-            }
-
-            Button {
+    private var headerMoreControls: some View {
+        Menu {
+            Button(viewModel.isPrivateMode ? "关闭私密聊天" : "开启私密聊天", systemImage: viewModel.isPrivateMode ? "lock.open" : "lock") {
                 viewModel.setPrivateMode(!viewModel.isPrivateMode)
-            } label: {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 11, style: .continuous)
-                        .fill(
-                            viewModel.isPrivateMode
-                                ? Color(red: 0.14, green: 0.21, blue: 0.38)
-                                : Color(.secondarySystemBackground)
-                        )
+            }
 
-                    Image("PrivateModeIcon")
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: 30, height: 30)
-                        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                        .opacity(viewModel.isPrivateMode ? 1 : 0.72)
-                }
+            Button("配置", systemImage: "gearshape") {
+                showSettingsSheet = true
+            }
+            Button("测试中心", systemImage: "checkmark.circle") {
+                showTestSheet = true
+            }
+
+            Divider()
+
+            Button("示例", systemImage: "wand.and.stars") {
+                viewModel.loadDemoContent()
+            }
+            Button("清空", systemImage: "trash") {
+                viewModel.clearCurrentSessionMessages()
+            }
+            Button("停止", systemImage: "stop.circle") {
+                viewModel.stopGenerating()
+            }
+            .disabled(!viewModel.isSending)
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 19, weight: .medium))
+                .foregroundStyle(.primary)
                 .frame(width: 36, height: 36)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 11, style: .continuous)
-                        .stroke(
-                            viewModel.isPrivateMode
-                                ? Color(red: 0.29, green: 0.44, blue: 0.78)
-                                : Color.black.opacity(0.1),
-                            lineWidth: 0.9
-                        )
-                }
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(viewModel.isPrivateMode ? "关闭私密聊天" : "开启私密聊天")
-
-            Menu {
-                Button("新建会话", systemImage: "square.and.pencil") {
-                    viewModel.createNewSession()
-                }
-                Button("配置", systemImage: "gearshape") {
-                    showSettingsSheet = true
-                }
-                Button("测试中心", systemImage: "checkmark.circle") {
-                    showTestSheet = true
-                }
-                Divider()
-                Button("示例", systemImage: "wand.and.stars") {
-                    viewModel.loadDemoContent()
-                }
-                Button("清空", systemImage: "trash") {
-                    viewModel.clearCurrentSessionMessages()
-                }
-                Button("停止", systemImage: "stop.circle") {
-                    viewModel.stopGenerating()
-                }
-                .disabled(!viewModel.isSending)
-            } label: {
-                Image(systemName: "slider.horizontal.3")
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(.primary)
-                    .frame(width: 36, height: 36)
-            }
-            .buttonStyle(.plain)
         }
-        .frame(minWidth: 36, alignment: .trailing)
+        .buttonStyle(.plain)
     }
 
 
@@ -466,7 +418,7 @@ struct ChatScreen: View {
     }
 
     private func transcriptHistoryContent() -> some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 20) {
             if isRenderingWindowed {
                 renderWindowNotice
             }
@@ -487,9 +439,9 @@ struct ChatScreen: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .padding(.horizontal, 12)
-        .padding(.top, 16)
-        .padding(.bottom, activeStreamingRenderedMessage == nil ? 18 : 0)
+        .padding(.horizontal, 14)
+        .padding(.top, 14)
+        .padding(.bottom, activeStreamingRenderedMessage == nil ? 18 : 2)
     }
 
     private var composer: some View {
@@ -1705,22 +1657,6 @@ struct ChatScreen: View {
     }
 }
 
-private struct HeaderLeadingWidthPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
-}
-
-private struct HeaderTrailingWidthPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
-}
-
 private struct ChatTranscriptMetrics: Equatable {
     var canScroll: Bool = false
     var isAtBottom: Bool = true
@@ -2049,9 +1985,6 @@ private final class NativeStreamingAssistantView: UIView {
     }
 
     private let containerStack = UIStackView()
-    private let headerStack = UIStackView()
-    private let iconView = UIImageView()
-    private let nameLabel = UILabel()
     private let textView = UITextView()
     private let imageProgressStack = UIStackView()
     private let imageProgressCard = ImageGenerationProgressCardView()
@@ -2068,6 +2001,8 @@ private final class NativeStreamingAssistantView: UIView {
     private var waitingForCodeLanguageLine = false
     private var languageProbe = ""
     private var waitingDotAnimationRunning = false
+    private let streamRevealLayer = CAGradientLayer()
+    private var lastRevealAnimationAt: CFTimeInterval = 0
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -2130,6 +2065,7 @@ private final class NativeStreamingAssistantView: UIView {
             if !rawSuffix.isEmpty {
                 let displaySuffix = Self.streamingDisplayDeltaText(rawSuffix)
                 let appendedVisibleCharacters = appendStreamingText(displaySuffix)
+                triggerStreamRevealAnimationIfNeeded(appendedVisibleCharacters: appendedVisibleCharacters)
                 if shouldInvalidateLayout(forRawSuffix: displaySuffix, appendedVisibleCharacters: appendedVisibleCharacters) {
                     invalidateIntrinsicContentSize()
                     setNeedsLayout()
@@ -2140,6 +2076,7 @@ private final class NativeStreamingAssistantView: UIView {
             textView.attributedText = NSAttributedString()
             let displayText = Self.streamingDisplayDeltaText(sourceText)
             let appendedVisibleCharacters = appendStreamingText(displayText)
+            triggerStreamRevealAnimationIfNeeded(appendedVisibleCharacters: appendedVisibleCharacters)
             pendingLayoutCharacters = 0
             if appendedVisibleCharacters > 0 || !displayText.isEmpty {
                 invalidateIntrinsicContentSize()
@@ -2161,7 +2098,26 @@ private final class NativeStreamingAssistantView: UIView {
         stopWaitingDotAnimationIfNeeded()
         textView.isHidden = false
         textView.attributedText = nil
+        streamRevealLayer.removeAllAnimations()
+        streamRevealLayer.opacity = 0
+        lastRevealAnimationAt = 0
         invalidateIntrinsicContentSize()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let overlayHeight = max(textView.bounds.height, 1)
+        streamRevealLayer.frame = CGRect(
+            x: -textView.bounds.width,
+            y: 0,
+            width: textView.bounds.width * 3,
+            height: overlayHeight
+        )
+    }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        configureStreamRevealLayer()
     }
 
     override var intrinsicContentSize: CGSize {
@@ -2174,18 +2130,18 @@ private final class NativeStreamingAssistantView: UIView {
             let labelSize = imageProgressLabel.sizeThatFits(
                 CGSize(width: textWidth, height: .greatestFiniteMagnitude)
             )
-            let baseHeight: CGFloat = 18 + 6 + 300 + 10 + 16
+            let baseHeight: CGFloat = 8 + 300 + 10 + 14
             let totalHeight = baseHeight + ceil(labelSize.height)
             return CGSize(width: UIView.noIntrinsicMetric, height: totalHeight)
         }
 
         if !waitingDotStack.isHidden {
-            let totalHeight: CGFloat = 18 + 6 + 14 + 16
+            let totalHeight: CGFloat = 8 + 14 + 14
             return CGSize(width: UIView.noIntrinsicMetric, height: totalHeight)
         }
 
         let fitted = textView.sizeThatFits(CGSize(width: textWidth, height: .greatestFiniteMagnitude))
-        let totalHeight = 18 + 6 + fitted.height + 16
+        let totalHeight = 10 + fitted.height + 14
         return CGSize(width: UIView.noIntrinsicMetric, height: totalHeight)
     }
 
@@ -2204,31 +2160,6 @@ private final class NativeStreamingAssistantView: UIView {
             containerStack.topAnchor.constraint(equalTo: topAnchor, constant: 8),
             containerStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
         ])
-
-        headerStack.axis = .horizontal
-        headerStack.alignment = .center
-        headerStack.spacing = 8
-
-        iconView.translatesAutoresizingMaskIntoConstraints = false
-        iconView.image = UIImage(systemName: "sparkles")
-        iconView.tintColor = .white
-        iconView.contentMode = .center
-        iconView.backgroundColor = .black
-        iconView.layer.cornerRadius = 5
-        iconView.clipsToBounds = true
-        NSLayoutConstraint.activate([
-            iconView.widthAnchor.constraint(equalToConstant: 18),
-            iconView.heightAnchor.constraint(equalToConstant: 18)
-        ])
-
-        nameLabel.text = "IEXA"
-        nameLabel.font = .systemFont(ofSize: 15, weight: .semibold)
-        nameLabel.textColor = .label
-
-        headerStack.addArrangedSubview(iconView)
-        headerStack.addArrangedSubview(nameLabel)
-        headerStack.addArrangedSubview(UIView())
-        containerStack.addArrangedSubview(headerStack)
 
         imageProgressStack.axis = .vertical
         imageProgressStack.alignment = .leading
@@ -2282,15 +2213,18 @@ private final class NativeStreamingAssistantView: UIView {
         textView.textContainer.lineFragmentPadding = 0
         textView.textContainer.widthTracksTextView = true
         textView.panGestureRecognizer.isEnabled = true
+        textView.layer.masksToBounds = true
+        configureStreamRevealLayer()
+        textView.layer.addSublayer(streamRevealLayer)
         containerStack.addArrangedSubview(textView)
     }
 
     private var bodyTextAttributes: [NSAttributedString.Key: Any] {
         let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = 5
+        paragraph.lineSpacing = 4.5
         paragraph.paragraphSpacing = 2
         return [
-            .font: UIFont.systemFont(ofSize: 18, weight: .regular),
+            .font: UIFont.systemFont(ofSize: 16, weight: .regular),
             .foregroundColor: UIColor.label,
             .paragraphStyle: paragraph
         ]
@@ -2298,10 +2232,10 @@ private final class NativeStreamingAssistantView: UIView {
 
     private var codeTextAttributes: [NSAttributedString.Key: Any] {
         let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = 3
+        paragraph.lineSpacing = 2.8
         paragraph.paragraphSpacing = 4
         return [
-            .font: UIFont.monospacedSystemFont(ofSize: 14, weight: .regular),
+            .font: UIFont.monospacedSystemFont(ofSize: 13, weight: .regular),
             .foregroundColor: UIColor.label,
             .backgroundColor: UIColor.secondarySystemBackground,
             .paragraphStyle: paragraph
@@ -2395,6 +2329,44 @@ private final class NativeStreamingAssistantView: UIView {
             return true
         }
         return false
+    }
+
+    private func configureStreamRevealLayer() {
+        let peakAlpha: CGFloat = traitCollection.userInterfaceStyle == .dark ? 0.12 : 0.16
+        streamRevealLayer.colors = [
+            UIColor.clear.cgColor,
+            UIColor.white.withAlphaComponent(peakAlpha).cgColor,
+            UIColor.clear.cgColor
+        ]
+        streamRevealLayer.locations = [0, 0.48, 1]
+        streamRevealLayer.startPoint = CGPoint(x: 0, y: 0.5)
+        streamRevealLayer.endPoint = CGPoint(x: 1, y: 0.5)
+        streamRevealLayer.opacity = 0
+    }
+
+    private func triggerStreamRevealAnimationIfNeeded(appendedVisibleCharacters: Int) {
+        guard appendedVisibleCharacters > 0 else { return }
+        let now = CACurrentMediaTime()
+        guard now - lastRevealAnimationAt >= 0.14 else { return }
+        lastRevealAnimationAt = now
+
+        streamRevealLayer.removeAllAnimations()
+        streamRevealLayer.opacity = 0
+
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0
+        fade.toValue = 1
+        fade.duration = 0.09
+        fade.autoreverses = true
+        fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        streamRevealLayer.add(fade, forKey: "pulseFade")
+
+        let slide = CABasicAnimation(keyPath: "transform.translation.x")
+        slide.fromValue = -textView.bounds.width * 0.18
+        slide.toValue = textView.bounds.width * 0.18
+        slide.duration = 0.18
+        slide.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        streamRevealLayer.add(slide, forKey: "pulseSlide")
     }
 
     private func startWaitingDotAnimationIfNeeded() {
@@ -2557,17 +2529,6 @@ private struct InitialConfigSheet: View {
         }
         .navigationTitle("欢迎使用 IEXA")
         .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-private struct TwoLineMenuIcon: View {
-    var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Capsule(style: .continuous)
-                .frame(width: 18, height: 2.6)
-            Capsule(style: .continuous)
-                .frame(width: 12, height: 2.6)
-        }
     }
 }
 

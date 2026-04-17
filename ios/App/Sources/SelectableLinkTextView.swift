@@ -357,17 +357,17 @@ struct SelectableLinkTextView: UIViewRepresentable {
         let baseline = max(baseSize, 17)
         switch level {
         case 1:
-            return baseline + 12
-        case 2:
             return baseline + 8
-        case 3:
+        case 2:
             return baseline + 5
-        case 4:
+        case 3:
             return baseline + 3
+        case 4:
+            return baseline + 2
         case 5:
-            return baseline + 1.5
+            return baseline + 1
         default:
-            return baseline + 0.5
+            return baseline
         }
     }
 }
