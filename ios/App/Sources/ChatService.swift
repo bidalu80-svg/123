@@ -595,6 +595,22 @@ final class ChatService {
             throw ChatServiceError.invalidInput("生图模式需要输入图片描述（prompt）。")
         }
 
+        let progressTask = Task.detached(priority: .utility) {
+            let steps = [
+                "生图进度：正在理解提示词…",
+                "生图进度：正在构图…",
+                "生图进度：正在细化细节…",
+                "生图进度：正在高质量渲染…"
+            ]
+            for (index, line) in steps.enumerated() {
+                if Task.isCancelled { return }
+                let delta = index == 0 ? line : "\n\(line)"
+                onEvent(StreamChunk(rawLine: "", deltaText: delta, imageURLs: [], isDone: false))
+                try? await Task.sleep(nanoseconds: 700_000_000)
+            }
+        }
+        defer { progressTask.cancel() }
+
         let request = try ChatRequestBuilder.makeImagesGenerationRequest(config: config, prompt: prompt)
         let (data, response) = try await withRetry { [self] in
             try await session.data(for: request)

@@ -19,6 +19,7 @@ struct MessageBubbleView: View {
     @State private var codeRunOutputs: [String: String] = [:]
     @State private var codeRunErrors: [String: String] = [:]
     @State private var activeHTMLPreview: HTMLPreviewPayload?
+    @State private var activeImagePreview: ImagePreviewPayload?
     @State private var pendingPythonRun: PendingPythonRun?
     @State private var pythonStdinDraft = ""
     @State private var waitingDotPulse = false
@@ -40,6 +41,13 @@ struct MessageBubbleView: View {
         }
         .sheet(item: $activeHTMLPreview) { payload in
             HTMLPreviewSheet(title: payload.title, html: payload.html)
+        }
+        .sheet(item: $activeImagePreview) { payload in
+            ImagePreviewSheet(
+                source: payload.source,
+                apiKey: apiKey,
+                apiBaseURL: apiBaseURL
+            )
         }
         .sheet(item: $pendingPythonRun) { payload in
             pythonInputSheet(payload: payload)
@@ -666,6 +674,9 @@ struct MessageBubbleView: View {
                 .scaledToFit()
                 .frame(maxWidth: 300, maxHeight: 900, alignment: .leading)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .onTapGesture {
+                    openImagePreview(attachment)
+                }
                 .contextMenu {
                     if !attachment.requestURLString.isEmpty {
                         Button("复制图片链接") {
@@ -680,6 +691,9 @@ struct MessageBubbleView: View {
             RemoteImageView(urlString: urlString, apiKey: apiKey, baseURL: apiBaseURL)
                 .frame(maxWidth: 300, maxHeight: 900, alignment: .leading)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .onTapGesture {
+                    openImagePreview(attachment)
+                }
                 .contextMenu {
                     if !attachment.requestURLString.isEmpty {
                         Button("复制图片链接") {
@@ -794,12 +808,29 @@ struct MessageBubbleView: View {
         }
         return nil
     }
+
+    private func openImagePreview(_ attachment: ChatImageAttachment) {
+        if let data = attachment.decodedImageData, let image = UIImage(data: data) {
+            activeImagePreview = ImagePreviewPayload(source: .uiImage(image))
+            return
+        }
+
+        if let remote = attachment.renderURLString,
+           let normalized = normalizedRemoteURLString(remote) {
+            activeImagePreview = ImagePreviewPayload(source: .remote(urlString: normalized))
+        }
+    }
 }
 
 private struct HTMLPreviewPayload: Identifiable {
     let id = UUID()
     let title: String
     let html: String
+}
+
+private struct ImagePreviewPayload: Identifiable {
+    let id = UUID()
+    let source: ImagePreviewSheet.Source
 }
 
 private struct PendingPythonRun: Identifiable {

@@ -225,7 +225,7 @@ final class ChatViewModel: ObservableObject {
             id: placeholderID,
             role: .assistant,
             content: "",
-            isStreaming: config.streamEnabled && config.endpointMode == .chatCompletions
+            isStreaming: isStreamingPlaceholderEnabled(for: config.endpointMode)
         )
 
         var historyBeforeSend: [ChatMessage] = []
@@ -328,7 +328,7 @@ final class ChatViewModel: ObservableObject {
             id: placeholderID,
             role: .assistant,
             content: "",
-            isStreaming: config.streamEnabled && config.endpointMode == .chatCompletions
+            isStreaming: isStreamingPlaceholderEnabled(for: config.endpointMode)
         )
         appendMessageToTargetSession(placeholder, target: targetContext)
         persistSessions()
@@ -631,6 +631,18 @@ final class ChatViewModel: ObservableObject {
         }
 
         isCurrentModelAvailable = availableModels.contains(trimmed)
+    }
+
+    private func isStreamingPlaceholderEnabled(for endpointMode: APIEndpointMode) -> Bool {
+        switch endpointMode {
+        case .chatCompletions:
+            return config.streamEnabled
+        case .imageGenerations:
+            // Keep the placeholder in streaming state so users can see image-generation progress.
+            return true
+        case .audioTranscriptions, .embeddings, .models:
+            return false
+        }
     }
 
     private var currentSessionIndex: Int? {
