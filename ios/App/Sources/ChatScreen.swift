@@ -209,47 +209,34 @@ struct ChatScreen: View {
     }
 
     private var header: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 12) {
-                headerLeadingControls
+        HStack(spacing: 12) {
+            headerLeadingControls
 
-                Text("IEXA")
-                    .font(.system(size: 18, weight: .semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+            Text("IEXA")
+                .font(.system(size: 18, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
 
-                Spacer(minLength: 0)
-
-                Button {
-                    viewModel.createNewSession()
-                } label: {
-                    Image(systemName: "square.and.pencil")
-                        .font(.system(size: 18, weight: .medium))
-                        .foregroundStyle(.primary)
-                        .frame(width: 36, height: 36)
-                }
-                .buttonStyle(.plain)
-
-                headerMoreControls
+            if !viewModel.isNetworkReachable {
+                Circle()
+                    .fill(Color.red)
+                    .frame(width: 7, height: 7)
+                    .accessibilityLabel("离线")
             }
 
-            HStack(spacing: 8) {
-                headerModelSelector
-                    .frame(maxWidth: 260, alignment: .leading)
+            Spacer(minLength: 0)
 
-                if !viewModel.isNetworkReachable {
-                    Text("离线")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Color.red)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(
-                            Capsule(style: .continuous)
-                                .fill(Color.red.opacity(0.1))
-                        )
-                }
-                Spacer(minLength: 0)
+            Button {
+                viewModel.createNewSession()
+            } label: {
+                Image(systemName: "square.and.pencil")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .frame(width: 36, height: 36)
             }
+            .buttonStyle(.plain)
+
+            headerMoreControls
         }
         .padding(.horizontal, 8)
         .padding(.top, 2)
@@ -330,6 +317,27 @@ struct ChatScreen: View {
 
     private var headerMoreControls: some View {
         Menu {
+            Section("接口模式") {
+                ForEach(APIEndpointMode.allCases, id: \.self) { mode in
+                    Button {
+                        viewModel.config.endpointMode = mode
+                    } label: {
+                        if viewModel.config.endpointMode == mode {
+                            Label(mode.title, systemImage: "checkmark")
+                        } else {
+                            Text(mode.title)
+                        }
+                    }
+                }
+            }
+
+            Divider()
+
+            Button(viewModel.isLoadingModels ? "拉取模型中…" : "拉取模型列表", systemImage: "arrow.triangle.2.circlepath") {
+                Task { await viewModel.refreshAvailableModels() }
+            }
+            .disabled(viewModel.isLoadingModels)
+
             Button(viewModel.isPrivateMode ? "关闭私密聊天" : "开启私密聊天", systemImage: viewModel.isPrivateMode ? "lock.open" : "lock") {
                 viewModel.setPrivateMode(!viewModel.isPrivateMode)
             }
@@ -439,7 +447,7 @@ struct ChatScreen: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 18)
         .padding(.top, 14)
         .padding(.bottom, activeStreamingRenderedMessage == nil ? 18 : 2)
     }
@@ -2220,11 +2228,12 @@ private final class NativeStreamingAssistantView: UIView {
     }
 
     private var bodyTextAttributes: [NSAttributedString.Key: Any] {
+        let bodyFont = UIFont(name: "PingFangSC-Regular", size: 15.5) ?? UIFont.systemFont(ofSize: 15.5, weight: .regular)
         let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = 4.5
+        paragraph.lineSpacing = 4.2
         paragraph.paragraphSpacing = 2
         return [
-            .font: UIFont.systemFont(ofSize: 16, weight: .regular),
+            .font: bodyFont,
             .foregroundColor: UIColor.label,
             .paragraphStyle: paragraph
         ]

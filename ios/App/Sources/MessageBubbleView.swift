@@ -23,6 +23,7 @@ struct MessageBubbleView: View {
     @State private var pendingPythonRun: PendingPythonRun?
     @State private var pythonStdinDraft = ""
     @State private var waitingDotPulse = false
+    private let chatUIFont = UIFont(name: "PingFangSC-Regular", size: 15.5) ?? UIFont.systemFont(ofSize: 15.5, weight: .regular)
 
     var body: some View {
         Group {
@@ -203,7 +204,7 @@ struct MessageBubbleView: View {
                     .foregroundStyle(.secondary)
             } else if let fallback = fallbackPlainText {
                 Text(fallback)
-                    .font(.system(size: 16, weight: .regular))
+                    .font(.custom("PingFangSC-Regular", size: 15.5))
                     .lineSpacing(4)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
@@ -347,7 +348,7 @@ struct MessageBubbleView: View {
         switch segment {
         case .text(let text):
             Text(text)
-                .font(.system(size: 16, weight: .regular))
+                .font(.custom("PingFangSC-Regular", size: 15.5))
                 .lineSpacing(4)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
@@ -389,7 +390,7 @@ struct MessageBubbleView: View {
             text: text,
             textColor: UIColor.label,
             linkColor: UIColor.secondaryLabel,
-            font: .systemFont(ofSize: 16, weight: .regular),
+            font: chatUIFont,
             renderMarkdown: message.role == .assistant && !message.isStreaming
         )
         .frame(maxWidth: .infinity, alignment: .leading)

@@ -5,7 +5,7 @@ struct SelectableLinkTextView: UIViewRepresentable {
     let text: String
     var textColor: UIColor = .label
     var linkColor: UIColor = .secondaryLabel
-    var font: UIFont = .systemFont(ofSize: 17, weight: .regular)
+    var font: UIFont = UIFont(name: "PingFangSC-Regular", size: 15.5) ?? .systemFont(ofSize: 15.5, weight: .regular)
     var renderMarkdown: Bool = false
     private static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
     private static let markdownRenderQueue = DispatchQueue(label: "chatapp.markdown.render", qos: .userInitiated)
@@ -51,7 +51,7 @@ struct SelectableLinkTextView: UIViewRepresentable {
         }
 
         let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = 5
+        paragraph.lineSpacing = 4.6
 
         let attrs: [NSAttributedString.Key: Any] = [
             .font: font,
@@ -223,8 +223,8 @@ struct SelectableLinkTextView: UIViewRepresentable {
         guard !trimmed.isEmpty else { return NSAttributedString() }
 
         let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = 4.5
-        paragraph.paragraphSpacing = 10
+        paragraph.lineSpacing = 4.8
+        paragraph.paragraphSpacing = 8
         let fallbackAttributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: textColor,
@@ -354,7 +354,7 @@ struct SelectableLinkTextView: UIViewRepresentable {
     }
 
     private static func headingFontSize(level: Int, baseSize: CGFloat) -> CGFloat {
-        let baseline = max(baseSize, 17)
+        let baseline = max(baseSize, 16)
         switch level {
         case 1:
             return baseline + 8
