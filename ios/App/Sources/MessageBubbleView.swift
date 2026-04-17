@@ -728,42 +728,46 @@ struct MessageBubbleView: View {
 
     @ViewBuilder
     private func messageImage(_ attachment: ChatImageAttachment) -> some View {
+        let revealID = attachment.requestURLString.isEmpty
+            ? attachment.id.uuidString
+            : attachment.requestURLString
+
         if let data = attachment.decodedImageData, let uiImage = UIImage(data: data) {
-            Image(uiImage: uiImage)
-                .resizable()
-                .scaledToFit()
+            GeneratedImageRevealCard(revealID: revealID) {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .scaledToFit()
+            }
                 .frame(maxWidth: 300, maxHeight: 900, alignment: .leading)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .onTapGesture {
                     openImagePreview(attachment)
                 }
                 .contextMenu {
-                    if !attachment.requestURLString.isEmpty {
-                        Button("复制图片链接") {
-                            UIPasteboard.general.string = attachment.requestURLString
-                        }
-                    }
-                    Button("保存到相册") {
-                        saveImageAttachment(attachment)
-                    }
+                    imageContextActions(for: attachment)
                 }
         } else if let urlString = attachment.renderURLString {
-            RemoteImageView(urlString: urlString, apiKey: apiKey, baseURL: apiBaseURL)
+            GeneratedImageRevealCard(revealID: revealID) {
+                RemoteImageView(urlString: urlString, apiKey: apiKey, baseURL: apiBaseURL)
+            }
                 .frame(maxWidth: 300, maxHeight: 900, alignment: .leading)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .onTapGesture {
                     openImagePreview(attachment)
                 }
                 .contextMenu {
-                    if !attachment.requestURLString.isEmpty {
-                        Button("复制图片链接") {
-                            UIPasteboard.general.string = attachment.requestURLString
-                        }
-                    }
-                    Button("保存到相册") {
-                        saveImageAttachment(attachment)
-                    }
+                    imageContextActions(for: attachment)
                 }
+        }
+    }
+
+    @ViewBuilder
+    private func imageContextActions(for attachment: ChatImageAttachment) -> some View {
+        if !attachment.requestURLString.isEmpty {
+            Button("复制图片链接") {
+                UIPasteboard.general.string = attachment.requestURLString
+            }
+        }
+        Button("保存到相册") {
+            saveImageAttachment(attachment)
         }
     }
 
@@ -943,6 +947,69 @@ private struct ImageGenerationPlaceholderPattern: View {
             )
             .blendMode(.screen)
             .opacity(0.55)
+        }
+    }
+}
+
+private struct GeneratedImageRevealCard<Content: View>: View {
+    let revealID: String
+    let content: Content
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var revealProgress: CGFloat = 0
+
+    init(revealID: String, @ViewBuilder content: () -> Content) {
+        self.revealID = revealID
+        self.content = content()
+    }
+
+    var body: some View {
+        ZStack {
+            TimelineView(.animation(minimumInterval: 0.12, paused: revealProgress >= 1)) { timeline in
+                ImageGenerationPlaceholderPattern(phase: timeline.date.timeIntervalSinceReferenceDate)
+            }
+            .opacity(Double(max(0, 1 - revealProgress * 1.2)))
+
+            content
+                .opacity(Double(revealProgress))
+                .scaleEffect(1.02 - 0.02 * revealProgress)
+        }
+        .overlay {
+            GeometryReader { proxy in
+                let height = max(proxy.size.height, 1)
+                let offsetY = -26 + (height + 52) * revealProgress
+
+                LinearGradient(
+                    colors: [
+                        .clear,
+                        Color.white.opacity(colorScheme == .dark ? 0.24 : 0.42),
+                        .clear
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .frame(height: 42)
+                .offset(y: offsetY)
+                .opacity(revealProgress < 0.99 ? 1 : 0)
+                .blendMode(colorScheme == .dark ? .screen : .plusLighter)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.black.opacity(colorScheme == .dark ? 0.14 : 0.08), lineWidth: 1)
+        )
+        .onAppear {
+            startReveal()
+        }
+        .onChange(of: revealID) { _, _ in
+            startReveal()
+        }
+    }
+
+    private func startReveal() {
+        revealProgress = 0
+        withAnimation(.easeOut(duration: 1.18)) {
+            revealProgress = 1
         }
     }
 }
