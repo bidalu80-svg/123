@@ -15,6 +15,9 @@ struct TestCenterScreen: View {
                 Button("流式测试") {
                     Task { await viewModel.runStreamSmokeTest() }
                 }
+                NavigationLink("流式渲染实验室（UIKit）") {
+                    StreamingRenderLabScreen()
+                }
                 Button("UI 测试（填充示例）") {
                     viewModel.loadDemoContent()
                 }
