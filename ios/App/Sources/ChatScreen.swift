@@ -2069,7 +2069,8 @@ private final class NativeStreamingAssistantView: UIView {
             let labelSize = imageProgressLabel.sizeThatFits(
                 CGSize(width: textWidth, height: .greatestFiniteMagnitude)
             )
-            let totalHeight = 18 + 6 + 300 + 10 + ceil(labelSize.height) + 16
+            let baseHeight: CGFloat = 18 + 6 + 300 + 10 + 16
+            let totalHeight = baseHeight + ceil(labelSize.height)
             return CGSize(width: UIView.noIntrinsicMetric, height: totalHeight)
         }
 

@@ -233,6 +233,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
     var content: String
     let createdAt: Date
     var isStreaming: Bool
+    var isImageGenerationPlaceholder: Bool
     var imageAttachments: [ChatImageAttachment]
     var fileAttachments: [ChatFileAttachment]
 
@@ -242,6 +243,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         content: String,
         createdAt: Date = Date(),
         isStreaming: Bool = false,
+        isImageGenerationPlaceholder: Bool = false,
         imageAttachments: [ChatImageAttachment] = [],
         fileAttachments: [ChatFileAttachment] = []
     ) {
@@ -250,6 +252,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         self.content = content
         self.createdAt = createdAt
         self.isStreaming = isStreaming
+        self.isImageGenerationPlaceholder = isImageGenerationPlaceholder
         self.imageAttachments = imageAttachments
         self.fileAttachments = fileAttachments
     }
@@ -261,6 +264,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         content = try container.decode(String.self, forKey: .content)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         isStreaming = try container.decodeIfPresent(Bool.self, forKey: .isStreaming) ?? false
+        isImageGenerationPlaceholder = try container.decodeIfPresent(Bool.self, forKey: .isImageGenerationPlaceholder) ?? false
 
         if let images = try container.decodeIfPresent([ChatImageAttachment].self, forKey: .imageAttachments) {
             imageAttachments = images
@@ -280,6 +284,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         try container.encode(content, forKey: .content)
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(isStreaming, forKey: .isStreaming)
+        try container.encode(isImageGenerationPlaceholder, forKey: .isImageGenerationPlaceholder)
         try container.encode(imageAttachments, forKey: .imageAttachments)
         try container.encode(fileAttachments, forKey: .fileAttachments)
     }
@@ -290,6 +295,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         case content
         case createdAt
         case isStreaming
+        case isImageGenerationPlaceholder
         case imageAttachments
         case fileAttachments
         case attachments
