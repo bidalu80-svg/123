@@ -853,7 +853,10 @@ final class ChatViewModel: ObservableObject {
 
         if target.isPrivateMode {
             guard let msgIndex = privateMessages.firstIndex(where: { $0.id == id }) else { return }
-            privateMessages[msgIndex].content = normalizedReplyText
+            privateMessages[msgIndex].content = finalizedAssistantContent(
+                existingContent: privateMessages[msgIndex].content,
+                fallbackReplyText: normalizedReplyText
+            )
             privateMessages[msgIndex].imageAttachments = deduplicateImages(
                 privateMessages[msgIndex].imageAttachments + reply.imageAttachments
             )
@@ -870,7 +873,10 @@ final class ChatViewModel: ObservableObject {
         guard let index = sessionIndex(for: target),
               let msgIndex = sessions[index].messages.firstIndex(where: { $0.id == id }) else { return }
 
-        sessions[index].messages[msgIndex].content = normalizedReplyText
+        sessions[index].messages[msgIndex].content = finalizedAssistantContent(
+            existingContent: sessions[index].messages[msgIndex].content,
+            fallbackReplyText: normalizedReplyText
+        )
         sessions[index].messages[msgIndex].imageAttachments = deduplicateImages(
             sessions[index].messages[msgIndex].imageAttachments + reply.imageAttachments
         )
@@ -969,6 +975,14 @@ final class ChatViewModel: ObservableObject {
         text = text.replacingOccurrences(of: "__", with: "")
         text = text.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
         return text
+    }
+
+    private func finalizedAssistantContent(existingContent: String, fallbackReplyText: String) -> String {
+        let existing = existingContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !existing.isEmpty {
+            return existingContent
+        }
+        return fallbackReplyText
     }
 
     private func removeMessage(id: UUID, target: StreamTargetContext) {

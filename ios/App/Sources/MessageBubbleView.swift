@@ -426,7 +426,7 @@ struct MessageBubbleView: View {
             textColor: UIColor.label,
             linkColor: UIColor.secondaryLabel,
             font: chatUIFont,
-            renderMarkdown: message.role == .assistant && !message.isStreaming
+            renderMarkdown: false
         )
         .frame(maxWidth: .infinity, alignment: .leading)
     }
