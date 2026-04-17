@@ -2058,6 +2058,7 @@ private final class NativeStreamingAssistantView: UIView {
     private let imageProgressLabel = UILabel()
     private let waitingDotStack = UIStackView()
     private let waitingDotView = UIView()
+    private let waitingDotSpacer = UIView()
 
     private var currentMessageID: UUID?
     private var currentSourceText = ""
@@ -2250,6 +2251,7 @@ private final class NativeStreamingAssistantView: UIView {
 
         waitingDotStack.axis = .horizontal
         waitingDotStack.alignment = .leading
+        waitingDotStack.distribution = .fill
         waitingDotStack.spacing = 0
         waitingDotStack.isHidden = true
 
@@ -2261,7 +2263,13 @@ private final class NativeStreamingAssistantView: UIView {
             waitingDotView.widthAnchor.constraint(equalToConstant: 7),
             waitingDotView.heightAnchor.constraint(equalToConstant: 7)
         ])
+        waitingDotView.setContentHuggingPriority(.required, for: .horizontal)
+        waitingDotView.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        waitingDotSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        waitingDotSpacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         waitingDotStack.addArrangedSubview(waitingDotView)
+        waitingDotStack.addArrangedSubview(waitingDotSpacer)
         containerStack.addArrangedSubview(waitingDotStack)
 
         textView.isEditable = false
