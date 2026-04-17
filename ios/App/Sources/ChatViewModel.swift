@@ -5,6 +5,13 @@ import Network
 
 @MainActor
 final class ChatViewModel: ObservableObject {
+    enum ChatState: Equatable {
+        case idle
+        case sending
+        case streaming
+        case error(String)
+    }
+
     private struct StreamTargetContext: Sendable {
         let isPrivateMode: Bool
         let sessionID: UUID?
@@ -97,6 +104,7 @@ final class ChatViewModel: ObservableObject {
     @Published var isSending = false
     @Published var errorMessage = ""
     @Published var statusMessage = "准备就绪"
+    @Published var chatState: ChatState = .idle
     @Published var testLogs: [String] = []
 
     @Published var draftImageAttachments: [ChatImageAttachment] = []
@@ -115,7 +123,7 @@ final class ChatViewModel: ObservableObject {
 
     private let service: ChatService
     private var autoSaveEnabled = false
-    private let streamScrollThrottleInterval: TimeInterval = 0.18
+    private let streamScrollThrottleInterval: TimeInterval = 0.10
     private var lastStreamScrollSignal: Date = .distantPast
     private var inflightSendTask: Task<ChatReply, Error>?
     private var inflightTargetContext: StreamTargetContext?
@@ -219,12 +227,14 @@ final class ChatViewModel: ObservableObject {
         guard isNetworkReachable else {
             errorMessage = "当前网络不可用，请检查网络后重试。"
             statusMessage = "网络离线"
+            chatState = .error("网络离线")
             appendLog("聊天发送失败：设备当前离线。")
             return
         }
 
         errorMessage = ""
         statusMessage = "正在请求\(config.endpointMode.title)…"
+        chatState = .sending
         isSending = true
         if config.soundEffectsEnabled {
             SoundEffectPlayer.playSend()
@@ -279,6 +289,7 @@ final class ChatViewModel: ObservableObject {
         signalStreamScroll(force: true)
         beginBackgroundSendTask()
         startActiveStreamingSession(messageID: placeholderID, target: targetContext)
+        chatState = .streaming
 
         let task = Task<ChatReply, Error> { [service, config] in
             try await service.sendMessage(
@@ -299,10 +310,12 @@ final class ChatViewModel: ObservableObject {
             flushAndStopActiveStreamingSession(applyRemaining: true)
             finishStreamingMessage(id: placeholderID, reply: reply, target: targetContext)
             statusMessage = "\(config.endpointMode.title)请求成功"
+            chatState = .idle
             appendLog("接口测试成功：\(config.endpointMode.title)已返回结果。")
         } catch is CancellationError {
             flushAndStopActiveStreamingSession(applyRemaining: true)
             finishCancellation(id: placeholderID, target: targetContext)
+            chatState = .idle
         } catch {
             flushAndStopActiveStreamingSession(applyRemaining: true)
             if hasRenderableContent(for: placeholderID, target: targetContext) {
@@ -312,6 +325,7 @@ final class ChatViewModel: ObservableObject {
                 removeMessage(id: userMessage.id, target: targetContext)
                 errorMessage = error.localizedDescription
                 statusMessage = "发送失败"
+                chatState = .error(error.localizedDescription)
                 appendLog("聊天测试失败：\(error.localizedDescription)")
             }
         }
@@ -322,6 +336,7 @@ final class ChatViewModel: ObservableObject {
         inflightSendTask?.cancel()
         inflightSendTask = nil
         endBackgroundSendTask()
+        chatState = .idle
     }
 
     func regenerateLastAssistantReply() async {
@@ -341,6 +356,7 @@ final class ChatViewModel: ObservableObject {
 
         errorMessage = ""
         statusMessage = "正在重新生成…"
+        chatState = .sending
         isSending = true
         if config.soundEffectsEnabled {
             SoundEffectPlayer.playSend()
@@ -366,6 +382,7 @@ final class ChatViewModel: ObservableObject {
         signalStreamScroll(force: true)
         beginBackgroundSendTask()
         startActiveStreamingSession(messageID: placeholderID, target: targetContext)
+        chatState = .streaming
 
         let task = Task<ChatReply, Error> { [service, config] in
             try await service.sendMessage(
@@ -386,10 +403,12 @@ final class ChatViewModel: ObservableObject {
             flushAndStopActiveStreamingSession(applyRemaining: true)
             finishStreamingMessage(id: placeholderID, reply: reply, target: targetContext)
             statusMessage = "重新生成成功"
+            chatState = .idle
             appendLog("聊天测试：已重新生成上一条回复。")
         } catch is CancellationError {
             flushAndStopActiveStreamingSession(applyRemaining: true)
             finishCancellation(id: placeholderID, target: targetContext)
+            chatState = .idle
         } catch {
             flushAndStopActiveStreamingSession(applyRemaining: true)
             if hasRenderableContent(for: placeholderID, target: targetContext) {
@@ -398,6 +417,7 @@ final class ChatViewModel: ObservableObject {
                 removeMessage(id: placeholderID, target: targetContext)
                 errorMessage = error.localizedDescription
                 statusMessage = "重新生成失败"
+                chatState = .error(error.localizedDescription)
                 appendLog("重新生成失败：\(error.localizedDescription)")
             }
         }
@@ -687,6 +707,10 @@ final class ChatViewModel: ObservableObject {
         guard active.target.isPrivateMode == target.isPrivateMode,
               active.target.sessionID == target.sessionID else { return }
 
+        if chatState != .streaming {
+            chatState = .streaming
+        }
+
         if !chunk.imageURLs.isEmpty {
             active.enqueueImageURLs(chunk.imageURLs)
         }
@@ -870,6 +894,7 @@ final class ChatViewModel: ObservableObject {
             }
             syncVisibleMessagesIfNeeded(for: target)
             statusMessage = "已停止生成"
+            chatState = .idle
             appendLog("私密聊天：已停止本次生成。")
             return
         }
@@ -888,6 +913,7 @@ final class ChatViewModel: ObservableObject {
         sessions[index].title = buildSessionTitle(from: sessions[index])
         syncVisibleMessagesIfNeeded(for: target)
         statusMessage = "已停止生成"
+        chatState = .idle
         appendLog("聊天测试：用户已停止本次生成。")
     }
 
@@ -898,6 +924,7 @@ final class ChatViewModel: ObservableObject {
             privateMessages[msgIndex].isImageGenerationPlaceholder = false
             syncVisibleMessagesIfNeeded(for: target)
             statusMessage = "连接中断，已保留已生成内容"
+            chatState = .error(error.localizedDescription)
             appendLog("私密聊天中断：\(error.localizedDescription)")
             return
         }
@@ -911,6 +938,7 @@ final class ChatViewModel: ObservableObject {
         sessions[index].title = buildSessionTitle(from: sessions[index])
         syncVisibleMessagesIfNeeded(for: target)
         statusMessage = "连接中断，已保留已生成内容"
+        chatState = .error(error.localizedDescription)
         appendLog("聊天中断：\(error.localizedDescription)")
     }
 
