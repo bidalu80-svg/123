@@ -849,9 +849,11 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func finishStreamingMessage(id: UUID, reply: ChatReply, target: StreamTargetContext) {
+        let normalizedReplyText = normalizedFinalStreamingText(reply.text)
+
         if target.isPrivateMode {
             guard let msgIndex = privateMessages.firstIndex(where: { $0.id == id }) else { return }
-            privateMessages[msgIndex].content = reply.text
+            privateMessages[msgIndex].content = normalizedReplyText
             privateMessages[msgIndex].imageAttachments = deduplicateImages(
                 privateMessages[msgIndex].imageAttachments + reply.imageAttachments
             )
@@ -868,7 +870,7 @@ final class ChatViewModel: ObservableObject {
         guard let index = sessionIndex(for: target),
               let msgIndex = sessions[index].messages.firstIndex(where: { $0.id == id }) else { return }
 
-        sessions[index].messages[msgIndex].content = reply.text
+        sessions[index].messages[msgIndex].content = normalizedReplyText
         sessions[index].messages[msgIndex].imageAttachments = deduplicateImages(
             sessions[index].messages[msgIndex].imageAttachments + reply.imageAttachments
         )
@@ -953,6 +955,20 @@ final class ChatViewModel: ObservableObject {
         sessions[index].messages.append(message)
         sessions[index].updatedAt = Date()
         syncVisibleMessagesIfNeeded(for: target)
+    }
+
+    private func normalizedFinalStreamingText(_ raw: String) -> String {
+        var text = raw.replacingOccurrences(of: "\r\n", with: "\n")
+        text = text.replacingOccurrences(of: "(?m)^\\s{0,3}#{1,6}\\s*", with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?m)^\\s*[-*•]\\s+", with: "• ", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?m)^\\s*\\d+[\\.)、]\\s+", with: "• ", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?m)^\\s*>\\s?", with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?m)^\\s*([-*_])\\1{2,}\\s*$", with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?<!`)`([^`\\n]+)`(?!`)", with: "$1", options: .regularExpression)
+        text = text.replacingOccurrences(of: "**", with: "")
+        text = text.replacingOccurrences(of: "__", with: "")
+        text = text.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
+        return text
     }
 
     private func removeMessage(id: UUID, target: StreamTargetContext) {
