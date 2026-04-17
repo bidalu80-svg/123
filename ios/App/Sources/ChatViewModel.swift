@@ -15,6 +15,42 @@ final class ChatViewModel: ObservableObject {
         var imageURLs: [String]
     }
 
+    private final class ActiveStreamState {
+        let messageID: UUID
+        let target: StreamTargetContext
+        let buffer: StreamBuffer
+        var renderer: StreamRenderer?
+        private(set) var pendingImageURLs: [String] = []
+        private var pendingImageSet: Set<String> = []
+
+        init(messageID: UUID, target: StreamTargetContext, buffer: StreamBuffer) {
+            self.messageID = messageID
+            self.target = target
+            self.buffer = buffer
+        }
+
+        func enqueueImageURLs(_ rawURLs: [String]) {
+            guard !rawURLs.isEmpty else { return }
+            for raw in rawURLs {
+                let cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !cleaned.isEmpty, pendingImageSet.insert(cleaned).inserted else { continue }
+                pendingImageURLs.append(cleaned)
+            }
+        }
+
+        func consumePendingImageURLs() -> [String] {
+            guard !pendingImageURLs.isEmpty else { return [] }
+            let output = pendingImageURLs
+            pendingImageURLs = []
+            return output
+        }
+
+        func clearPendingImages() {
+            pendingImageURLs = []
+            pendingImageSet.removeAll()
+        }
+    }
+
     @Published var config: ChatConfig {
         didSet {
             updateCurrentModelAvailability()
@@ -51,13 +87,11 @@ final class ChatViewModel: ObservableObject {
     private let service: ChatService
     private var autoSaveEnabled = false
     private let streamScrollThrottleInterval: TimeInterval = 0.12
-    private let streamUIFlushInterval: TimeInterval = 1.0 / 30.0
     private var lastStreamScrollSignal: Date = .distantPast
     private var inflightSendTask: Task<ChatReply, Error>?
     private var inflightTargetContext: StreamTargetContext?
-    private var pendingStreamDeltas: [UUID: PendingStreamDelta] = [:]
-    private var pendingStreamTargets: [UUID: StreamTargetContext] = [:]
-    private var streamFlushTask: Task<Void, Never>?
+    private var activeStreamState: ActiveStreamState?
+    private var activeStreamGeneration: Int = 0
     private var privateMessages: [ChatMessage] = []
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
     private var pathMonitor: NWPathMonitor?
@@ -214,6 +248,7 @@ final class ChatViewModel: ObservableObject {
         persistSessions()
         signalStreamScroll(force: true)
         beginBackgroundSendTask()
+        startActiveStreamingSession(messageID: placeholderID, target: targetContext)
 
         let task = Task<ChatReply, Error> { [service, config] in
             try await service.sendMessage(
@@ -231,15 +266,15 @@ final class ChatViewModel: ObservableObject {
 
         do {
             let reply = try await task.value
-            flushPendingStreamUpdates(force: true)
+            flushAndStopActiveStreamingSession(applyRemaining: true)
             finishStreamingMessage(id: placeholderID, reply: reply, target: targetContext)
             statusMessage = "\(config.endpointMode.title)请求成功"
             appendLog("接口测试成功：\(config.endpointMode.title)已返回结果。")
         } catch is CancellationError {
-            flushPendingStreamUpdates(force: true)
+            flushAndStopActiveStreamingSession(applyRemaining: true)
             finishCancellation(id: placeholderID, target: targetContext)
         } catch {
-            flushPendingStreamUpdates(force: true)
+            flushAndStopActiveStreamingSession(applyRemaining: true)
             if hasRenderableContent(for: placeholderID, target: targetContext) {
                 finishInterruption(id: placeholderID, error: error, target: targetContext)
             } else {
@@ -253,7 +288,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     func stopGenerating() {
-        flushPendingStreamUpdates(force: true)
+        flushAndStopActiveStreamingSession(applyRemaining: true)
         inflightSendTask?.cancel()
         inflightSendTask = nil
         endBackgroundSendTask()
@@ -299,6 +334,7 @@ final class ChatViewModel: ObservableObject {
         persistSessions()
         signalStreamScroll(force: true)
         beginBackgroundSendTask()
+        startActiveStreamingSession(messageID: placeholderID, target: targetContext)
 
         let task = Task<ChatReply, Error> { [service, config] in
             try await service.sendMessage(
@@ -316,15 +352,15 @@ final class ChatViewModel: ObservableObject {
 
         do {
             let reply = try await task.value
-            flushPendingStreamUpdates(force: true)
+            flushAndStopActiveStreamingSession(applyRemaining: true)
             finishStreamingMessage(id: placeholderID, reply: reply, target: targetContext)
             statusMessage = "重新生成成功"
             appendLog("聊天测试：已重新生成上一条回复。")
         } catch is CancellationError {
-            flushPendingStreamUpdates(force: true)
+            flushAndStopActiveStreamingSession(applyRemaining: true)
             finishCancellation(id: placeholderID, target: targetContext)
         } catch {
-            flushPendingStreamUpdates(force: true)
+            flushAndStopActiveStreamingSession(applyRemaining: true)
             if hasRenderableContent(for: placeholderID, target: targetContext) {
                 finishInterruption(id: placeholderID, error: error, target: targetContext)
             } else {
@@ -603,103 +639,104 @@ final class ChatViewModel: ObservableObject {
 
     private func appendStreamingChunk(_ chunk: StreamChunk, to id: UUID, target: StreamTargetContext) {
         guard !chunk.deltaText.isEmpty || !chunk.imageURLs.isEmpty else { return }
+        guard let active = activeStreamState else { return }
+        guard active.messageID == id else { return }
+        guard active.target.isPrivateMode == target.isPrivateMode,
+              active.target.sessionID == target.sessionID else { return }
 
-        var pending = pendingStreamDeltas[id] ?? PendingStreamDelta(deltaText: "", imageURLs: [])
-        if !chunk.deltaText.isEmpty {
-            pending.deltaText += chunk.deltaText
-        }
         if !chunk.imageURLs.isEmpty {
-            for rawURL in chunk.imageURLs {
-                let cleaned = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
-                if cleaned.isEmpty || pending.imageURLs.contains(cleaned) { continue }
-                pending.imageURLs.append(cleaned)
-            }
+            active.enqueueImageURLs(chunk.imageURLs)
         }
-        pendingStreamDeltas[id] = pending
-        pendingStreamTargets[id] = target
-        schedulePendingStreamFlushIfNeeded()
-    }
 
-    private func schedulePendingStreamFlushIfNeeded() {
-        guard streamFlushTask == nil else { return }
-        streamFlushTask = Task { [weak self] in
-            await self?.drainPendingStreamLoop()
+        if !chunk.deltaText.isEmpty {
+            active.buffer.append(chunk.deltaText)
+        } else {
+            applyRenderedStreamDeltaForActiveSession(
+                "",
+                generation: activeStreamGeneration,
+                includePendingImages: true
+            )
         }
     }
 
-    private func drainPendingStreamLoop() async {
-        let interval = max(0.012, streamUIFlushInterval)
-        while !Task.isCancelled {
-            let hasRemaining = flushPendingStreamUpdates()
-            if !hasRemaining {
-                streamFlushTask = nil
-                return
+    private func startActiveStreamingSession(messageID: UUID, target: StreamTargetContext) {
+        flushAndStopActiveStreamingSession(applyRemaining: false)
+
+        activeStreamGeneration &+= 1
+        let generation = activeStreamGeneration
+        let buffer = StreamBuffer(maxBufferedCharacters: 120_000)
+        let state = ActiveStreamState(messageID: messageID, target: target, buffer: buffer)
+
+        let renderer = StreamRenderer(
+            buffer: buffer,
+            configuration: StreamRenderer.Configuration(
+                refreshInterval: 0.05,
+                maxCharactersPerFrame: 50,
+                maxCharactersFetchedPerTick: 50
+            ),
+            onBackgroundBatch: nil,
+            onFrameRender: { [weak self] delta in
+                Task { @MainActor in
+                    self?.applyRenderedStreamDeltaForActiveSession(
+                        delta,
+                        generation: generation,
+                        includePendingImages: true
+                    )
+                }
+            },
+            onDrainComplete: { [weak self] in
+                Task { @MainActor in
+                    self?.applyRenderedStreamDeltaForActiveSession(
+                        "",
+                        generation: generation,
+                        includePendingImages: true
+                    )
+                }
             }
-            try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
-        }
-        streamFlushTask = nil
+        )
+        state.renderer = renderer
+        activeStreamState = state
+        renderer.start()
     }
 
-    @discardableResult
-    private func flushPendingStreamUpdates(force: Bool = false) -> Bool {
-        guard !pendingStreamDeltas.isEmpty else { return false }
-        if force {
-            streamFlushTask?.cancel()
-            streamFlushTask = nil
-        }
+    private func applyRenderedStreamDeltaForActiveSession(
+        _ deltaText: String,
+        generation: Int,
+        includePendingImages: Bool
+    ) {
+        guard generation == activeStreamGeneration else { return }
+        guard let active = activeStreamState else { return }
 
-        let keys = Array(pendingStreamDeltas.keys)
-        for id in keys {
-            guard var pending = pendingStreamDeltas[id] else { continue }
-            guard let target = pendingStreamTargets[id] ?? inflightTargetContext else {
-                pendingStreamDeltas.removeValue(forKey: id)
-                pendingStreamTargets.removeValue(forKey: id)
-                continue
-            }
+        let images = includePendingImages ? active.consumePendingImageURLs() : []
+        guard !deltaText.isEmpty || !images.isEmpty else { return }
 
-            var deltaToApply = PendingStreamDelta(deltaText: "", imageURLs: pending.imageURLs)
-            pending.imageURLs = []
-
-            if force {
-                deltaToApply.deltaText = pending.deltaText
-                pending.deltaText = ""
-            } else if !pending.deltaText.isEmpty {
-                let chunkChars = smoothChunkCharacterCount(forPendingTextCount: pending.deltaText.count)
-                let split = splitPrefix(pending.deltaText, maxCharacters: chunkChars)
-                deltaToApply.deltaText = split.prefix
-                pending.deltaText = split.suffix
-            }
-
-            if !deltaToApply.deltaText.isEmpty || !deltaToApply.imageURLs.isEmpty {
-                applyPendingStreamDelta(deltaToApply, to: id, target: target)
-            }
-
-            if pending.deltaText.isEmpty && pending.imageURLs.isEmpty {
-                pendingStreamDeltas.removeValue(forKey: id)
-                pendingStreamTargets.removeValue(forKey: id)
-            } else {
-                pendingStreamDeltas[id] = pending
-            }
-        }
-
-        return !pendingStreamDeltas.isEmpty
+        applyPendingStreamDelta(
+            PendingStreamDelta(deltaText: deltaText, imageURLs: images),
+            to: active.messageID,
+            target: active.target
+        )
     }
 
-    private func smoothChunkCharacterCount(forPendingTextCount pendingCount: Int) -> Int {
-        if pendingCount >= 1600 { return 240 }
-        if pendingCount >= 1000 { return 180 }
-        if pendingCount >= 600 { return 120 }
-        if pendingCount >= 300 { return 72 }
-        if pendingCount >= 120 { return 36 }
-        if pendingCount >= 48 { return 18 }
-        return 8
-    }
+    private func flushAndStopActiveStreamingSession(applyRemaining: Bool) {
+        guard let active = activeStreamState else { return }
 
-    private func splitPrefix(_ value: String, maxCharacters: Int) -> (prefix: String, suffix: String) {
-        guard maxCharacters > 0, !value.isEmpty else { return ("", value) }
-        guard value.count > maxCharacters else { return (value, "") }
-        let splitIndex = value.index(value.startIndex, offsetBy: maxCharacters)
-        return (String(value[..<splitIndex]), String(value[splitIndex...]))
+        if applyRemaining {
+            let remainingText = active.buffer.consume(maxCharacters: Int.max).joined()
+            let remainingImages = active.consumePendingImageURLs()
+            if !remainingText.isEmpty || !remainingImages.isEmpty {
+                applyPendingStreamDelta(
+                    PendingStreamDelta(deltaText: remainingText, imageURLs: remainingImages),
+                    to: active.messageID,
+                    target: active.target
+                )
+            }
+        } else {
+            active.clearPendingImages()
+        }
+
+        active.renderer?.cancel(clearBuffer: true)
+        active.renderer = nil
+        activeStreamState = nil
     }
 
     private func applyPendingStreamDelta(_ delta: PendingStreamDelta, to id: UUID, target: StreamTargetContext) {
@@ -871,10 +908,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func clearInflightStreamState() {
-        streamFlushTask?.cancel()
-        streamFlushTask = nil
-        pendingStreamDeltas.removeAll()
-        pendingStreamTargets.removeAll()
+        flushAndStopActiveStreamingSession(applyRemaining: false)
         inflightTargetContext = nil
     }
 
