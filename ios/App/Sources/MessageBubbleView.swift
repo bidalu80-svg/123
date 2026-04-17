@@ -492,7 +492,10 @@ struct MessageBubbleView: View {
                 text: content,
                 textColor: UIColor.label,
                 font: .monospacedSystemFont(ofSize: 15, weight: .regular),
-                lineSpacing: 3.5
+                lineSpacing: 3.5,
+                language: language,
+                codeThemeMode: codeThemeMode,
+                isDarkMode: colorScheme == .dark
             )
             .frame(maxWidth: .infinity, alignment: .leading)
 

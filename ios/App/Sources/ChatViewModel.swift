@@ -17,7 +17,7 @@ final class ChatViewModel: ObservableObject {
 
     private final class ActiveStreamState {
         private static let maxCharactersPerCommit = 180
-        private static let minimumCommitInterval: TimeInterval = 0.09
+        private static let minimumCommitInterval: TimeInterval = 0.05
 
         let messageID: UUID
         let target: StreamTargetContext

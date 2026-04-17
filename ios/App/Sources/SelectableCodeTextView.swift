@@ -6,6 +6,9 @@ struct SelectableCodeTextView: UIViewRepresentable {
     var textColor: UIColor = .label
     var font: UIFont = .monospacedSystemFont(ofSize: 13, weight: .regular)
     var lineSpacing: CGFloat = 3
+    var language: String? = nil
+    var codeThemeMode: CodeThemeMode = .followApp
+    var isDarkMode: Bool = false
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -37,6 +40,9 @@ struct SelectableCodeTextView: UIViewRepresentable {
             || coordinator.lastLineSpacing != lineSpacing
             || coordinator.lastFontPointSize != font.pointSize
             || !coordinator.lastTextColor.isEqual(textColor)
+            || coordinator.lastLanguage != language
+            || coordinator.lastCodeThemeModeRaw != codeThemeMode.rawValue
+            || coordinator.lastIsDarkMode != isDarkMode
 
         guard shouldRebuild else { return }
 
@@ -51,11 +57,25 @@ struct SelectableCodeTextView: UIViewRepresentable {
         ]
 
         if coordinator.lastText.isEmpty || !text.hasPrefix(coordinator.lastText) {
-            uiView.attributedText = NSAttributedString(string: text, attributes: attributes)
+            uiView.attributedText = highlightedCode(
+                code: text,
+                attributes: attributes,
+                language: language,
+                codeThemeMode: codeThemeMode,
+                isDarkMode: isDarkMode
+            )
         } else {
             let suffix = String(text.dropFirst(coordinator.lastText.count))
             if !suffix.isEmpty {
-                uiView.textStorage.append(NSAttributedString(string: suffix, attributes: attributes))
+                uiView.textStorage.append(
+                    highlightedCode(
+                        code: suffix,
+                        attributes: attributes,
+                        language: language,
+                        codeThemeMode: codeThemeMode,
+                        isDarkMode: isDarkMode
+                    )
+                )
             }
         }
 
@@ -63,6 +83,9 @@ struct SelectableCodeTextView: UIViewRepresentable {
         coordinator.lastLineSpacing = lineSpacing
         coordinator.lastFontPointSize = font.pointSize
         coordinator.lastTextColor = textColor
+        coordinator.lastLanguage = language
+        coordinator.lastCodeThemeModeRaw = codeThemeMode.rawValue
+        coordinator.lastIsDarkMode = isDarkMode
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
@@ -77,6 +100,97 @@ struct SelectableCodeTextView: UIViewRepresentable {
         var lastLineSpacing: CGFloat = 0
         var lastFontPointSize: CGFloat = 0
         var lastTextColor: UIColor = .clear
+        var lastLanguage: String?
+        var lastCodeThemeModeRaw: String = ""
+        var lastIsDarkMode = false
+    }
+
+    private struct SyntaxPalette {
+        let keyword: UIColor
+        let string: UIColor
+        let number: UIColor
+        let comment: UIColor
+        let function: UIColor
+        let type: UIColor
+    }
+
+    private func highlightedCode(
+        code: String,
+        attributes: [NSAttributedString.Key: Any],
+        language: String?,
+        codeThemeMode: CodeThemeMode,
+        isDarkMode: Bool
+    ) -> NSAttributedString {
+        let output = NSMutableAttributedString(string: code, attributes: attributes)
+        guard !code.isEmpty else { return output }
+
+        let palette = syntaxPalette(codeThemeMode: codeThemeMode, isDarkMode: isDarkMode)
+        let keywords = keywordSet(language: language)
+
+        applyColor(palette.comment, pattern: "(?m)#.*$|//.*$", in: output)
+        applyColor(palette.comment, pattern: "(?s)/\\*.*?\\*/", in: output)
+        applyColor(palette.string, pattern: "\"(\\\\.|[^\"])*\"|'(\\\\.|[^'])*'", in: output)
+        applyColor(palette.number, pattern: "\\b\\d+(\\.\\d+)?\\b", in: output)
+        applyColor(palette.keyword, pattern: "\\b(\(keywords.joined(separator: "|")))\\b", in: output)
+        applyColor(palette.type, pattern: "\\b([A-Z][A-Za-z0-9_]*)\\b", in: output)
+        applyColor(palette.function, pattern: "\\b([a-zA-Z_][A-Za-z0-9_]*)\\s*(?=\\()", in: output)
+        return output
+    }
+
+    private func syntaxPalette(codeThemeMode: CodeThemeMode, isDarkMode: Bool) -> SyntaxPalette {
+        let useDarkPalette: Bool = {
+            switch codeThemeMode {
+            case .vscodeDark:
+                return true
+            case .githubLight:
+                return false
+            case .followApp:
+                return isDarkMode
+            }
+        }()
+
+        if useDarkPalette {
+            return SyntaxPalette(
+                keyword: UIColor(red: 0.77, green: 0.53, blue: 0.75, alpha: 1),
+                string: UIColor(red: 0.81, green: 0.57, blue: 0.47, alpha: 1),
+                number: UIColor(red: 0.71, green: 0.81, blue: 0.66, alpha: 1),
+                comment: UIColor(red: 0.42, green: 0.60, blue: 0.33, alpha: 1),
+                function: UIColor(red: 0.86, green: 0.86, blue: 0.48, alpha: 1),
+                type: UIColor(red: 0.31, green: 0.79, blue: 0.69, alpha: 1)
+            )
+        }
+
+        return SyntaxPalette(
+            keyword: UIColor(red: 0.69, green: 0.00, blue: 0.86, alpha: 1),
+            string: UIColor(red: 0.64, green: 0.08, blue: 0.08, alpha: 1),
+            number: UIColor(red: 0.04, green: 0.53, blue: 0.34, alpha: 1),
+            comment: UIColor(red: 0.42, green: 0.45, blue: 0.49, alpha: 1),
+            function: UIColor(red: 0.47, green: 0.37, blue: 0.15, alpha: 1),
+            type: UIColor(red: 0.15, green: 0.50, blue: 0.60, alpha: 1)
+        )
+    }
+
+    private func keywordSet(language: String?) -> [String] {
+        switch (language ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "swift":
+            return ["let", "var", "func", "struct", "class", "enum", "if", "else", "guard", "return", "import", "protocol", "extension"]
+        case "python", "py":
+            return ["def", "class", "if", "elif", "else", "for", "while", "return", "import", "from", "try", "except", "with", "as"]
+        case "javascript", "js", "typescript", "ts":
+            return ["const", "let", "var", "function", "class", "if", "else", "return", "import", "export", "async", "await"]
+        case "json":
+            return ["true", "false", "null"]
+        default:
+            return ["if", "else", "for", "while", "return", "class", "func", "def", "const", "let", "var", "import"]
+        }
+    }
+
+    private func applyColor(_ color: UIColor, pattern: String, in text: NSMutableAttributedString) {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return }
+        let plain = text.string
+        let nsRange = NSRange(plain.startIndex..<plain.endIndex, in: plain)
+        for match in regex.matches(in: plain, range: nsRange) {
+            text.addAttribute(.foregroundColor, value: color, range: match.range)
+        }
     }
 }
-

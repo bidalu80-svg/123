@@ -2056,6 +2056,8 @@ private final class NativeStreamingAssistantView: UIView {
     private let imageProgressStack = UIStackView()
     private let imageProgressCard = ImageGenerationProgressCardView()
     private let imageProgressLabel = UILabel()
+    private let waitingDotStack = UIStackView()
+    private let waitingDotView = UIView()
 
     private var currentMessageID: UUID?
     private var currentSourceText = ""
@@ -2064,6 +2066,7 @@ private final class NativeStreamingAssistantView: UIView {
     private var inCodeBlock = false
     private var waitingForCodeLanguageLine = false
     private var languageProbe = ""
+    private var waitingDotAnimationRunning = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -2081,9 +2084,11 @@ private final class NativeStreamingAssistantView: UIView {
             && message.imageAttachments.isEmpty
 
         imageProgressStack.isHidden = !shouldShowImageProgress
+        waitingDotStack.isHidden = true
         textView.isHidden = shouldShowImageProgress
 
         if shouldShowImageProgress {
+            stopWaitingDotAnimationIfNeeded()
             currentMessageID = message.id
             currentSourceText = ""
             pendingLayoutCharacters = 0
@@ -2099,6 +2104,24 @@ private final class NativeStreamingAssistantView: UIView {
             sourceText = "正在接收图片…"
         } else {
             sourceText = ""
+        }
+
+        let shouldShowWaitingDot = sourceText.isEmpty && message.imageAttachments.isEmpty
+        waitingDotStack.isHidden = !shouldShowWaitingDot
+        textView.isHidden = shouldShowWaitingDot
+
+        if shouldShowWaitingDot {
+            startWaitingDotAnimationIfNeeded()
+            currentMessageID = message.id
+            currentSourceText = ""
+            pendingLayoutCharacters = 0
+            resetParserState()
+            textView.attributedText = NSAttributedString()
+            invalidateIntrinsicContentSize()
+            setNeedsLayout()
+            return
+        } else {
+            stopWaitingDotAnimationIfNeeded()
         }
 
         if currentMessageID == message.id, sourceText.hasPrefix(currentSourceText) {
@@ -2133,6 +2156,8 @@ private final class NativeStreamingAssistantView: UIView {
         pendingLayoutCharacters = 0
         resetParserState()
         imageProgressStack.isHidden = true
+        waitingDotStack.isHidden = true
+        stopWaitingDotAnimationIfNeeded()
         textView.isHidden = false
         textView.attributedText = nil
         invalidateIntrinsicContentSize()
@@ -2150,6 +2175,11 @@ private final class NativeStreamingAssistantView: UIView {
             )
             let baseHeight: CGFloat = 18 + 6 + 300 + 10 + 16
             let totalHeight = baseHeight + ceil(labelSize.height)
+            return CGSize(width: UIView.noIntrinsicMetric, height: totalHeight)
+        }
+
+        if !waitingDotStack.isHidden {
+            let totalHeight: CGFloat = 18 + 6 + 14 + 16
             return CGSize(width: UIView.noIntrinsicMetric, height: totalHeight)
         }
 
@@ -2217,6 +2247,22 @@ private final class NativeStreamingAssistantView: UIView {
         imageProgressStack.addArrangedSubview(imageProgressCard)
         imageProgressStack.addArrangedSubview(imageProgressLabel)
         containerStack.addArrangedSubview(imageProgressStack)
+
+        waitingDotStack.axis = .horizontal
+        waitingDotStack.alignment = .leading
+        waitingDotStack.spacing = 0
+        waitingDotStack.isHidden = true
+
+        waitingDotView.translatesAutoresizingMaskIntoConstraints = false
+        waitingDotView.backgroundColor = .black
+        waitingDotView.layer.cornerRadius = 3.5
+        waitingDotView.layer.masksToBounds = true
+        NSLayoutConstraint.activate([
+            waitingDotView.widthAnchor.constraint(equalToConstant: 7),
+            waitingDotView.heightAnchor.constraint(equalToConstant: 7)
+        ])
+        waitingDotStack.addArrangedSubview(waitingDotView)
+        containerStack.addArrangedSubview(waitingDotStack)
 
         textView.isEditable = false
         textView.isSelectable = true
@@ -2341,6 +2387,42 @@ private final class NativeStreamingAssistantView: UIView {
             return true
         }
         return false
+    }
+
+    private func startWaitingDotAnimationIfNeeded() {
+        guard !waitingDotAnimationRunning else { return }
+        waitingDotAnimationRunning = true
+
+        waitingDotView.layer.removeAllAnimations()
+        waitingDotView.alpha = 0.95
+        waitingDotView.transform = .identity
+
+        let opacityAnimation = CABasicAnimation(keyPath: "opacity")
+        opacityAnimation.fromValue = 0.30
+        opacityAnimation.toValue = 0.95
+        opacityAnimation.duration = 0.62
+        opacityAnimation.autoreverses = true
+        opacityAnimation.repeatCount = .infinity
+        opacityAnimation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        waitingDotView.layer.add(opacityAnimation, forKey: "breathingOpacity")
+
+        let scaleAnimation = CABasicAnimation(keyPath: "transform.scale")
+        scaleAnimation.fromValue = 0.68
+        scaleAnimation.toValue = 1.0
+        scaleAnimation.duration = 0.62
+        scaleAnimation.autoreverses = true
+        scaleAnimation.repeatCount = .infinity
+        scaleAnimation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        waitingDotView.layer.add(scaleAnimation, forKey: "breathingScale")
+    }
+
+    private func stopWaitingDotAnimationIfNeeded() {
+        guard waitingDotAnimationRunning else { return }
+        waitingDotAnimationRunning = false
+        waitingDotView.layer.removeAnimation(forKey: "breathingOpacity")
+        waitingDotView.layer.removeAnimation(forKey: "breathingScale")
+        waitingDotView.alpha = 1
+        waitingDotView.transform = .identity
     }
 
     private static func normalizedStreamingText(_ raw: String) -> String {
