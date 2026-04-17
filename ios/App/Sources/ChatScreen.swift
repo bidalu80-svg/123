@@ -1810,6 +1810,7 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             scrollView.delegate = self
             scrollView.alwaysBounceVertical = true
             scrollView.keyboardDismissMode = .interactive
+            scrollView.contentInsetAdjustmentBehavior = .never
             scrollView.scrollsToTop = true
             scrollView.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(scrollView)
@@ -1981,6 +1982,10 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
         }
 
         func scrollViewDidScrollToTop(_ scrollView: UIScrollView) {
+            let topOffsetY = -scrollView.contentInset.top
+            if scrollView.contentOffset.y < topOffsetY {
+                scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: topOffsetY), animated: false)
+            }
             reportMetrics()
         }
 
@@ -2026,7 +2031,7 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
 
         private func normalizeShortContentOffsetIfNeeded() {
             guard !canScroll else { return }
-            let topOffsetY = -scrollView.adjustedContentInset.top
+            let topOffsetY = -scrollView.contentInset.top
             guard abs(scrollView.contentOffset.y - topOffsetY) > 1 else { return }
             scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: topOffsetY), animated: false)
         }
@@ -2037,8 +2042,8 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
 
         private var bottomOffsetY: CGFloat {
             max(
-                -scrollView.adjustedContentInset.top,
-                scrollView.contentSize.height - scrollView.bounds.height + scrollView.adjustedContentInset.bottom
+                -scrollView.contentInset.top,
+                scrollView.contentSize.height - scrollView.bounds.height + scrollView.contentInset.bottom
             )
         }
     }
@@ -2094,8 +2099,12 @@ private final class NativeStreamingAssistantView: UIView {
     private let waitingDotSpacer = UIView()
 
     private var currentMessageID: UUID?
-    private var currentSourceText = ""
+    private var currentSourceUTF16Length = 0
+    private var pendingDisplayText = ""
+    private var streamDisplayLink: CADisplayLink?
+    private var lastDisplayLinkTimestamp: CFTimeInterval = 0
     private var pendingLayoutCharacters = 0
+    private var pendingGradientCharacters = 0
     private var pendingFenceTickCount = 0
     private var inCodeBlock = false
     private var waitingForCodeLanguageLine = false
@@ -2113,6 +2122,10 @@ private final class NativeStreamingAssistantView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    deinit {
+        stopDisplayLinkIfNeeded()
+    }
+
     func apply(message: ChatMessage) {
         let shouldShowImageProgress =
             message.isImageGenerationPlaceholder
@@ -2124,9 +2137,12 @@ private final class NativeStreamingAssistantView: UIView {
 
         if shouldShowImageProgress {
             stopWaitingDotAnimationIfNeeded()
+            pendingDisplayText.removeAll(keepingCapacity: false)
+            stopDisplayLinkIfNeeded()
             currentMessageID = message.id
-            currentSourceText = ""
+            currentSourceUTF16Length = 0
             pendingLayoutCharacters = 0
+            pendingGradientCharacters = 0
             invalidateIntrinsicContentSize()
             setNeedsLayout()
             return
@@ -2147,9 +2163,12 @@ private final class NativeStreamingAssistantView: UIView {
 
         if shouldShowWaitingDot {
             startWaitingDotAnimationIfNeeded()
+            pendingDisplayText.removeAll(keepingCapacity: false)
+            stopDisplayLinkIfNeeded()
             currentMessageID = message.id
-            currentSourceText = ""
+            currentSourceUTF16Length = 0
             pendingLayoutCharacters = 0
+            pendingGradientCharacters = 0
             resetParserState()
             textView.attributedText = NSAttributedString()
             lastTailGradientRanges.removeAll(keepingCapacity: false)
@@ -2160,36 +2179,41 @@ private final class NativeStreamingAssistantView: UIView {
             stopWaitingDotAnimationIfNeeded()
         }
 
-        if currentMessageID == message.id, sourceText.hasPrefix(currentSourceText) {
-            let rawSuffix = String(sourceText.dropFirst(currentSourceText.count))
+        let sourceUTF16Length = sourceText.utf16.count
+
+        if currentMessageID == message.id, sourceUTF16Length >= currentSourceUTF16Length {
+            let rawSuffix = (sourceText as NSString).substring(from: currentSourceUTF16Length)
             if !rawSuffix.isEmpty {
                 let displaySuffix = Self.streamingDisplayDeltaText(rawSuffix)
-                let appendedVisibleCharacters = appendStreamingText(displaySuffix)
-                if shouldInvalidateLayout(forRawSuffix: displaySuffix, appendedVisibleCharacters: appendedVisibleCharacters) {
-                    invalidateIntrinsicContentSize()
-                    setNeedsLayout()
-                }
+                enqueueStreamingDisplayText(displaySuffix)
             }
         } else {
+            pendingDisplayText.removeAll(keepingCapacity: false)
+            stopDisplayLinkIfNeeded()
             resetParserState()
             textView.attributedText = NSAttributedString()
             let displayText = Self.streamingDisplayDeltaText(sourceText)
-            let appendedVisibleCharacters = appendStreamingText(displayText)
             pendingLayoutCharacters = 0
-            if appendedVisibleCharacters > 0 || !displayText.isEmpty {
+            pendingGradientCharacters = 0
+            if !displayText.isEmpty {
+                enqueueStreamingDisplayText(displayText)
+            } else {
                 invalidateIntrinsicContentSize()
                 setNeedsLayout()
             }
         }
 
         currentMessageID = message.id
-        currentSourceText = sourceText
+        currentSourceUTF16Length = sourceUTF16Length
     }
 
     func reset() {
+        pendingDisplayText.removeAll(keepingCapacity: false)
+        stopDisplayLinkIfNeeded()
         currentMessageID = nil
-        currentSourceText = ""
+        currentSourceUTF16Length = 0
         pendingLayoutCharacters = 0
+        pendingGradientCharacters = 0
         resetParserState()
         imageProgressStack.isHidden = true
         waitingDotStack.isHidden = true
@@ -2322,8 +2346,8 @@ private final class NativeStreamingAssistantView: UIView {
         containerStack.addArrangedSubview(waitingDotStack)
 
         textView.isEditable = false
-        textView.isSelectable = false
-        textView.isUserInteractionEnabled = false
+        textView.isSelectable = true
+        textView.isUserInteractionEnabled = true
         textView.isScrollEnabled = false
         textView.isOpaque = false
         textView.adjustsFontForContentSizeCategory = true
@@ -2363,6 +2387,12 @@ private final class NativeStreamingAssistantView: UIView {
     private func appendStreamingText(_ rawText: String) -> Int {
         guard !rawText.isEmpty else { return 0 }
 
+        let storage = textView.textStorage
+        storage.beginEditing()
+        defer {
+            storage.endEditing()
+        }
+
         var visibleAppended = 0
         var runText = ""
         var runStyle: RenderStyle = inCodeBlock ? .code : .body
@@ -2370,7 +2400,7 @@ private final class NativeStreamingAssistantView: UIView {
         func flushRun() {
             guard !runText.isEmpty else { return }
             let attributes = runStyle == .code ? codeTextAttributes : bodyTextAttributes
-            textView.textStorage.append(NSAttributedString(string: runText, attributes: attributes))
+            storage.append(NSAttributedString(string: runText, attributes: attributes))
             visibleAppended += runText.count
             runText.removeAll(keepingCapacity: true)
         }
@@ -2429,7 +2459,11 @@ private final class NativeStreamingAssistantView: UIView {
         }
 
         flushRun()
-        applyStreamingTailGradient()
+        pendingGradientCharacters += visibleAppended
+        if rawText.contains("\n") || pendingGradientCharacters >= 14 {
+            applyStreamingTailGradient()
+            pendingGradientCharacters = 0
+        }
         return visibleAppended
     }
 
@@ -2443,11 +2477,94 @@ private final class NativeStreamingAssistantView: UIView {
     private func shouldInvalidateLayout(forRawSuffix suffix: String, appendedVisibleCharacters: Int) -> Bool {
         guard appendedVisibleCharacters > 0 else { return false }
         pendingLayoutCharacters += appendedVisibleCharacters
-        if suffix.contains("\n") || pendingLayoutCharacters >= 96 {
+        if suffix.contains("\n") || pendingLayoutCharacters >= 24 {
             pendingLayoutCharacters = 0
             return true
         }
         return false
+    }
+
+    private func enqueueStreamingDisplayText(_ text: String) {
+        guard !text.isEmpty else { return }
+        pendingDisplayText.append(text)
+        startDisplayLinkIfNeeded()
+    }
+
+    @objc
+    private func handleStreamingDisplayTick(_ link: CADisplayLink) {
+        guard !pendingDisplayText.isEmpty else {
+            stopDisplayLinkIfNeeded()
+            return
+        }
+
+        if lastDisplayLinkTimestamp > 0, link.timestamp - lastDisplayLinkTimestamp < (1.0 / 60.0) {
+            return
+        }
+        lastDisplayLinkTimestamp = link.timestamp
+
+        let step = displayStepSize(for: pendingDisplayText.count)
+        let chunk = consumeDisplayPrefix(maxCharacters: step)
+        guard !chunk.isEmpty else { return }
+
+        let appendedVisibleCharacters = appendStreamingText(chunk)
+        if shouldInvalidateLayout(forRawSuffix: chunk, appendedVisibleCharacters: appendedVisibleCharacters) {
+            invalidateIntrinsicContentSize()
+            setNeedsLayout()
+        }
+    }
+
+    private func consumeDisplayPrefix(maxCharacters: Int) -> String {
+        guard maxCharacters > 0, !pendingDisplayText.isEmpty else { return "" }
+        let end = pendingDisplayText.index(
+            pendingDisplayText.startIndex,
+            offsetBy: maxCharacters,
+            limitedBy: pendingDisplayText.endIndex
+        ) ?? pendingDisplayText.endIndex
+        let prefix = String(pendingDisplayText[..<end])
+        pendingDisplayText.removeSubrange(..<end)
+        return prefix
+    }
+
+    private func displayStepSize(for pendingCharacters: Int) -> Int {
+        switch pendingCharacters {
+        case 700...:
+            return 10
+        case 360...:
+            return 8
+        case 180...:
+            return 6
+        case 96...:
+            return 5
+        case 40...:
+            return 3
+        case 16...:
+            return 2
+        default:
+            return 1
+        }
+    }
+
+    private func startDisplayLinkIfNeeded() {
+        guard streamDisplayLink == nil else { return }
+        let link = CADisplayLink(target: self, selector: #selector(handleStreamingDisplayTick(_:)))
+        if #available(iOS 15.0, *) {
+            link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
+        } else {
+            link.preferredFramesPerSecond = 60
+        }
+        link.add(to: .main, forMode: .common)
+        streamDisplayLink = link
+        lastDisplayLinkTimestamp = 0
+    }
+
+    private func stopDisplayLinkIfNeeded() {
+        streamDisplayLink?.invalidate()
+        streamDisplayLink = nil
+        lastDisplayLinkTimestamp = 0
+        if pendingGradientCharacters > 0 {
+            applyStreamingTailGradient()
+            pendingGradientCharacters = 0
+        }
     }
 
     private func applyStreamingTailGradient() {
