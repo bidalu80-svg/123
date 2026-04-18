@@ -4,6 +4,7 @@ import SwiftUI
 enum MessageSegment: Equatable {
     case text(String)
     case code(language: String?, content: String)
+    case table(headers: [String], rows: [[String]])
     case image(ChatImageAttachment)
     case file(name: String, language: String?, content: String)
     case divider
@@ -63,7 +64,12 @@ enum MessageContentParser {
 
         segments.append(contentsOf: parseTextContent(message.content))
         let merged = mergeAdjacentTextSegments(segments)
-        storeParseCache(segments: merged, signature: signature)
+        let sectioned = sectionizeAssistantLongTextSegments(
+            merged,
+            role: message.role,
+            isStreaming: message.isStreaming
+        )
+        storeParseCache(segments: sectioned, signature: signature)
 
         if message.isStreaming {
             streamingSnapshots[message.id] = StreamingParseSnapshot(
@@ -71,12 +77,12 @@ enum MessageContentParser {
                 contentLength: message.content.count,
                 imageCount: message.imageAttachments.count,
                 fileCount: message.fileAttachments.count,
-                segments: merged
+                segments: sectioned
             )
         } else {
             streamingSnapshots.removeValue(forKey: message.id)
         }
-        return merged
+        return sectioned
     }
 
     static func extractInlineImageURLs(from text: String) -> [String] {
@@ -97,14 +103,14 @@ enum MessageContentParser {
             guard let fenceStart = raw[cursor...].range(of: "```") else {
                 let trailingText = String(raw[cursor...])
                 if !trailingText.isEmpty {
-                    segments.append(contentsOf: parseInlineImages(in: trailingText))
+                    segments.append(contentsOf: parseTablesAndInlineImages(in: trailingText))
                 }
                 break
             }
 
             if fenceStart.lowerBound > cursor {
                 let leadingText = String(raw[cursor..<fenceStart.lowerBound])
-                segments.append(contentsOf: parseInlineImages(in: leadingText))
+                segments.append(contentsOf: parseTablesAndInlineImages(in: leadingText))
             }
 
             let codeStart = fenceStart.upperBound
@@ -126,6 +132,113 @@ enum MessageContentParser {
             }
         }
         return segments
+    }
+
+    private struct ParsedMarkdownTable {
+        let headers: [String]
+        let rows: [[String]]
+        let consumedLineCount: Int
+    }
+
+    private static func parseTablesAndInlineImages(in text: String) -> [MessageSegment] {
+        guard !text.isEmpty else { return [] }
+
+        let lines = text.components(separatedBy: "\n")
+        guard lines.count >= 2 else {
+            return parseInlineImages(in: text)
+        }
+
+        var segments: [MessageSegment] = []
+        var textBuffer: [String] = []
+        var index = 0
+
+        func flushTextBuffer() {
+            guard !textBuffer.isEmpty else { return }
+            let chunk = textBuffer.joined(separator: "\n")
+            segments.append(contentsOf: parseInlineImages(in: chunk))
+            textBuffer.removeAll(keepingCapacity: true)
+        }
+
+        while index < lines.count {
+            if let parsedTable = parseMarkdownTable(lines: lines, start: index) {
+                flushTextBuffer()
+                let headers = parsedTable.headers.map(cleanTableCell)
+                let rows = parsedTable.rows.map { row in row.map(cleanTableCell) }
+                segments.append(.table(headers: headers, rows: rows))
+                index += parsedTable.consumedLineCount
+                continue
+            }
+
+            textBuffer.append(lines[index])
+            index += 1
+        }
+
+        flushTextBuffer()
+        return segments
+    }
+
+    private static func parseMarkdownTable(lines: [String], start: Int) -> ParsedMarkdownTable? {
+        guard start + 1 < lines.count else { return nil }
+
+        let headerLine = lines[start]
+        let separatorLine = lines[start + 1]
+
+        guard headerLine.contains("|"), separatorLine.contains("|") else { return nil }
+
+        let headers = splitTableCells(headerLine)
+        guard headers.count >= 2 else { return nil }
+
+        let separatorCells = splitTableCells(separatorLine)
+        guard isTableSeparatorRow(separatorCells, columnCount: headers.count) else { return nil }
+
+        var rows: [[String]] = []
+        var cursor = start + 2
+
+        while cursor < lines.count {
+            let rowLine = lines[cursor]
+            let trimmed = rowLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { break }
+            guard rowLine.contains("|") else { break }
+
+            let cells = splitTableCells(rowLine)
+            guard cells.count == headers.count else { break }
+            rows.append(cells)
+            cursor += 1
+        }
+
+        guard !rows.isEmpty else { return nil }
+        return ParsedMarkdownTable(headers: headers, rows: rows, consumedLineCount: cursor - start)
+    }
+
+    private static func splitTableCells(_ line: String) -> [String] {
+        var normalized = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalized.hasPrefix("|") {
+            normalized.removeFirst()
+        }
+        if normalized.hasSuffix("|") {
+            normalized.removeLast()
+        }
+
+        return normalized
+            .split(separator: "|", omittingEmptySubsequences: false)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+    }
+
+    private static func isTableSeparatorRow(_ cells: [String], columnCount: Int) -> Bool {
+        guard cells.count == columnCount else { return false }
+        return cells.allSatisfy { rawCell in
+            let compact = rawCell.replacingOccurrences(of: " ", with: "")
+            guard compact.count >= 3 else { return false }
+            return compact.range(of: #"^:?-{3,}:?$"#, options: .regularExpression) != nil
+        }
+    }
+
+    private static func cleanTableCell(_ raw: String) -> String {
+        var text = raw
+        text = text.replacingOccurrences(of: "**", with: "")
+        text = text.replacingOccurrences(of: "__", with: "")
+        text = text.replacingOccurrences(of: "`", with: "")
+        return cleanMarkdownForDisplay(text).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func parseCodeBlock(_ block: String) -> (String?, String) {
@@ -411,6 +524,97 @@ enum MessageContentParser {
             }
         }
         return merged
+    }
+
+    private static func sectionizeAssistantLongTextSegments(
+        _ segments: [MessageSegment],
+        role: ChatMessage.Role,
+        isStreaming: Bool
+    ) -> [MessageSegment] {
+        guard role == .assistant, !isStreaming else { return segments }
+
+        var output: [MessageSegment] = []
+        for segment in segments {
+            guard case .text(let rawText) = segment else {
+                output.append(segment)
+                continue
+            }
+
+            let blocks = splitIntoSectionBlocks(rawText)
+            guard blocks.count > 1 else {
+                output.append(segment)
+                continue
+            }
+
+            for (index, block) in blocks.enumerated() {
+                if index > 0 {
+                    output.append(.divider)
+                }
+                output.append(.text(block))
+            }
+        }
+        return output
+    }
+
+    private static func splitIntoSectionBlocks(_ rawText: String) -> [String] {
+        let normalized = rawText.replacingOccurrences(of: "\r\n", with: "\n")
+        let trimmed = normalized.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 280 else { return [rawText] }
+
+        let paragraphs = trimmed
+            .components(separatedBy: "\n\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        guard paragraphs.count >= 3 else { return [rawText] }
+
+        var chunks: [String] = []
+        var buffer: [String] = []
+        var bufferLength = 0
+
+        func flushBuffer() {
+            guard !buffer.isEmpty else { return }
+            chunks.append(buffer.joined(separator: "\n\n"))
+            buffer.removeAll(keepingCapacity: true)
+            bufferLength = 0
+        }
+
+        for paragraph in paragraphs {
+            let candidateLength = bufferLength + paragraph.count + (buffer.isEmpty ? 0 : 2)
+            let shouldBreakForHeading = !buffer.isEmpty && isSectionHeading(paragraph)
+            let shouldBreakForLength = candidateLength >= 420
+
+            if shouldBreakForHeading || shouldBreakForLength {
+                flushBuffer()
+            }
+
+            buffer.append(paragraph)
+            bufferLength += paragraph.count + (buffer.count > 1 ? 2 : 0)
+
+            if bufferLength >= 320 {
+                flushBuffer()
+            }
+        }
+
+        flushBuffer()
+
+        guard chunks.count >= 2 else { return [rawText] }
+        return chunks
+    }
+
+    private static func isSectionHeading(_ paragraph: String) -> Bool {
+        let firstLine = paragraph
+            .components(separatedBy: "\n")
+            .first?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !firstLine.isEmpty else { return false }
+
+        if firstLine.hasPrefix("#") { return true }
+        if firstLine.hasSuffix("：") || firstLine.hasSuffix(":") { return true }
+        if firstLine.count <= 24 && !firstLine.contains("。") && !firstLine.contains("，") {
+            return true
+        }
+        return false
     }
 
     private static func cacheSignature(for message: ChatMessage) -> String {

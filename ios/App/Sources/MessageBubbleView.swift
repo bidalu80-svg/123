@@ -391,6 +391,8 @@ struct MessageBubbleView: View {
             codeBlock(title: (language ?? "code").uppercased(), content: content, language: language)
         case .file(let name, let language, let content):
             codeBlock(title: "FILE · \(name)", content: content, language: language)
+        case .table(let headers, let rows):
+            markdownTableCard(headers: headers, rows: rows)
         case .image(let attachment):
             messageImage(attachment)
         case .divider:
@@ -407,6 +409,8 @@ struct MessageBubbleView: View {
             codeBlock(title: (language ?? "code").uppercased(), content: content, language: language)
         case .file(let name, let language, let content):
             codeBlock(title: "FILE · \(name)", content: content, language: language)
+        case .table(let headers, let rows):
+            markdownTableCard(headers: headers, rows: rows)
         case .image(let attachment):
             messageImage(attachment)
         case .divider:
@@ -418,6 +422,72 @@ struct MessageBubbleView: View {
         Divider()
             .overlay(Color.secondary.opacity(colorScheme == .dark ? 0.30 : 0.22))
             .padding(.vertical, 10)
+    }
+
+    private func markdownTableCard(headers: [String], rows: [[String]]) -> some View {
+        let columnCount = max(headers.count, rows.map(\.count).max() ?? headers.count)
+        let normalizedHeaders = normalizeTableCells(headers, targetCount: columnCount)
+        let normalizedRows = rows.map { normalizeTableCells($0, targetCount: columnCount) }
+
+        return VStack(spacing: 0) {
+            markdownTableRow(normalizedHeaders, isHeader: true, index: 0)
+
+            ForEach(Array(normalizedRows.enumerated()), id: \.offset) { index, row in
+                Divider()
+                    .overlay(Color.black.opacity(colorScheme == .dark ? 0.22 : 0.08))
+                markdownTableRow(row, isHeader: false, index: index)
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(.secondarySystemBackground))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.black.opacity(colorScheme == .dark ? 0.24 : 0.08), lineWidth: 0.8)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .textSelection(.enabled)
+    }
+
+    private func markdownTableRow(_ cells: [String], isHeader: Bool, index: Int) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
+                Text(cell.isEmpty ? " " : cell)
+                    .font(.system(size: isHeader ? 15.5 : 15, weight: isHeader ? .semibold : .regular))
+                    .foregroundStyle(.primary)
+                    .lineSpacing(2.6)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, isHeader ? 11 : 10)
+        .background(tableRowBackground(isHeader: isHeader, rowIndex: index))
+    }
+
+    private func tableRowBackground(isHeader: Bool, rowIndex: Int) -> Color {
+        if isHeader {
+            return colorScheme == .dark
+                ? Color.white.opacity(0.06)
+                : Color.black.opacity(0.04)
+        }
+
+        if rowIndex % 2 == 0 {
+            return colorScheme == .dark
+                ? Color.white.opacity(0.03)
+                : Color.black.opacity(0.015)
+        }
+        return .clear
+    }
+
+    private func normalizeTableCells(_ cells: [String], targetCount: Int) -> [String] {
+        guard targetCount > 0 else { return [] }
+        if cells.count == targetCount { return cells }
+        if cells.count > targetCount { return Array(cells.prefix(targetCount)) }
+        return cells + Array(repeating: "", count: targetCount - cells.count)
     }
 
     private func selectableTextContent(_ text: String) -> some View {

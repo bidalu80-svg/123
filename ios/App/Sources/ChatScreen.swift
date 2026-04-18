@@ -2150,7 +2150,7 @@ private final class NativeStreamingAssistantView: UIView {
 
         let sourceText: String
         if !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            sourceText = Self.normalizedStreamingText(message.content)
+            sourceText = Self.streamingSectionizedText(message.content)
         } else if !message.imageAttachments.isEmpty {
             sourceText = "正在接收图片…"
         } else {
@@ -2660,6 +2660,67 @@ private final class NativeStreamingAssistantView: UIView {
 
     private static func normalizedStreamingText(_ raw: String) -> String {
         raw.replacingOccurrences(of: "\r\n", with: "\n")
+    }
+
+    private static func streamingSectionizedText(_ raw: String) -> String {
+        let text = normalizedStreamingText(raw)
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 280, !trimmed.contains("```") else { return text }
+
+        let paragraphs = trimmed
+            .components(separatedBy: "\n\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        guard paragraphs.count >= 3 else { return text }
+
+        var chunks: [String] = []
+        var buffer: [String] = []
+        var bufferLength = 0
+
+        func flushBuffer() {
+            guard !buffer.isEmpty else { return }
+            chunks.append(buffer.joined(separator: "\n\n"))
+            buffer.removeAll(keepingCapacity: true)
+            bufferLength = 0
+        }
+
+        for paragraph in paragraphs {
+            let candidateLength = bufferLength + paragraph.count + (buffer.isEmpty ? 0 : 2)
+            let shouldBreakForHeading = !buffer.isEmpty && isSectionHeading(paragraph)
+            let shouldBreakForLength = candidateLength >= 420
+
+            if shouldBreakForHeading || shouldBreakForLength {
+                flushBuffer()
+            }
+
+            buffer.append(paragraph)
+            bufferLength += paragraph.count + (buffer.count > 1 ? 2 : 0)
+
+            if bufferLength >= 320 {
+                flushBuffer()
+            }
+        }
+
+        flushBuffer()
+        guard chunks.count >= 2 else { return text }
+
+        return chunks.joined(separator: "\n\n▎▎▎\n\n")
+    }
+
+    private static func isSectionHeading(_ paragraph: String) -> Bool {
+        let firstLine = paragraph
+            .components(separatedBy: "\n")
+            .first?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !firstLine.isEmpty else { return false }
+
+        if firstLine.hasPrefix("#") { return true }
+        if firstLine.hasSuffix("：") || firstLine.hasSuffix(":") { return true }
+        if firstLine.count <= 24 && !firstLine.contains("。") && !firstLine.contains("，") {
+            return true
+        }
+        return false
     }
 
     private static func streamingDisplayDeltaText(_ raw: String) -> String {

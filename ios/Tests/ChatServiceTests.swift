@@ -408,6 +408,80 @@ final class ChatServiceTests: XCTestCase {
         XCTAssertTrue(text.contains("langchain-ai/langchain"))
         XCTAssertTrue(text.contains("https://github.com/langchain-ai/langchain"))
     }
+
+    func testMessageContentParserParsesMarkdownTableIntoDedicatedSegment() {
+        let message = ChatMessage(
+            role: .assistant,
+            content: """
+            | 关卡区域 | 主题 | 核心 |
+            | --- | --- | --- |
+            | 森林区 | 顺序执行 | 语句顺序 |
+            | 河流区 | 循环 | for/while |
+            """
+        )
+
+        let segments = MessageContentParser.parse(message)
+        XCTAssertEqual(segments.count, 1)
+
+        guard case .table(let headers, let rows) = segments[0] else {
+            XCTFail("Expected table segment")
+            return
+        }
+
+        XCTAssertEqual(headers, ["关卡区域", "主题", "核心"])
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertEqual(rows[0], ["森林区", "顺序执行", "语句顺序"])
+        XCTAssertEqual(rows[1], ["河流区", "循环", "for/while"])
+    }
+
+    func testMessageContentParserDoesNotTreatPipeTextWithoutSeparatorAsTable() {
+        let message = ChatMessage(
+            role: .assistant,
+            content: "这里有竖线 A|B|C，但并不是 Markdown 表格。"
+        )
+
+        let segments = MessageContentParser.parse(message)
+        XCTAssertEqual(segments.count, 1)
+
+        guard case .text(let text) = segments[0] else {
+            XCTFail("Expected plain text segment")
+            return
+        }
+        XCTAssertTrue(text.contains("A|B|C"))
+    }
+
+    func testMessageContentParserSectionsLongAssistantTextWithDividers() {
+        let message = ChatMessage(
+            role: .assistant,
+            content: """
+            第一部分：目标与边界
+
+            我们先把目标说清楚：做一个轻量可玩、当天能跑通核心循环的小项目，不要一开始就把联网、账号、排行榜全部加上。
+
+            第二部分：最小可用玩法
+
+            屏幕出现目标，玩家在限定时间内点击；命中加分，未命中结束。这个循环先做稳定，再加速度曲线和特效。
+
+            第三部分：技术拆分
+
+            先做输入与碰撞，再做状态机和结算页面，最后加资源管理与音效。每一步都单独可验证，避免一次改太多。
+            """
+        )
+
+        let segments = MessageContentParser.parse(message)
+        let dividerCount = segments.reduce(0) { partial, segment in
+            if case .divider = segment { return partial + 1 }
+            return partial
+        }
+
+        XCTAssertGreaterThanOrEqual(dividerCount, 1)
+        XCTAssertTrue(segments.contains { segment in
+            if case .text(let value) = segment {
+                return value.contains("第一部分")
+            }
+            return false
+        })
+    }
 }
 
 final class ChatViewModelTests: XCTestCase {
