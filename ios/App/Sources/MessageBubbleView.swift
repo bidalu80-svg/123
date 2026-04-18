@@ -276,7 +276,7 @@ struct MessageBubbleView: View {
             } else {
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
-                        segmentView(segment)
+                        segmentView(segment, streamingTextAnimated: false)
                     }
                 }
             }
@@ -304,7 +304,7 @@ struct MessageBubbleView: View {
             } else {
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
-                        segmentView(segment)
+                        segmentView(segment, streamingTextAnimated: true)
                     }
                 }
             }
@@ -392,10 +392,10 @@ struct MessageBubbleView: View {
     }
 
     @ViewBuilder
-    private func segmentView(_ segment: MessageSegment) -> some View {
+    private func segmentView(_ segment: MessageSegment, streamingTextAnimated: Bool) -> some View {
         switch segment {
         case .text(let text):
-            selectableTextContent(text)
+            selectableTextContent(text, streamingTextAnimated: streamingTextAnimated)
         case .code(let language, let content):
             codeBlock(title: (language ?? "code").uppercased(), content: content, language: language)
         case .file(let name, let language, let content):
@@ -481,13 +481,14 @@ struct MessageBubbleView: View {
         return cells + Array(repeating: "", count: targetCount - cells.count)
     }
 
-    private func selectableTextContent(_ text: String) -> some View {
+    private func selectableTextContent(_ text: String, streamingTextAnimated: Bool = false) -> some View {
         SelectableLinkTextView(
             text: text,
             textColor: UIColor.label,
             linkColor: UIColor.secondaryLabel,
             font: chatUIFont,
-            renderMarkdown: false
+            renderMarkdown: false,
+            streamingAnimated: streamingTextAnimated
         )
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -1181,3 +1182,4 @@ private final class ImageSaveCoordinator: NSObject {
         onComplete = nil
     }
 }
+

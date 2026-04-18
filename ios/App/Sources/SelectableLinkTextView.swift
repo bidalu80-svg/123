@@ -7,6 +7,7 @@ struct SelectableLinkTextView: UIViewRepresentable {
     var linkColor: UIColor = .secondaryLabel
     var font: UIFont = UIFont(name: "PingFangSC-Regular", size: 15.5) ?? .systemFont(ofSize: 15.5, weight: .regular)
     var renderMarkdown: Bool = false
+    var streamingAnimated: Bool = false
     private static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
     private static let markdownRenderQueue = DispatchQueue(label: "chatapp.markdown.render", qos: .userInitiated)
 
@@ -46,6 +47,7 @@ struct SelectableLinkTextView: UIViewRepresentable {
             || !coordinator.lastTextColor.isEqual(textColor)
             || !coordinator.lastLinkColor.isEqual(linkColor)
             || coordinator.lastRenderMarkdown != renderMarkdown
+            || coordinator.lastStreamingAnimated != streamingAnimated
         if !shouldRebuildText {
             return
         }
@@ -60,6 +62,7 @@ struct SelectableLinkTextView: UIViewRepresentable {
         ]
 
         if renderMarkdown {
+            coordinator.stopStreamingAnimation(clearPending: true)
             coordinator.markdownRenderToken &+= 1
             let renderToken = coordinator.markdownRenderToken
             let markdownSource = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -116,6 +119,12 @@ struct SelectableLinkTextView: UIViewRepresentable {
                 }
             }
         } else {
+            coordinator.configureStreamingAnimation(
+                textView: uiView,
+                attributes: attrs,
+                linkColor: linkColor,
+                enabled: streamingAnimated
+            )
             coordinator.markdownRenderToken &+= 1
             coordinator.lastMarkdownSource = ""
             coordinator.cachedMarkdown = nil
@@ -124,34 +133,20 @@ struct SelectableLinkTextView: UIViewRepresentable {
             coordinator.lastMarkdownLinkColor = .clear
 
             let fullTextChangedShape = coordinator.lastText.isEmpty || !text.hasPrefix(coordinator.lastText)
-            if fullTextChangedShape {
-                let attributed = NSMutableAttributedString(string: text, attributes: attrs)
-                if let detector = Self.linkDetector {
-                    let nsText = text as NSString
-                    let fullRange = NSRange(location: 0, length: nsText.length)
-                    detector.enumerateMatches(in: text, options: [], range: fullRange) { match, _, _ in
-                        guard let match, let url = match.url else { return }
-                        attributed.addAttributes(
-                            [
-                                .link: url,
-                                .foregroundColor: linkColor,
-                                .underlineStyle: 0
-                            ],
-                            range: match.range
-                        )
-                    }
-                }
-                uiView.attributedText = attributed
-            } else {
-                let suffix = String(text.dropFirst(coordinator.lastText.count))
-                if !suffix.isEmpty {
-                    let appended = NSMutableAttributedString(string: suffix, attributes: attrs)
+            let forceImmediateRebuild = !streamingAnimated && coordinator.lastStreamingAnimated
+            if fullTextChangedShape || forceImmediateRebuild {
+                coordinator.stopStreamingAnimation(clearPending: true)
+                if streamingAnimated && coordinator.lastText.isEmpty && !text.isEmpty {
+                    uiView.attributedText = NSAttributedString()
+                    coordinator.queueStreamingSuffix(text)
+                } else {
+                    let attributed = NSMutableAttributedString(string: text, attributes: attrs)
                     if let detector = Self.linkDetector {
-                        let nsText = suffix as NSString
+                        let nsText = text as NSString
                         let fullRange = NSRange(location: 0, length: nsText.length)
-                        detector.enumerateMatches(in: suffix, options: [], range: fullRange) { match, _, _ in
+                        detector.enumerateMatches(in: text, options: [], range: fullRange) { match, _, _ in
                             guard let match, let url = match.url else { return }
-                            appended.addAttributes(
+                            attributed.addAttributes(
                                 [
                                     .link: url,
                                     .foregroundColor: linkColor,
@@ -161,7 +156,32 @@ struct SelectableLinkTextView: UIViewRepresentable {
                             )
                         }
                     }
-                    uiView.textStorage.append(appended)
+                    uiView.attributedText = attributed
+                }
+            } else {
+                let suffix = String(text.dropFirst(coordinator.lastText.count))
+                if !suffix.isEmpty {
+                    if streamingAnimated {
+                        coordinator.queueStreamingSuffix(suffix)
+                    } else {
+                        let appended = NSMutableAttributedString(string: suffix, attributes: attrs)
+                        if let detector = Self.linkDetector {
+                            let nsText = suffix as NSString
+                            let fullRange = NSRange(location: 0, length: nsText.length)
+                            detector.enumerateMatches(in: suffix, options: [], range: fullRange) { match, _, _ in
+                                guard let match, let url = match.url else { return }
+                                appended.addAttributes(
+                                    [
+                                        .link: url,
+                                        .foregroundColor: linkColor,
+                                        .underlineStyle: 0
+                                    ],
+                                    range: match.range
+                                )
+                            }
+                        }
+                        uiView.textStorage.append(appended)
+                    }
                 }
             }
         }
@@ -175,6 +195,7 @@ struct SelectableLinkTextView: UIViewRepresentable {
         coordinator.lastTextColor = textColor
         coordinator.lastLinkColor = linkColor
         coordinator.lastRenderMarkdown = renderMarkdown
+        coordinator.lastStreamingAnimated = streamingAnimated
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
@@ -184,18 +205,34 @@ struct SelectableLinkTextView: UIViewRepresentable {
         return CGSize(width: width, height: ceil(size.height))
     }
 
+    static func dismantleUIView(_ uiView: UITextView, coordinator: Coordinator) {
+        coordinator.stopStreamingAnimation(clearPending: true)
+    }
+
     final class Coordinator: NSObject, UITextViewDelegate {
         var lastText: String = ""
         var lastFontPointSize: CGFloat = 0
         var lastTextColor: UIColor = .clear
         var lastLinkColor: UIColor = .clear
         var lastRenderMarkdown: Bool = false
+        var lastStreamingAnimated: Bool = false
         var markdownRenderToken: Int = 0
         var lastMarkdownSource: String = ""
         var cachedMarkdown: NSAttributedString?
         var lastMarkdownFontPointSize: CGFloat = 0
         var lastMarkdownTextColor: UIColor = .clear
         var lastMarkdownLinkColor: UIColor = .clear
+        private weak var activeTextView: UITextView?
+        private var streamTimer: CADisplayLink?
+        private var streamLastTimestamp: CFTimeInterval = 0
+        private var pendingStreamingSuffix = ""
+        private var streamAttributes: [NSAttributedString.Key: Any] = [:]
+        private var streamLinkColor: UIColor = .secondaryLabel
+        private var streamAnimationEnabled = false
+
+        deinit {
+            stopStreamingAnimation(clearPending: true)
+        }
 
         func textView(
             _ textView: UITextView,
@@ -208,6 +245,127 @@ struct SelectableLinkTextView: UIViewRepresentable {
                 return false
             }
             return true
+        }
+
+        func configureStreamingAnimation(
+            textView: UITextView,
+            attributes: [NSAttributedString.Key: Any],
+            linkColor: UIColor,
+            enabled: Bool
+        ) {
+            activeTextView = textView
+            streamAttributes = attributes
+            streamLinkColor = linkColor
+            streamAnimationEnabled = enabled
+            if !enabled {
+                stopStreamingAnimation(clearPending: true)
+            }
+        }
+
+        func queueStreamingSuffix(_ suffix: String) {
+            guard streamAnimationEnabled, !suffix.isEmpty else { return }
+            pendingStreamingSuffix.append(suffix)
+            startStreamingAnimationIfNeeded()
+        }
+
+        func stopStreamingAnimation(clearPending: Bool) {
+            streamTimer?.invalidate()
+            streamTimer = nil
+            streamLastTimestamp = 0
+            if clearPending {
+                pendingStreamingSuffix.removeAll(keepingCapacity: false)
+            }
+        }
+
+        private func startStreamingAnimationIfNeeded() {
+            guard streamTimer == nil else { return }
+            let timer = CADisplayLink(target: self, selector: #selector(handleStreamAnimationTick(_:)))
+            if #available(iOS 15.0, *) {
+                timer.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
+            } else {
+                timer.preferredFramesPerSecond = 60
+            }
+            timer.add(to: .main, forMode: .common)
+            streamTimer = timer
+            streamLastTimestamp = 0
+        }
+
+        @objc
+        private func handleStreamAnimationTick(_ timer: CADisplayLink) {
+            guard streamAnimationEnabled else {
+                stopStreamingAnimation(clearPending: false)
+                return
+            }
+            guard let textView = activeTextView else {
+                stopStreamingAnimation(clearPending: false)
+                return
+            }
+            guard !pendingStreamingSuffix.isEmpty else {
+                stopStreamingAnimation(clearPending: false)
+                return
+            }
+
+            if streamLastTimestamp > 0, timer.timestamp - streamLastTimestamp < (1.0 / 75.0) {
+                return
+            }
+            streamLastTimestamp = timer.timestamp
+
+            let step = streamingStepSize(for: pendingStreamingSuffix.count)
+            let chunk = consumeStreamingPrefix(maxCharacters: step)
+            guard !chunk.isEmpty else { return }
+
+            let appended = NSMutableAttributedString(string: chunk, attributes: streamAttributes)
+            if let detector = SelectableLinkTextView.linkDetector {
+                let nsText = chunk as NSString
+                let fullRange = NSRange(location: 0, length: nsText.length)
+                detector.enumerateMatches(in: chunk, options: [], range: fullRange) { match, _, _ in
+                    guard let match, let url = match.url else { return }
+                    appended.addAttributes(
+                        [
+                            .link: url,
+                            .foregroundColor: self.streamLinkColor,
+                            .underlineStyle: 0
+                        ],
+                        range: match.range
+                    )
+                }
+            }
+
+            let fade = CATransition()
+            fade.type = .fade
+            fade.duration = 0.12
+            fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            textView.layer.add(fade, forKey: "chatapp.streaming.fade")
+            textView.textStorage.append(appended)
+        }
+
+        private func consumeStreamingPrefix(maxCharacters: Int) -> String {
+            guard maxCharacters > 0, !pendingStreamingSuffix.isEmpty else { return "" }
+            let end = pendingStreamingSuffix.index(
+                pendingStreamingSuffix.startIndex,
+                offsetBy: maxCharacters,
+                limitedBy: pendingStreamingSuffix.endIndex
+            ) ?? pendingStreamingSuffix.endIndex
+            let prefix = String(pendingStreamingSuffix[..<end])
+            pendingStreamingSuffix.removeSubrange(..<end)
+            return prefix
+        }
+
+        private func streamingStepSize(for pendingCharacters: Int) -> Int {
+            switch pendingCharacters {
+            case 360...:
+                return 6
+            case 200...:
+                return 5
+            case 120...:
+                return 4
+            case 72...:
+                return 3
+            case 28...:
+                return 2
+            default:
+                return 1
+            }
         }
     }
 

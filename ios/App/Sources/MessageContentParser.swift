@@ -22,7 +22,7 @@ enum MessageContentParser {
     private static let markdownImagePattern = #"!\[[^\]]*\]\(([^)]+)\)"#
     private static let bareURLPattern = #"(?<!\]\()https?://[^\s\"<>)\]]+"#
     private static let dataImagePattern = #"data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+"#
-    private static let streamingParseDebounce: TimeInterval = 0.2
+    private static let streamingParseDebounce: TimeInterval = 0.04
     private static let maxCacheEntries = 360
     private static var parseCache: [String: [MessageSegment]] = [:]
     private static var parseCacheOrder: [String] = []
