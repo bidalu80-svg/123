@@ -429,6 +429,9 @@ struct ChatScreen: View {
                 streamingLeadContent: activeStreamingLeadContent,
                 streamingLeadSignature: activeStreamingLeadSignature,
                 streamingMessage: activeStreamingRenderedMessage,
+                codeThemeMode: viewModel.config.codeThemeMode,
+                apiKey: viewModel.config.apiKey,
+                apiBaseURL: viewModel.config.normalizedBaseURL,
                 command: transcriptCommand,
                 onMetricsChanged: { metrics in
                     if transcriptMetrics != metrics {
@@ -1752,6 +1755,9 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
     let streamingLeadContent: AnyView?
     let streamingLeadSignature: String?
     let streamingMessage: ChatMessage?
+    let codeThemeMode: CodeThemeMode
+    let apiKey: String
+    let apiBaseURL: String
     let command: ChatTranscriptCommand?
     let onMetricsChanged: (ChatTranscriptMetrics) -> Void
 
@@ -1766,16 +1772,25 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             streamingLeadContent: streamingLeadContent,
             streamingLeadSignature: streamingLeadSignature,
             streamingMessage: streamingMessage,
+            codeThemeMode: codeThemeMode,
+            apiKey: apiKey,
+            apiBaseURL: apiBaseURL,
             command: command,
             onMetricsChanged: onMetricsChanged
         )
     }
 
     final class Controller: UIViewController, UIScrollViewDelegate {
+        private enum StreamingRenderMode {
+            case native
+            case rich
+        }
+
         private let scrollView = UIScrollView()
         private let stackView = UIStackView()
         private let historyHostingController = UIHostingController(rootView: AnyView(EmptyView()))
         private let streamingLeadHostingController = UIHostingController(rootView: AnyView(EmptyView()))
+        private let streamingRichHostingController = UIHostingController(rootView: AnyView(EmptyView()))
         private let streamingView = NativeStreamingAssistantView()
         private let spacerView = UIView()
         private var onMetricsChanged: (ChatTranscriptMetrics) -> Void
@@ -1787,6 +1802,7 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
         private var lastStreamingLeadSignature: String?
         private var lastStreamingMessageID: UUID?
         private var pendingStreamingHideWorkItem: DispatchWorkItem?
+        private var streamingRenderMode: StreamingRenderMode = .native
 
         init(onMetricsChanged: @escaping (ChatTranscriptMetrics) -> Void) {
             self.onMetricsChanged = onMetricsChanged
@@ -1849,6 +1865,14 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             streamingView.isHidden = true
             stackView.addArrangedSubview(streamingView)
 
+            streamingRichHostingController.sizingOptions = [.intrinsicContentSize]
+            streamingRichHostingController.view.backgroundColor = .clear
+            streamingRichHostingController.view.translatesAutoresizingMaskIntoConstraints = false
+            streamingRichHostingController.view.isHidden = true
+            addChild(streamingRichHostingController)
+            stackView.addArrangedSubview(streamingRichHostingController.view)
+            streamingRichHostingController.didMove(toParent: self)
+
             spacerView.backgroundColor = .clear
             spacerView.setContentHuggingPriority(.defaultLow, for: .vertical)
             spacerView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
@@ -1877,6 +1901,9 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             streamingLeadContent: AnyView?,
             streamingLeadSignature: String?,
             streamingMessage: ChatMessage?,
+            codeThemeMode: CodeThemeMode,
+            apiKey: String,
+            apiBaseURL: String,
             command: ChatTranscriptCommand?,
             onMetricsChanged: @escaping (ChatTranscriptMetrics) -> Void
         ) {
@@ -1892,6 +1919,9 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
                 }
                 lastHistoryVersion = historyVersion
                 lastStreamingMessageID = streamingMessageID
+                if streamingIdentityChanged {
+                    streamingRenderMode = .native
+                }
             }
 
             var streamingLeadChanged = false
@@ -1921,21 +1951,58 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             if let streamingMessage {
                 pendingStreamingHideWorkItem?.cancel()
                 pendingStreamingHideWorkItem = nil
-                if newStreamingSignature != lastStreamingSignature || streamingView.isHidden {
-                    UIView.performWithoutAnimation {
-                        streamingView.isHidden = false
-                        streamingView.apply(message: streamingMessage)
+                let shouldUseRichRenderer =
+                    streamingRenderMode == .rich
+                    || Self.shouldUseRichStreamingRenderer(for: streamingMessage)
+
+                if shouldUseRichRenderer {
+                    streamingRenderMode = .rich
+                    if newStreamingSignature != lastStreamingSignature || streamingRichHostingController.view.isHidden {
+                        UIView.performWithoutAnimation {
+                            let richView = AnyView(
+                                MessageBubbleView(
+                                    message: streamingMessage,
+                                    codeThemeMode: codeThemeMode,
+                                    apiKey: apiKey,
+                                    apiBaseURL: apiBaseURL,
+                                    showsAssistantActionBar: false,
+                                    onRegenerate: nil
+                                )
+                                .padding(.horizontal, 12)
+                            )
+                            streamingRichHostingController.rootView = richView
+                            streamingRichHostingController.view.invalidateIntrinsicContentSize()
+                            streamingRichHostingController.view.isHidden = false
+                            streamingView.reset()
+                            streamingView.isHidden = true
+                        }
+                        lastStreamingSignature = newStreamingSignature
                     }
-                    lastStreamingSignature = newStreamingSignature
+                } else {
+                    streamingRenderMode = .native
+                    if newStreamingSignature != lastStreamingSignature
+                        || streamingView.isHidden
+                        || !streamingRichHostingController.view.isHidden {
+                        UIView.performWithoutAnimation {
+                            streamingRichHostingController.rootView = AnyView(EmptyView())
+                            streamingRichHostingController.view.isHidden = true
+                            streamingView.isHidden = false
+                            streamingView.apply(message: streamingMessage)
+                        }
+                        lastStreamingSignature = newStreamingSignature
+                    }
                 }
-            } else if !streamingView.isHidden || lastStreamingSignature != nil {
+            } else if !streamingView.isHidden || !streamingRichHostingController.view.isHidden || lastStreamingSignature != nil {
                 let hideStreamingView: () -> Void = { [weak self] in
                     guard let self else { return }
                     UIView.performWithoutAnimation {
                         self.streamingView.reset()
                         self.streamingView.isHidden = true
+                        self.streamingRichHostingController.rootView = AnyView(EmptyView())
+                        self.streamingRichHostingController.view.isHidden = true
                     }
                     self.lastStreamingSignature = nil
+                    self.streamingRenderMode = .native
                     self.pendingStreamingHideWorkItem = nil
                     self.reportMetrics()
                 }
@@ -2045,6 +2112,27 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
                 -scrollView.contentInset.top,
                 scrollView.contentSize.height - scrollView.bounds.height + scrollView.contentInset.bottom
             )
+        }
+
+        private static func shouldUseRichStreamingRenderer(for message: ChatMessage) -> Bool {
+            if !message.imageAttachments.isEmpty || !message.fileAttachments.isEmpty {
+                return true
+            }
+
+            let text = message.content
+            if text.contains("```") {
+                return true
+            }
+
+            let hasTableRow = text.range(
+                of: #"(?m)^\s*\|.+\|\s*$"#,
+                options: .regularExpression
+            ) != nil
+            let hasTableSeparator = text.range(
+                of: #"(?m)^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$"#,
+                options: .regularExpression
+            ) != nil
+            return hasTableRow && hasTableSeparator
         }
     }
 }
@@ -2362,7 +2450,7 @@ private final class NativeStreamingAssistantView: UIView {
     }
 
     private var bodyTextAttributes: [NSAttributedString.Key: Any] {
-        let bodyFont = UIFont(name: "PingFangSC-Regular", size: 15.5) ?? UIFont.systemFont(ofSize: 15.5, weight: .regular)
+        let bodyFont = UIFont(name: "PingFangSC-Medium", size: 16) ?? UIFont.systemFont(ofSize: 16, weight: .medium)
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineSpacing = 4.2
         paragraph.paragraphSpacing = 2
@@ -2378,7 +2466,7 @@ private final class NativeStreamingAssistantView: UIView {
         paragraph.lineSpacing = 2.8
         paragraph.paragraphSpacing = 4
         return [
-            .font: UIFont.monospacedSystemFont(ofSize: 13, weight: .regular),
+            .font: UIFont.monospacedSystemFont(ofSize: 13.5, weight: .medium),
             .foregroundColor: UIColor.label,
             .paragraphStyle: paragraph
         ]

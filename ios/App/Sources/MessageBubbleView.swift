@@ -23,7 +23,7 @@ struct MessageBubbleView: View {
     @State private var pendingPythonRun: PendingPythonRun?
     @State private var pythonStdinDraft = ""
     @State private var waitingDotPulse = false
-    private let chatUIFont = UIFont(name: "PingFangSC-Regular", size: 15.5) ?? UIFont.systemFont(ofSize: 15.5, weight: .regular)
+    private let chatUIFont = UIFont(name: "PingFangSC-Medium", size: 16) ?? UIFont.systemFont(ofSize: 16, weight: .medium)
 
     var body: some View {
         Group {
@@ -239,7 +239,7 @@ struct MessageBubbleView: View {
                     .foregroundStyle(.secondary)
             } else if let fallback = fallbackPlainText {
                 Text(fallback)
-                    .font(.custom("PingFangSC-Regular", size: 15.5))
+                    .font(.custom("PingFangSC-Medium", size: 16))
                     .lineSpacing(4)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
@@ -383,7 +383,7 @@ struct MessageBubbleView: View {
         switch segment {
         case .text(let text):
             Text(text)
-                .font(.custom("PingFangSC-Regular", size: 15.5))
+                .font(.custom("PingFangSC-Medium", size: 16))
                 .lineSpacing(4)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
@@ -561,7 +561,7 @@ struct MessageBubbleView: View {
             SelectableCodeTextView(
                 text: content,
                 textColor: UIColor.label,
-                font: .monospacedSystemFont(ofSize: 15, weight: .regular),
+                font: .monospacedSystemFont(ofSize: 15.5, weight: .medium),
                 lineSpacing: 3.5,
                 language: language,
                 codeThemeMode: codeThemeMode,
