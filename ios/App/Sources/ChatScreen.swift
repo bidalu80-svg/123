@@ -967,7 +967,7 @@ struct ChatScreen: View {
                 showsAssistantActionBar: false,
                 onRegenerate: nil
             )
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 18)
         )
     }
 
@@ -1781,17 +1781,11 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
     }
 
     final class Controller: UIViewController, UIScrollViewDelegate {
-        private enum StreamingRenderMode {
-            case native
-            case rich
-        }
-
         private let scrollView = UIScrollView()
         private let stackView = UIStackView()
         private let historyHostingController = UIHostingController(rootView: AnyView(EmptyView()))
         private let streamingLeadHostingController = UIHostingController(rootView: AnyView(EmptyView()))
         private let streamingRichHostingController = UIHostingController(rootView: AnyView(EmptyView()))
-        private let streamingView = NativeStreamingAssistantView()
         private let spacerView = UIView()
         private var onMetricsChanged: (ChatTranscriptMetrics) -> Void
         private var lastReportedMetrics = ChatTranscriptMetrics()
@@ -1802,7 +1796,6 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
         private var lastStreamingLeadSignature: String?
         private var lastStreamingMessageID: UUID?
         private var pendingStreamingHideWorkItem: DispatchWorkItem?
-        private var streamingRenderMode: StreamingRenderMode = .native
 
         init(onMetricsChanged: @escaping (ChatTranscriptMetrics) -> Void) {
             self.onMetricsChanged = onMetricsChanged
@@ -1861,10 +1854,6 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             stackView.addArrangedSubview(streamingLeadHostingController.view)
             streamingLeadHostingController.didMove(toParent: self)
 
-            streamingView.translatesAutoresizingMaskIntoConstraints = false
-            streamingView.isHidden = true
-            stackView.addArrangedSubview(streamingView)
-
             streamingRichHostingController.sizingOptions = [.intrinsicContentSize]
             streamingRichHostingController.view.backgroundColor = .clear
             streamingRichHostingController.view.translatesAutoresizingMaskIntoConstraints = false
@@ -1919,9 +1908,6 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
                 }
                 lastHistoryVersion = historyVersion
                 lastStreamingMessageID = streamingMessageID
-                if streamingIdentityChanged {
-                    streamingRenderMode = .native
-                }
             }
 
             var streamingLeadChanged = false
@@ -1951,58 +1937,34 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             if let streamingMessage {
                 pendingStreamingHideWorkItem?.cancel()
                 pendingStreamingHideWorkItem = nil
-                let shouldUseRichRenderer =
-                    streamingRenderMode == .rich
-                    || Self.shouldUseRichStreamingRenderer(for: streamingMessage)
-
-                if shouldUseRichRenderer {
-                    streamingRenderMode = .rich
-                    if newStreamingSignature != lastStreamingSignature || streamingRichHostingController.view.isHidden {
-                        UIView.performWithoutAnimation {
-                            let richView = AnyView(
-                                MessageBubbleView(
-                                    message: streamingMessage,
-                                    codeThemeMode: codeThemeMode,
-                                    apiKey: apiKey,
-                                    apiBaseURL: apiBaseURL,
-                                    showsAssistantActionBar: false,
-                                    onRegenerate: nil
-                                )
-                                .padding(.horizontal, 12)
+                if newStreamingSignature != lastStreamingSignature
+                    || streamingRichHostingController.view.isHidden {
+                    UIView.performWithoutAnimation {
+                        let richView = AnyView(
+                            MessageBubbleView(
+                                message: streamingMessage,
+                                codeThemeMode: codeThemeMode,
+                                apiKey: apiKey,
+                                apiBaseURL: apiBaseURL,
+                                showsAssistantActionBar: false,
+                                onRegenerate: nil
                             )
-                            streamingRichHostingController.rootView = richView
-                            streamingRichHostingController.view.invalidateIntrinsicContentSize()
-                            streamingRichHostingController.view.isHidden = false
-                            streamingView.reset()
-                            streamingView.isHidden = true
-                        }
-                        lastStreamingSignature = newStreamingSignature
+                            .padding(.horizontal, 18)
+                        )
+                        streamingRichHostingController.rootView = richView
+                        streamingRichHostingController.view.invalidateIntrinsicContentSize()
+                        streamingRichHostingController.view.isHidden = false
                     }
-                } else {
-                    streamingRenderMode = .native
-                    if newStreamingSignature != lastStreamingSignature
-                        || streamingView.isHidden
-                        || !streamingRichHostingController.view.isHidden {
-                        UIView.performWithoutAnimation {
-                            streamingRichHostingController.rootView = AnyView(EmptyView())
-                            streamingRichHostingController.view.isHidden = true
-                            streamingView.isHidden = false
-                            streamingView.apply(message: streamingMessage)
-                        }
-                        lastStreamingSignature = newStreamingSignature
-                    }
+                    lastStreamingSignature = newStreamingSignature
                 }
-            } else if !streamingView.isHidden || !streamingRichHostingController.view.isHidden || lastStreamingSignature != nil {
+            } else if !streamingRichHostingController.view.isHidden || lastStreamingSignature != nil {
                 let hideStreamingView: () -> Void = { [weak self] in
                     guard let self else { return }
                     UIView.performWithoutAnimation {
-                        self.streamingView.reset()
-                        self.streamingView.isHidden = true
                         self.streamingRichHostingController.rootView = AnyView(EmptyView())
                         self.streamingRichHostingController.view.isHidden = true
                     }
                     self.lastStreamingSignature = nil
-                    self.streamingRenderMode = .native
                     self.pendingStreamingHideWorkItem = nil
                     self.reportMetrics()
                 }
@@ -2113,27 +2075,6 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
                 scrollView.contentSize.height - scrollView.bounds.height + scrollView.contentInset.bottom
             )
         }
-
-        private static func shouldUseRichStreamingRenderer(for message: ChatMessage) -> Bool {
-            if !message.imageAttachments.isEmpty || !message.fileAttachments.isEmpty {
-                return true
-            }
-
-            let text = message.content
-            if text.contains("```") {
-                return true
-            }
-
-            let hasTableRow = text.range(
-                of: #"(?m)^\s*\|.+\|\s*$"#,
-                options: .regularExpression
-            ) != nil
-            let hasTableSeparator = text.range(
-                of: #"(?m)^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$"#,
-                options: .regularExpression
-            ) != nil
-            return hasTableRow && hasTableSeparator
-        }
     }
 }
 
@@ -2165,569 +2106,6 @@ private struct ScrollsToTopConfigurator: UIViewRepresentable {
                 scrollView.scrollsToTop = self.enabled
             }
         }
-    }
-}
-
-private final class NativeStreamingAssistantView: UIView {
-    private enum RenderStyle {
-        case body
-        case code
-    }
-
-    private let containerStack = UIStackView()
-    private let identityStack = UIStackView()
-    private let identityIconView = UIImageView()
-    private let identityNameLabel = UILabel()
-    private let textView = UITextView()
-    private let imageProgressStack = UIStackView()
-    private let imageProgressCard = ImageGenerationProgressCardView()
-    private let waitingDotStack = UIStackView()
-    private let waitingDotView = UIView()
-    private let waitingDotSpacer = UIView()
-
-    private var currentMessageID: UUID?
-    private var currentSourceUTF16Length = 0
-    private var pendingDisplayText = ""
-    private var streamDisplayLink: CADisplayLink?
-    private var lastDisplayLinkTimestamp: CFTimeInterval = 0
-    private var pendingLayoutCharacters = 0
-    private var pendingFenceTickCount = 0
-    private var inCodeBlock = false
-    private var waitingForCodeLanguageLine = false
-    private var languageProbe = ""
-    private var waitingDotAnimationRunning = false
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        setup()
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    deinit {
-        stopDisplayLinkIfNeeded()
-    }
-
-    func apply(message: ChatMessage) {
-        let shouldShowImageProgress =
-            message.isImageGenerationPlaceholder
-            && message.imageAttachments.isEmpty
-
-        imageProgressStack.isHidden = !shouldShowImageProgress
-        waitingDotStack.isHidden = true
-        textView.isHidden = shouldShowImageProgress
-
-        if shouldShowImageProgress {
-            stopWaitingDotAnimationIfNeeded()
-            pendingDisplayText.removeAll(keepingCapacity: false)
-            stopDisplayLinkIfNeeded()
-            currentMessageID = message.id
-            currentSourceUTF16Length = 0
-            pendingLayoutCharacters = 0
-            invalidateIntrinsicContentSize()
-            setNeedsLayout()
-            return
-        }
-
-        let sourceText: String
-        if !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            sourceText = Self.normalizedStreamingText(message.content)
-        } else if !message.imageAttachments.isEmpty {
-            sourceText = "正在接收图片…"
-        } else {
-            sourceText = ""
-        }
-
-        let shouldShowWaitingDot = sourceText.isEmpty && message.imageAttachments.isEmpty
-        waitingDotStack.isHidden = !shouldShowWaitingDot
-        textView.isHidden = shouldShowWaitingDot
-
-        if shouldShowWaitingDot {
-            startWaitingDotAnimationIfNeeded()
-            pendingDisplayText.removeAll(keepingCapacity: false)
-            stopDisplayLinkIfNeeded()
-            currentMessageID = message.id
-            currentSourceUTF16Length = 0
-            pendingLayoutCharacters = 0
-            resetParserState()
-            textView.attributedText = NSAttributedString()
-            invalidateIntrinsicContentSize()
-            setNeedsLayout()
-            return
-        } else {
-            stopWaitingDotAnimationIfNeeded()
-        }
-
-        let sourceUTF16Length = sourceText.utf16.count
-
-        if currentMessageID == message.id, sourceUTF16Length >= currentSourceUTF16Length {
-            let rawSuffix = (sourceText as NSString).substring(from: currentSourceUTF16Length)
-            if !rawSuffix.isEmpty {
-                let displaySuffix = Self.streamingDisplayDeltaText(rawSuffix)
-                enqueueStreamingDisplayText(displaySuffix)
-            }
-        } else {
-            pendingDisplayText.removeAll(keepingCapacity: false)
-            stopDisplayLinkIfNeeded()
-            resetParserState()
-            textView.attributedText = NSAttributedString()
-            let displayText = Self.streamingDisplayDeltaText(sourceText)
-            pendingLayoutCharacters = 0
-            if !displayText.isEmpty {
-                enqueueStreamingDisplayText(displayText)
-            } else {
-                invalidateIntrinsicContentSize()
-                setNeedsLayout()
-            }
-        }
-
-        currentMessageID = message.id
-        currentSourceUTF16Length = sourceUTF16Length
-    }
-
-    func reset() {
-        pendingDisplayText.removeAll(keepingCapacity: false)
-        stopDisplayLinkIfNeeded()
-        currentMessageID = nil
-        currentSourceUTF16Length = 0
-        pendingLayoutCharacters = 0
-        resetParserState()
-        imageProgressStack.isHidden = true
-        waitingDotStack.isHidden = true
-        stopWaitingDotAnimationIfNeeded()
-        textView.isHidden = false
-        textView.attributedText = nil
-        invalidateIntrinsicContentSize()
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-    }
-
-    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
-        super.traitCollectionDidChange(previousTraitCollection)
-    }
-
-    override var intrinsicContentSize: CGSize {
-        let textWidth = max(bounds.width - 12, 0)
-        guard textWidth > 1 else {
-            return CGSize(width: UIView.noIntrinsicMetric, height: 44)
-        }
-
-        if !imageProgressStack.isHidden {
-            let totalHeight: CGFloat = 8 + 18 + 6 + 300 + 14
-            return CGSize(width: UIView.noIntrinsicMetric, height: totalHeight)
-        }
-
-        if !waitingDotStack.isHidden {
-            let totalHeight: CGFloat = 8 + 18 + 6 + 14 + 14
-            return CGSize(width: UIView.noIntrinsicMetric, height: totalHeight)
-        }
-
-        let fitted = textView.sizeThatFits(CGSize(width: textWidth, height: .greatestFiniteMagnitude))
-        let totalHeight = 10 + 18 + 6 + fitted.height + 14
-        return CGSize(width: UIView.noIntrinsicMetric, height: totalHeight)
-    }
-
-    private func setup() {
-        backgroundColor = .clear
-
-        containerStack.axis = .vertical
-        containerStack.alignment = .fill
-        containerStack.spacing = 6
-        containerStack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(containerStack)
-
-        NSLayoutConstraint.activate([
-            containerStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
-            containerStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
-            containerStack.topAnchor.constraint(equalTo: topAnchor, constant: 8),
-            containerStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
-        ])
-
-        identityStack.axis = .horizontal
-        identityStack.alignment = .center
-        identityStack.spacing = 7
-
-        identityIconView.translatesAutoresizingMaskIntoConstraints = false
-        identityIconView.image = UIImage(systemName: "sparkles")
-        identityIconView.tintColor = .white
-        identityIconView.contentMode = .center
-        identityIconView.backgroundColor = .black
-        identityIconView.layer.cornerRadius = 5
-        identityIconView.layer.masksToBounds = true
-        identityIconView.layer.borderWidth = 0.8
-        identityIconView.layer.borderColor = UIColor.white.withAlphaComponent(0.16).cgColor
-        NSLayoutConstraint.activate([
-            identityIconView.widthAnchor.constraint(equalToConstant: 18),
-            identityIconView.heightAnchor.constraint(equalToConstant: 18)
-        ])
-
-        identityNameLabel.text = "IEXA"
-        identityNameLabel.font = .systemFont(ofSize: 14, weight: .semibold)
-        identityNameLabel.textColor = .label
-
-        identityStack.addArrangedSubview(identityIconView)
-        identityStack.addArrangedSubview(identityNameLabel)
-        identityStack.addArrangedSubview(UIView())
-        containerStack.addArrangedSubview(identityStack)
-
-        imageProgressStack.axis = .vertical
-        imageProgressStack.alignment = .leading
-        imageProgressStack.spacing = 0
-        imageProgressStack.isHidden = true
-
-        imageProgressCard.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            imageProgressCard.widthAnchor.constraint(equalToConstant: 300),
-            imageProgressCard.heightAnchor.constraint(equalToConstant: 300)
-        ])
-
-        imageProgressStack.addArrangedSubview(imageProgressCard)
-        containerStack.addArrangedSubview(imageProgressStack)
-
-        waitingDotStack.axis = .horizontal
-        waitingDotStack.alignment = .leading
-        waitingDotStack.distribution = .fill
-        waitingDotStack.spacing = 0
-        waitingDotStack.isHidden = true
-
-        waitingDotView.translatesAutoresizingMaskIntoConstraints = false
-        waitingDotView.backgroundColor = .black
-        waitingDotView.layer.cornerRadius = 3.5
-        waitingDotView.layer.masksToBounds = true
-        NSLayoutConstraint.activate([
-            waitingDotView.widthAnchor.constraint(equalToConstant: 7),
-            waitingDotView.heightAnchor.constraint(equalToConstant: 7)
-        ])
-        waitingDotView.setContentHuggingPriority(.required, for: .horizontal)
-        waitingDotView.setContentCompressionResistancePriority(.required, for: .horizontal)
-
-        waitingDotSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        waitingDotSpacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        waitingDotStack.addArrangedSubview(waitingDotView)
-        waitingDotStack.addArrangedSubview(waitingDotSpacer)
-        containerStack.addArrangedSubview(waitingDotStack)
-
-        textView.isEditable = false
-        textView.isSelectable = true
-        textView.isUserInteractionEnabled = true
-        textView.isScrollEnabled = false
-        textView.isOpaque = false
-        textView.adjustsFontForContentSizeCategory = true
-        textView.dataDetectorTypes = []
-        textView.backgroundColor = .clear
-        textView.layer.backgroundColor = UIColor.clear.cgColor
-        textView.textContainerInset = .zero
-        textView.textContainer.lineFragmentPadding = 0
-        textView.textContainer.widthTracksTextView = true
-        textView.layer.masksToBounds = true
-        containerStack.addArrangedSubview(textView)
-    }
-
-    private var bodyTextAttributes: [NSAttributedString.Key: Any] {
-        let bodyFont = UIFont(name: "PingFangSC-Medium", size: 16) ?? UIFont.systemFont(ofSize: 16, weight: .medium)
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = 4.6
-        paragraph.paragraphSpacing = 0
-        return [
-            .font: bodyFont,
-            .foregroundColor: UIColor.label,
-            .paragraphStyle: paragraph
-        ]
-    }
-
-    private var codeTextAttributes: [NSAttributedString.Key: Any] {
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = 3.5
-        paragraph.paragraphSpacing = 0
-        return [
-            .font: UIFont.monospacedSystemFont(ofSize: 13.5, weight: .medium),
-            .foregroundColor: UIColor.label,
-            .paragraphStyle: paragraph
-        ]
-    }
-
-    private func appendStreamingText(_ rawText: String) -> Int {
-        guard !rawText.isEmpty else { return 0 }
-
-        let storage = textView.textStorage
-        storage.beginEditing()
-        defer {
-            storage.endEditing()
-        }
-
-        var visibleAppended = 0
-        var runText = ""
-        var runStyle: RenderStyle = inCodeBlock ? .code : .body
-
-        func flushRun() {
-            guard !runText.isEmpty else { return }
-            let attributes = runStyle == .code ? codeTextAttributes : bodyTextAttributes
-            storage.append(NSAttributedString(string: runText, attributes: attributes))
-            visibleAppended += runText.count
-            runText.removeAll(keepingCapacity: true)
-        }
-
-        func appendPendingBackticksAsLiteral() {
-            guard pendingFenceTickCount > 0 else { return }
-            runStyle = inCodeBlock ? .code : .body
-            runText.append(String(repeating: "`", count: pendingFenceTickCount))
-            pendingFenceTickCount = 0
-        }
-
-        for character in rawText {
-            if character == "`" {
-                pendingFenceTickCount += 1
-                if pendingFenceTickCount == 3 {
-                    flushRun()
-                    pendingFenceTickCount = 0
-                    inCodeBlock.toggle()
-                    waitingForCodeLanguageLine = inCodeBlock
-                    languageProbe.removeAll(keepingCapacity: false)
-                    runStyle = inCodeBlock ? .code : .body
-                }
-                continue
-            }
-
-            appendPendingBackticksAsLiteral()
-
-            if inCodeBlock && waitingForCodeLanguageLine {
-                if character == "\n" {
-                    waitingForCodeLanguageLine = false
-                    languageProbe.removeAll(keepingCapacity: false)
-                } else if character == " " || character == "\t" || languageProbe.count >= 20 {
-                    waitingForCodeLanguageLine = false
-                    let fallback = languageProbe + String(character)
-                    languageProbe.removeAll(keepingCapacity: false)
-                    if !fallback.isEmpty {
-                        let nextStyle: RenderStyle = .code
-                        if nextStyle != runStyle {
-                            flushRun()
-                            runStyle = nextStyle
-                        }
-                        runText.append(fallback)
-                    }
-                } else {
-                    languageProbe.append(character)
-                }
-                continue
-            }
-
-            let nextStyle: RenderStyle = inCodeBlock ? .code : .body
-            if nextStyle != runStyle {
-                flushRun()
-                runStyle = nextStyle
-            }
-            runText.append(character)
-        }
-
-        flushRun()
-        return visibleAppended
-    }
-
-    private func resetParserState() {
-        pendingFenceTickCount = 0
-        inCodeBlock = false
-        waitingForCodeLanguageLine = false
-        languageProbe.removeAll(keepingCapacity: false)
-    }
-
-    private func shouldInvalidateLayout(forRawSuffix suffix: String, appendedVisibleCharacters: Int) -> Bool {
-        guard appendedVisibleCharacters > 0 else { return false }
-        pendingLayoutCharacters += appendedVisibleCharacters
-        if suffix.contains("\n") || pendingLayoutCharacters >= 24 {
-            pendingLayoutCharacters = 0
-            return true
-        }
-        return false
-    }
-
-    private func enqueueStreamingDisplayText(_ text: String) {
-        guard !text.isEmpty else { return }
-        pendingDisplayText.append(text)
-        startDisplayLinkIfNeeded()
-    }
-
-    @objc
-    private func handleStreamingDisplayTick(_ link: CADisplayLink) {
-        guard !pendingDisplayText.isEmpty else {
-            stopDisplayLinkIfNeeded()
-            return
-        }
-
-        if lastDisplayLinkTimestamp > 0, link.timestamp - lastDisplayLinkTimestamp < (1.0 / 60.0) {
-            return
-        }
-        lastDisplayLinkTimestamp = link.timestamp
-
-        let step = displayStepSize(for: pendingDisplayText.count)
-        let chunk = consumeDisplayPrefix(maxCharacters: step)
-        guard !chunk.isEmpty else { return }
-
-        let appendedVisibleCharacters = appendStreamingText(chunk)
-        if shouldInvalidateLayout(forRawSuffix: chunk, appendedVisibleCharacters: appendedVisibleCharacters) {
-            invalidateIntrinsicContentSize()
-            setNeedsLayout()
-        }
-    }
-
-    private func consumeDisplayPrefix(maxCharacters: Int) -> String {
-        guard maxCharacters > 0, !pendingDisplayText.isEmpty else { return "" }
-        let end = pendingDisplayText.index(
-            pendingDisplayText.startIndex,
-            offsetBy: maxCharacters,
-            limitedBy: pendingDisplayText.endIndex
-        ) ?? pendingDisplayText.endIndex
-        let prefix = String(pendingDisplayText[..<end])
-        pendingDisplayText.removeSubrange(..<end)
-        return prefix
-    }
-
-    private func displayStepSize(for pendingCharacters: Int) -> Int {
-        switch pendingCharacters {
-        case 700...:
-            return 10
-        case 360...:
-            return 8
-        case 180...:
-            return 6
-        case 96...:
-            return 5
-        case 40...:
-            return 3
-        case 16...:
-            return 2
-        default:
-            return 1
-        }
-    }
-
-    private func startDisplayLinkIfNeeded() {
-        guard streamDisplayLink == nil else { return }
-        let link = CADisplayLink(target: self, selector: #selector(handleStreamingDisplayTick(_:)))
-        if #available(iOS 15.0, *) {
-            link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
-        } else {
-            link.preferredFramesPerSecond = 60
-        }
-        link.add(to: .main, forMode: .common)
-        streamDisplayLink = link
-        lastDisplayLinkTimestamp = 0
-    }
-
-    private func stopDisplayLinkIfNeeded() {
-        streamDisplayLink?.invalidate()
-        streamDisplayLink = nil
-        lastDisplayLinkTimestamp = 0
-    }
-
-    private func startWaitingDotAnimationIfNeeded() {
-        guard !waitingDotAnimationRunning else { return }
-        waitingDotAnimationRunning = true
-
-        waitingDotView.layer.removeAllAnimations()
-        waitingDotView.alpha = 0.95
-        waitingDotView.transform = .identity
-
-        let opacityAnimation = CABasicAnimation(keyPath: "opacity")
-        opacityAnimation.fromValue = 0.30
-        opacityAnimation.toValue = 0.95
-        opacityAnimation.duration = 0.62
-        opacityAnimation.autoreverses = true
-        opacityAnimation.repeatCount = .infinity
-        opacityAnimation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        waitingDotView.layer.add(opacityAnimation, forKey: "breathingOpacity")
-
-        let scaleAnimation = CABasicAnimation(keyPath: "transform.scale")
-        scaleAnimation.fromValue = 0.68
-        scaleAnimation.toValue = 1.0
-        scaleAnimation.duration = 0.62
-        scaleAnimation.autoreverses = true
-        scaleAnimation.repeatCount = .infinity
-        scaleAnimation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        waitingDotView.layer.add(scaleAnimation, forKey: "breathingScale")
-    }
-
-    private func stopWaitingDotAnimationIfNeeded() {
-        guard waitingDotAnimationRunning else { return }
-        waitingDotAnimationRunning = false
-        waitingDotView.layer.removeAnimation(forKey: "breathingOpacity")
-        waitingDotView.layer.removeAnimation(forKey: "breathingScale")
-        waitingDotView.alpha = 1
-        waitingDotView.transform = .identity
-    }
-
-    private static func normalizedStreamingText(_ raw: String) -> String {
-        raw.replacingOccurrences(of: "\r\n", with: "\n")
-    }
-
-    private static func streamingDisplayDeltaText(_ raw: String) -> String {
-        var text = normalizedStreamingText(raw)
-        text = text.replacingOccurrences(of: "(?m)^\\s{0,3}#{1,6}\\s*", with: "", options: .regularExpression)
-        text = text.replacingOccurrences(of: "(?m)^\\s*[-*•]\\s+", with: "• ", options: .regularExpression)
-        text = text.replacingOccurrences(of: "(?m)^\\s*\\d+[\\.)、]\\s+", with: "• ", options: .regularExpression)
-        text = text.replacingOccurrences(of: "(?m)^\\s*>\\s?", with: "", options: .regularExpression)
-        text = text.replacingOccurrences(of: "(?m)^\\s*([-*_])\\1{2,}\\s*$", with: "", options: .regularExpression)
-        text = text.replacingOccurrences(of: "(?<!`)`([^`\\n]+)`(?!`)", with: "$1", options: .regularExpression)
-        text = text.replacingOccurrences(of: "**", with: "")
-        text = text.replacingOccurrences(of: "__", with: "")
-        text = text.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
-        return text
-    }
-}
-
-private final class ImageGenerationProgressCardView: UIView {
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        backgroundColor = UIColor.secondarySystemBackground
-        layer.cornerRadius = 16
-        layer.masksToBounds = true
-        layer.borderWidth = 1
-        layer.borderColor = UIColor.black.withAlphaComponent(0.08).cgColor
-        isOpaque = false
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override func draw(_ rect: CGRect) {
-        guard let context = UIGraphicsGetCurrentContext() else { return }
-        context.saveGState()
-        defer { context.restoreGState() }
-
-        let dotColor = UIColor.label.withAlphaComponent(traitCollection.userInterfaceStyle == .dark ? 0.24 : 0.20)
-        context.setFillColor(dotColor.cgColor)
-
-        let spacing: CGFloat = 18
-        let radius: CGFloat = 1.25
-        var y: CGFloat = 12
-        while y < rect.height - 8 {
-            var x: CGFloat = 12
-            while x < rect.width - 8 {
-                context.fillEllipse(
-                    in: CGRect(
-                        x: x - radius,
-                        y: y - radius,
-                        width: radius * 2,
-                        height: radius * 2
-                    )
-                )
-                x += spacing
-            }
-            y += spacing
-        }
-    }
-
-    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
-        super.traitCollectionDidChange(previousTraitCollection)
-        layer.borderColor = UIColor.black.withAlphaComponent(traitCollection.userInterfaceStyle == .dark ? 0.14 : 0.08).cgColor
-        setNeedsDisplay()
     }
 }
 
