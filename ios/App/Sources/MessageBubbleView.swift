@@ -347,7 +347,7 @@ struct MessageBubbleView: View {
     }
 
     private var imageGenerationProgressCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 0) {
             TimelineView(.animation(minimumInterval: 0.12, paused: false)) { timeline in
                 ImageGenerationPlaceholderPattern(phase: timeline.date.timeIntervalSinceReferenceDate)
             }
@@ -357,15 +357,6 @@ struct MessageBubbleView: View {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .stroke(Color.black.opacity(colorScheme == .dark ? 0.14 : 0.08), lineWidth: 1)
             )
-
-            HStack(spacing: 8) {
-                ProgressView()
-                    .controlSize(.small)
-                Text("正在生成图片…")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 4)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityLabel("生图中")

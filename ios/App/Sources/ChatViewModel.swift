@@ -813,11 +813,14 @@ final class ChatViewModel: ObservableObject {
 
     private func applyPendingStreamDelta(_ delta: PendingStreamDelta, to id: UUID, target: StreamTargetContext) {
         let shouldKeepStreamingState = isStreamingPlaceholderEnabled(for: config.endpointMode)
+        let shouldDisplayStreamingText = config.endpointMode != .imageGenerations
 
         if target.isPrivateMode {
             guard let msgIndex = privateMessages.firstIndex(where: { $0.id == id }) else { return }
-            if !delta.deltaText.isEmpty {
+            if shouldDisplayStreamingText, !delta.deltaText.isEmpty {
                 privateMessages[msgIndex].content += delta.deltaText
+                privateMessages[msgIndex].isStreaming = shouldKeepStreamingState
+            } else {
                 privateMessages[msgIndex].isStreaming = shouldKeepStreamingState
             }
             if !delta.imageURLs.isEmpty {
@@ -833,8 +836,10 @@ final class ChatViewModel: ObservableObject {
         guard let index = sessionIndex(for: target),
               let msgIndex = sessions[index].messages.firstIndex(where: { $0.id == id }) else { return }
 
-        if !delta.deltaText.isEmpty {
+        if shouldDisplayStreamingText, !delta.deltaText.isEmpty {
             sessions[index].messages[msgIndex].content += delta.deltaText
+            sessions[index].messages[msgIndex].isStreaming = shouldKeepStreamingState
+        } else {
             sessions[index].messages[msgIndex].isStreaming = shouldKeepStreamingState
         }
         if !delta.imageURLs.isEmpty {
@@ -850,13 +855,18 @@ final class ChatViewModel: ObservableObject {
 
     private func finishStreamingMessage(id: UUID, reply: ChatReply, target: StreamTargetContext) {
         let normalizedReplyText = normalizedFinalStreamingText(reply.text)
+        let shouldKeepFinalText = config.endpointMode != .imageGenerations
 
         if target.isPrivateMode {
             guard let msgIndex = privateMessages.firstIndex(where: { $0.id == id }) else { return }
-            privateMessages[msgIndex].content = finalizedAssistantContent(
-                existingContent: privateMessages[msgIndex].content,
-                fallbackReplyText: normalizedReplyText
-            )
+            if shouldKeepFinalText {
+                privateMessages[msgIndex].content = finalizedAssistantContent(
+                    existingContent: privateMessages[msgIndex].content,
+                    fallbackReplyText: normalizedReplyText
+                )
+            } else {
+                privateMessages[msgIndex].content = ""
+            }
             privateMessages[msgIndex].imageAttachments = deduplicateImages(
                 privateMessages[msgIndex].imageAttachments + reply.imageAttachments
             )
@@ -873,10 +883,14 @@ final class ChatViewModel: ObservableObject {
         guard let index = sessionIndex(for: target),
               let msgIndex = sessions[index].messages.firstIndex(where: { $0.id == id }) else { return }
 
-        sessions[index].messages[msgIndex].content = finalizedAssistantContent(
-            existingContent: sessions[index].messages[msgIndex].content,
-            fallbackReplyText: normalizedReplyText
-        )
+        if shouldKeepFinalText {
+            sessions[index].messages[msgIndex].content = finalizedAssistantContent(
+                existingContent: sessions[index].messages[msgIndex].content,
+                fallbackReplyText: normalizedReplyText
+            )
+        } else {
+            sessions[index].messages[msgIndex].content = ""
+        }
         sessions[index].messages[msgIndex].imageAttachments = deduplicateImages(
             sessions[index].messages[msgIndex].imageAttachments + reply.imageAttachments
         )
@@ -980,10 +994,6 @@ final class ChatViewModel: ObservableObject {
     private func finalizedAssistantContent(existingContent: String, fallbackReplyText: String) -> String {
         let existing = existingContent.trimmingCharacters(in: .whitespacesAndNewlines)
         if !existing.isEmpty {
-            let normalizedExisting = normalizedFinalStreamingText(existingContent)
-            if !normalizedExisting.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return normalizedExisting
-            }
             return existingContent
         }
         return fallbackReplyText
