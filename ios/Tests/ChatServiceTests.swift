@@ -482,6 +482,49 @@ final class ChatServiceTests: XCTestCase {
             return false
         })
     }
+
+    func testMessageContentParserTurnsTSVCodeBlockIntoTableSegment() {
+        let message = ChatMessage(
+            role: .assistant,
+            content: """
+            ```tsv
+            产品\t一月\t二月
+            A\t100\t120
+            B\t80\t90
+            ```
+            """
+        )
+
+        let segments = MessageContentParser.parse(message)
+        XCTAssertEqual(segments.count, 1)
+        guard case .table(let headers, let rows) = segments[0] else {
+            XCTFail("Expected table segment from tsv code block")
+            return
+        }
+        XCTAssertEqual(headers, ["产品", "一月", "二月"])
+        XCTAssertEqual(rows, [["A", "100", "120"], ["B", "80", "90"]])
+    }
+
+    func testMessageContentParserInfersPythonLanguageForCodeBlockWithoutLabel() {
+        let message = ChatMessage(
+            role: .assistant,
+            content: """
+            ```
+            def add(a, b):
+                return a + b
+            ```
+            """
+        )
+
+        let segments = MessageContentParser.parse(message)
+        XCTAssertEqual(segments.count, 1)
+        guard case .code(let language, let content) = segments[0] else {
+            XCTFail("Expected code segment")
+            return
+        }
+        XCTAssertEqual(language?.lowercased(), "python")
+        XCTAssertTrue(content.contains("def add"))
+    }
 }
 
 final class ChatViewModelTests: XCTestCase {

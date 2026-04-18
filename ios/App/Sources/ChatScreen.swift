@@ -2192,13 +2192,11 @@ private final class NativeStreamingAssistantView: UIView {
     private var streamDisplayLink: CADisplayLink?
     private var lastDisplayLinkTimestamp: CFTimeInterval = 0
     private var pendingLayoutCharacters = 0
-    private var pendingGradientCharacters = 0
     private var pendingFenceTickCount = 0
     private var inCodeBlock = false
     private var waitingForCodeLanguageLine = false
     private var languageProbe = ""
     private var waitingDotAnimationRunning = false
-    private var lastTailGradientRanges: [NSRange] = []
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -2230,7 +2228,6 @@ private final class NativeStreamingAssistantView: UIView {
             currentMessageID = message.id
             currentSourceUTF16Length = 0
             pendingLayoutCharacters = 0
-            pendingGradientCharacters = 0
             invalidateIntrinsicContentSize()
             setNeedsLayout()
             return
@@ -2256,10 +2253,8 @@ private final class NativeStreamingAssistantView: UIView {
             currentMessageID = message.id
             currentSourceUTF16Length = 0
             pendingLayoutCharacters = 0
-            pendingGradientCharacters = 0
             resetParserState()
             textView.attributedText = NSAttributedString()
-            lastTailGradientRanges.removeAll(keepingCapacity: false)
             invalidateIntrinsicContentSize()
             setNeedsLayout()
             return
@@ -2282,7 +2277,6 @@ private final class NativeStreamingAssistantView: UIView {
             textView.attributedText = NSAttributedString()
             let displayText = Self.streamingDisplayDeltaText(sourceText)
             pendingLayoutCharacters = 0
-            pendingGradientCharacters = 0
             if !displayText.isEmpty {
                 enqueueStreamingDisplayText(displayText)
             } else {
@@ -2301,14 +2295,12 @@ private final class NativeStreamingAssistantView: UIView {
         currentMessageID = nil
         currentSourceUTF16Length = 0
         pendingLayoutCharacters = 0
-        pendingGradientCharacters = 0
         resetParserState()
         imageProgressStack.isHidden = true
         waitingDotStack.isHidden = true
         stopWaitingDotAnimationIfNeeded()
         textView.isHidden = false
         textView.attributedText = nil
-        lastTailGradientRanges.removeAll(keepingCapacity: false)
         invalidateIntrinsicContentSize()
     }
 
@@ -2318,9 +2310,6 @@ private final class NativeStreamingAssistantView: UIView {
 
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
         super.traitCollectionDidChange(previousTraitCollection)
-        if previousTraitCollection?.userInterfaceStyle != traitCollection.userInterfaceStyle {
-            applyStreamingTailGradient()
-        }
     }
 
     override var intrinsicContentSize: CGSize {
@@ -2547,11 +2536,6 @@ private final class NativeStreamingAssistantView: UIView {
         }
 
         flushRun()
-        pendingGradientCharacters += visibleAppended
-        if rawText.contains("\n") || pendingGradientCharacters >= 14 {
-            applyStreamingTailGradient()
-            pendingGradientCharacters = 0
-        }
         return visibleAppended
     }
 
@@ -2649,65 +2633,6 @@ private final class NativeStreamingAssistantView: UIView {
         streamDisplayLink?.invalidate()
         streamDisplayLink = nil
         lastDisplayLinkTimestamp = 0
-        if pendingGradientCharacters > 0 {
-            applyStreamingTailGradient()
-            pendingGradientCharacters = 0
-        }
-    }
-
-    private func applyStreamingTailGradient() {
-        let storage = textView.textStorage
-
-        if !lastTailGradientRanges.isEmpty {
-            let totalLength = storage.length
-            for rawRange in lastTailGradientRanges {
-                guard rawRange.location < totalLength else { continue }
-                let clampedLength = min(rawRange.length, totalLength - rawRange.location)
-                guard clampedLength > 0 else { continue }
-                storage.addAttribute(
-                    .foregroundColor,
-                    value: UIColor.label,
-                    range: NSRange(location: rawRange.location, length: clampedLength)
-                )
-            }
-            lastTailGradientRanges.removeAll(keepingCapacity: true)
-        }
-
-        let length = storage.length
-        guard length > 0 else { return }
-
-        let tipCount = min(4, length)
-        let midCount = min(10, max(0, length - tipCount))
-        let fadeCount = min(14, max(0, length - tipCount - midCount))
-        let base = UIColor.label
-        let tipColor = base.withAlphaComponent(traitCollection.userInterfaceStyle == .dark ? 0.58 : 0.46)
-        let midColor = base.withAlphaComponent(traitCollection.userInterfaceStyle == .dark ? 0.72 : 0.62)
-        let fadeColor = base.withAlphaComponent(traitCollection.userInterfaceStyle == .dark ? 0.86 : 0.80)
-
-        var ranges: [NSRange] = []
-        var cursor = length
-
-        if tipCount > 0 {
-            let range = NSRange(location: cursor - tipCount, length: tipCount)
-            storage.addAttribute(.foregroundColor, value: tipColor, range: range)
-            ranges.append(range)
-            cursor -= tipCount
-        }
-
-        if midCount > 0 {
-            let range = NSRange(location: cursor - midCount, length: midCount)
-            storage.addAttribute(.foregroundColor, value: midColor, range: range)
-            ranges.append(range)
-            cursor -= midCount
-        }
-
-        if fadeCount > 0 {
-            let range = NSRange(location: cursor - fadeCount, length: fadeCount)
-            storage.addAttribute(.foregroundColor, value: fadeColor, range: range)
-            ranges.append(range)
-        }
-
-        lastTailGradientRanges = ranges
     }
 
     private func startWaitingDotAnimationIfNeeded() {
@@ -2793,7 +2718,7 @@ private final class NativeStreamingAssistantView: UIView {
         flushBuffer()
         guard chunks.count >= 2 else { return text }
 
-        return chunks.joined(separator: "\n\n▎▎▎\n\n")
+        return chunks.joined(separator: "\n\n⸻\n\n")
     }
 
     private static func isSectionHeading(_ paragraph: String) -> Bool {

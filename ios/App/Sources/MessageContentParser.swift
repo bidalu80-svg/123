@@ -117,16 +117,20 @@ enum MessageContentParser {
             if let fenceEnd = raw[codeStart...].range(of: "```") {
                 let block = String(raw[codeStart..<fenceEnd.lowerBound])
                 let parsed = parseCodeBlock(block)
-                if !parsed.1.isEmpty {
-                    segments.append(.code(language: parsed.0, content: parsed.1))
+                if let table = parseDelimitedTableFromCode(language: parsed.0, content: parsed.1) {
+                    segments.append(.table(headers: table.headers, rows: table.rows))
+                } else if !parsed.1.isEmpty {
+                    segments.append(.code(language: inferCodeLanguage(language: parsed.0, content: parsed.1), content: parsed.1))
                 }
                 cursor = fenceEnd.upperBound
             } else {
                 // Streaming unfinished fence: enter code module immediately.
                 let block = String(raw[codeStart...])
                 let parsed = parseCodeBlock(block)
-                if !parsed.1.isEmpty {
-                    segments.append(.code(language: parsed.0, content: parsed.1))
+                if let table = parseDelimitedTableFromCode(language: parsed.0, content: parsed.1) {
+                    segments.append(.table(headers: table.headers, rows: table.rows))
+                } else if !parsed.1.isEmpty {
+                    segments.append(.code(language: inferCodeLanguage(language: parsed.0, content: parsed.1), content: parsed.1))
                 }
                 break
             }
@@ -260,6 +264,128 @@ enum MessageContentParser {
             return (nil, normalized.trimmingCharacters(in: .whitespacesAndNewlines))
         }
         return (maybeLanguage.isEmpty ? nil : maybeLanguage, body)
+    }
+
+    private static func parseDelimitedTableFromCode(
+        language: String?,
+        content: String
+    ) -> (headers: [String], rows: [[String]])? {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let normalizedLanguage = (language ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let forceDelimited = ["csv", "tsv", "excel", "xlsx"].contains(normalizedLanguage)
+
+        let delimiter: Character?
+        if normalizedLanguage == "tsv" || trimmed.contains("\t") {
+            delimiter = "\t"
+        } else if forceDelimited || isLikelyDelimitedData(trimmed, delimiter: ",") {
+            delimiter = ","
+        } else if isLikelyDelimitedData(trimmed, delimiter: ";") {
+            delimiter = ";"
+        } else {
+            delimiter = nil
+        }
+
+        guard let delimiter else { return nil }
+
+        let lines = trimmed
+            .components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard lines.count >= 2 else { return nil }
+
+        let header = splitDelimitedCells(lines[0], delimiter: delimiter)
+        guard header.count >= 2 else { return nil }
+
+        var rows: [[String]] = []
+        for line in lines.dropFirst() {
+            let cells = splitDelimitedCells(line, delimiter: delimiter)
+            guard !cells.isEmpty else { continue }
+            if cells.count == header.count {
+                rows.append(cells)
+            } else if cells.count > header.count {
+                rows.append(Array(cells.prefix(header.count)))
+            } else {
+                rows.append(cells + Array(repeating: "", count: header.count - cells.count))
+            }
+        }
+
+        guard !rows.isEmpty else { return nil }
+        let cleanedHeader = header.map(cleanTableCell)
+        let cleanedRows = rows.map { row in row.map(cleanTableCell) }
+        return (headers: cleanedHeader, rows: cleanedRows)
+    }
+
+    private static func splitDelimitedCells(_ line: String, delimiter: Character) -> [String] {
+        line
+            .split(separator: delimiter, omittingEmptySubsequences: false)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+    }
+
+    private static func isLikelyDelimitedData(_ text: String, delimiter: Character) -> Bool {
+        let lines = text
+            .components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard lines.count >= 2 else { return false }
+
+        let suspiciousCodeTokens = ["{", "}", "=>", "func ", "class ", "def ", "return ", "import "]
+        if lines.contains(where: { line in suspiciousCodeTokens.contains(where: { line.contains($0) }) }) {
+            return false
+        }
+
+        let counts = lines.map { line in
+            line.reduce(into: 0) { count, character in
+                if character == delimiter { count += 1 }
+            }
+        }
+        let positive = counts.filter { $0 > 0 }
+        guard positive.count >= 2 else { return false }
+
+        let maxCount = positive.max() ?? 0
+        let minCount = positive.min() ?? 0
+        guard maxCount >= 1, maxCount - minCount <= 1 else { return false }
+        return true
+    }
+
+    private static func inferCodeLanguage(language: String?, content: String) -> String? {
+        let normalized = language?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let normalized, !normalized.isEmpty {
+            return normalized
+        }
+
+        let sample = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sample.isEmpty else { return nil }
+
+        if parseDelimitedTableFromCode(language: nil, content: sample) != nil {
+            return sample.contains("\t") ? "tsv" : "csv"
+        }
+
+        let lowered = sample.lowercased()
+        if lowered.hasPrefix("{") || lowered.hasPrefix("["),
+           lowered.contains("\":") {
+            return "json"
+        }
+        if lowered.contains("def ") || lowered.contains("print(") || lowered.contains("import pandas") {
+            return "python"
+        }
+        if lowered.contains("function ") || lowered.contains("const ") || lowered.contains("let ") || lowered.contains("=>") {
+            return "javascript"
+        }
+        if lowered.contains("<html") || lowered.contains("<body") || lowered.contains("<!doctype html") {
+            return "html"
+        }
+        if lowered.contains("select ") || lowered.contains(" from ") || lowered.contains(" where ") {
+            return "sql"
+        }
+        if lowered.contains("public class ") || lowered.contains("system.out.println") {
+            return "java"
+        }
+        if lowered.contains("import swift") || lowered.contains("let ") && lowered.contains("func ") {
+            return "swift"
+        }
+        return nil
     }
 
     private static func parseInlineImages(in text: String) -> [MessageSegment] {
@@ -437,8 +563,16 @@ enum MessageContentParser {
     private static func cleanMarkdownForDisplay(_ raw: String) -> String {
         var text = raw
         text = text.replacingOccurrences(of: "\r\n", with: "\n")
+        text = text.replacingOccurrences(of: "(?m)^\\s{0,3}#{1,6}\\s*", with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?m)^\\s*[-*•]\\s+", with: "• ", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?m)^\\s*\\d+[\\.)、]\\s+", with: "• ", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?m)^\\s*>\\s?", with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?<!`)`([^`\\n]+)`(?!`)", with: "$1", options: .regularExpression)
+        text = text.replacingOccurrences(of: "**", with: "")
+        text = text.replacingOccurrences(of: "__", with: "")
         text = text.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
         text = expandGitHubRepositoryLinks(in: text)
+        text = autoBulletizePlainLineGroups(text)
         return text
     }
 
