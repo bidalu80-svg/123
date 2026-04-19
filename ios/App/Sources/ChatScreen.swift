@@ -43,6 +43,7 @@ struct ChatScreen: View {
     @State private var showInitialConfigSheet = false
     @State private var autoFrontendPreview: AutoFrontendPreviewPayload?
     @State private var lastAutoBuiltAssistantMessageID: UUID?
+    @State private var composerMeasuredHeight: CGFloat = 0
     @State private var headerLeadingWidth: CGFloat = 36
     @State private var headerTrailingWidth: CGFloat = 108
     @State private var transcriptMetrics = ChatTranscriptMetrics()
@@ -119,6 +120,12 @@ struct ChatScreen: View {
                 seedAutoFrontendBuildCursor()
             } else {
                 lastAutoBuiltAssistantMessageID = nil
+            }
+        }
+        .onPreferenceChange(ComposerHeightPreferenceKey.self) { newValue in
+            let clamped = max(0, ceil(newValue))
+            if abs(clamped - composerMeasuredHeight) > 0.5 {
+                composerMeasuredHeight = clamped
             }
         }
         .onChange(of: selectedPhotoItems) { _, newItems in
@@ -228,6 +235,14 @@ struct ChatScreen: View {
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 composer
+                    .background(
+                        GeometryReader { proxy in
+                            Color.clear.preference(
+                                key: ComposerHeightPreferenceKey.self,
+                                value: proxy.size.height
+                            )
+                        }
+                    )
             }
             .background(
                 LinearGradient(
@@ -463,6 +478,7 @@ struct ChatScreen: View {
                 codeThemeMode: viewModel.config.codeThemeMode,
                 apiKey: viewModel.config.apiKey,
                 apiBaseURL: viewModel.config.normalizedBaseURL,
+                bottomReservedInset: composerMeasuredHeight,
                 command: transcriptCommand,
                 onMetricsChanged: { metrics in
                     if transcriptMetrics != metrics {
@@ -1817,6 +1833,14 @@ private struct HeaderTrailingWidthPreferenceKey: PreferenceKey {
     }
 }
 
+private struct ComposerHeightPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 private struct ChatTranscriptMetrics: Equatable {
     var canScroll: Bool = false
     var isAtBottom: Bool = true
@@ -1841,6 +1865,7 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
     let codeThemeMode: CodeThemeMode
     let apiKey: String
     let apiBaseURL: String
+    let bottomReservedInset: CGFloat
     let command: ChatTranscriptCommand?
     let onMetricsChanged: (ChatTranscriptMetrics) -> Void
 
@@ -1858,6 +1883,7 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             codeThemeMode: codeThemeMode,
             apiKey: apiKey,
             apiBaseURL: apiBaseURL,
+            bottomReservedInset: bottomReservedInset,
             command: command,
             onMetricsChanged: onMetricsChanged
         )
@@ -1879,6 +1905,7 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
         private var lastStreamingLeadSignature: String?
         private var lastStreamingMessageID: UUID?
         private var pendingStreamingHideWorkItem: DispatchWorkItem?
+        private var appliedBottomReservedInset: CGFloat = 0
 
         init(onMetricsChanged: @escaping (ChatTranscriptMetrics) -> Void) {
             self.onMetricsChanged = onMetricsChanged
@@ -1976,10 +2003,18 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             codeThemeMode: CodeThemeMode,
             apiKey: String,
             apiBaseURL: String,
+            bottomReservedInset: CGFloat,
             command: ChatTranscriptCommand?,
             onMetricsChanged: @escaping (ChatTranscriptMetrics) -> Void
         ) {
             self.onMetricsChanged = onMetricsChanged
+
+            let normalizedBottomInset = max(0, bottomReservedInset)
+            if abs(normalizedBottomInset - appliedBottomReservedInset) > 0.5 {
+                appliedBottomReservedInset = normalizedBottomInset
+                scrollView.contentInset.bottom = normalizedBottomInset
+                scrollView.scrollIndicatorInsets.bottom = normalizedBottomInset
+            }
 
             let historyChanged = historyVersion != lastHistoryVersion
             let streamingMessageID = streamingMessage?.id
@@ -2149,7 +2184,8 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
         }
 
         private var canScroll: Bool {
-            scrollView.contentSize.height > scrollView.bounds.height + 8
+            scrollView.contentSize.height + scrollView.contentInset.top + scrollView.contentInset.bottom
+                > scrollView.bounds.height + 8
         }
 
         private var bottomOffsetY: CGFloat {
