@@ -53,6 +53,62 @@ enum FrontendProjectBuilder {
         return looksLikeHTML(text)
     }
 
+    static func projectsRootURL() -> URL? {
+        let fileManager = FileManager.default
+        guard let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        return documentsURL.appendingPathComponent("FrontendProjects", isDirectory: true)
+    }
+
+    static func latestProjectURL() -> URL? {
+        projectsRootURL()?.appendingPathComponent("latest", isDirectory: true)
+    }
+
+    static func latestEntryFileURL() -> URL? {
+        guard let latest = latestProjectURL() else { return nil }
+        let fileManager = FileManager.default
+        let primary = latest.appendingPathComponent("index.html", isDirectory: false)
+        if fileManager.fileExists(atPath: primary.path) {
+            return primary
+        }
+
+        guard let enumerator = fileManager.enumerator(
+            at: latest,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return nil
+        }
+
+        for case let fileURL as URL in enumerator {
+            if isHTMLPath(fileURL.lastPathComponent) {
+                return fileURL
+            }
+        }
+        return nil
+    }
+
+    static func projectsRootPathDisplay() -> String {
+        projectsRootURL()?.path ?? "不可用"
+    }
+
+    static func latestProjectPathDisplay() -> String {
+        latestProjectURL()?.path ?? "不可用"
+    }
+
+    static func clearLatestProject() throws {
+        let fileManager = FileManager.default
+        guard let latest = latestProjectURL() else {
+            throw BuildError.invalidProjectDirectory
+        }
+
+        if fileManager.fileExists(atPath: latest.path) {
+            try fileManager.removeItem(at: latest)
+        }
+        try fileManager.createDirectory(at: latest, withIntermediateDirectories: true)
+    }
+
     static func buildProject(from message: ChatMessage, mode: BuildMode) throws -> BuildResult {
         var parsedFiles = extractWebFiles(from: message)
         if parsedFiles.isEmpty, let fallbackHTML = fallbackHTML(in: message.content) {
@@ -89,6 +145,18 @@ enum FrontendProjectBuilder {
             merged["index.html"] = synthesized
         }
 
+        guard let entryRelativePath = preferredEntryPath(from: orderedPaths),
+              let entryHTML = merged[entryRelativePath] else {
+            throw BuildError.missingEntryFile
+        }
+
+        resolveReferencedAssetAliases(
+            entryRelativePath: entryRelativePath,
+            entryHTML: entryHTML,
+            merged: &merged,
+            orderedPaths: &orderedPaths
+        )
+
         let projectDirectoryURL = try prepareProjectDirectory(mode: mode)
         let fileManager = FileManager.default
 
@@ -100,15 +168,14 @@ enum FrontendProjectBuilder {
             try content.write(to: fileURL, atomically: true, encoding: .utf8)
         }
 
-        guard let entryRelativePath = preferredEntryPath(from: orderedPaths),
-              let entryHTML = merged[entryRelativePath] else {
+        guard let finalizedEntryHTML = merged[entryRelativePath] else {
             throw BuildError.missingEntryFile
         }
 
         return BuildResult(
             projectDirectoryURL: projectDirectoryURL,
             entryFileURL: projectDirectoryURL.appendingPathComponent(entryRelativePath, isDirectory: false),
-            entryHTML: entryHTML,
+            entryHTML: finalizedEntryHTML,
             writtenRelativePaths: orderedPaths,
             createdNewProject: mode == .createNewProject
         )
@@ -209,6 +276,9 @@ enum FrontendProjectBuilder {
         if let hinted = sanitizeRelativePath(extractPathHintFromPrefix(prefixText)) {
             return hinted
         }
+        if let bareHint = sanitizeRelativePath(extractBarePathFromPrefix(prefixText)) {
+            return bareHint
+        }
 
         if let pathLike = pathLikeDescriptorPath(loweredDescriptor),
            let normalized = sanitizeRelativePath(pathLike) {
@@ -308,6 +378,45 @@ enum FrontendProjectBuilder {
         return nsText.substring(with: match.range(at: 1))
     }
 
+    private static func extractBarePathFromPrefix(_ prefix: String) -> String {
+        let lines = prefix
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .components(separatedBy: "\n")
+            .reversed()
+
+        for rawLine in lines {
+            var line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty else { continue }
+            line = line.replacingOccurrences(
+                of: #"^[#>*\-\+\d\.\)\(\s`]+|[`]+$"#,
+                with: "",
+                options: .regularExpression
+            )
+            line = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty else { continue }
+
+            let lowered = line.lowercased()
+            if line.contains("/") || line.contains("\\")
+                || lowered.hasSuffix(".html")
+                || lowered.hasSuffix(".htm")
+                || lowered.hasSuffix(".css")
+                || lowered.hasSuffix(".scss")
+                || lowered.hasSuffix(".sass")
+                || lowered.hasSuffix(".less")
+                || lowered.hasSuffix(".js")
+                || lowered.hasSuffix(".mjs")
+                || lowered.hasSuffix(".cjs")
+                || lowered.hasSuffix(".ts")
+                || lowered.hasSuffix(".tsx")
+                || lowered.hasSuffix(".jsx")
+                || lowered.hasSuffix(".vue") {
+                return line
+            }
+        }
+
+        return ""
+    }
+
     private static func pathLikeDescriptorPath(_ descriptor: String) -> String? {
         let trimmed = descriptor.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
@@ -369,6 +478,162 @@ enum FrontendProjectBuilder {
             guard let content = merged[path] else { return nil }
             return ParsedWebFile(path: path, content: content)
         }
+    }
+
+    private static func resolveReferencedAssetAliases(
+        entryRelativePath: String,
+        entryHTML: String,
+        merged: inout [String: String],
+        orderedPaths: inout [String]
+    ) {
+        let references = referencedLocalAssetPaths(in: entryHTML, entryRelativePath: entryRelativePath)
+        guard !references.isEmpty else { return }
+
+        for referencedPath in references {
+            guard merged[referencedPath] == nil else { continue }
+            guard let sourcePath = pickAliasSourcePath(for: referencedPath, existingPaths: orderedPaths),
+                  let sourceContent = merged[sourcePath] else {
+                continue
+            }
+            merged[referencedPath] = sourceContent
+            orderedPaths.append(referencedPath)
+        }
+    }
+
+    private static func referencedLocalAssetPaths(
+        in html: String,
+        entryRelativePath: String
+    ) -> [String] {
+        let pattern = #"(?i)(?:href|src)\s*=\s*["']([^"']+)["']"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+
+        let nsRange = NSRange(html.startIndex..<html.endIndex, in: html)
+        let matches = regex.matches(in: html, range: nsRange)
+        guard !matches.isEmpty else { return [] }
+
+        var result: [String] = []
+        var seen = Set<String>()
+        for match in matches {
+            guard let refRange = Range(match.range(at: 1), in: html) else { continue }
+            let rawReference = String(html[refRange])
+            guard let normalized = normalizeLocalReferencePath(rawReference, entryRelativePath: entryRelativePath) else {
+                continue
+            }
+            if seen.insert(normalized).inserted {
+                result.append(normalized)
+            }
+        }
+        return result
+    }
+
+    private static func normalizeLocalReferencePath(
+        _ rawReference: String,
+        entryRelativePath: String
+    ) -> String? {
+        var reference = rawReference.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !reference.isEmpty else { return nil }
+
+        if let hashIndex = reference.firstIndex(of: "#") {
+            reference = String(reference[..<hashIndex])
+        }
+        if let queryIndex = reference.firstIndex(of: "?") {
+            reference = String(reference[..<queryIndex])
+        }
+        reference = reference.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !reference.isEmpty else { return nil }
+
+        let lowered = reference.lowercased()
+        if lowered.hasPrefix("http://")
+            || lowered.hasPrefix("https://")
+            || lowered.hasPrefix("//")
+            || lowered.hasPrefix("data:")
+            || lowered.hasPrefix("javascript:")
+            || lowered.hasPrefix("mailto:")
+            || lowered.hasPrefix("tel:") {
+            return nil
+        }
+
+        let entryDirectory = (entryRelativePath as NSString).deletingLastPathComponent
+        let combinedPath: String
+        if reference.hasPrefix("/") {
+            combinedPath = String(reference.drop(while: { $0 == "/" }))
+        } else if entryDirectory.isEmpty {
+            combinedPath = reference
+        } else {
+            combinedPath = "\(entryDirectory)/\(reference)"
+        }
+
+        return sanitizeRelativePath(combinedPath)
+    }
+
+    private static func pickAliasSourcePath(
+        for referencedPath: String,
+        existingPaths: [String]
+    ) -> String? {
+        if isStylePath(referencedPath) {
+            return bestAliasPath(
+                requestedPath: referencedPath,
+                candidatePaths: existingPaths.filter { isStylePath($0) },
+                preferredBasenames: ["styles.css", "style.css", "main.css", "app.css"]
+            )
+        }
+        if isScriptPath(referencedPath) {
+            return bestAliasPath(
+                requestedPath: referencedPath,
+                candidatePaths: existingPaths.filter { isScriptPath($0) },
+                preferredBasenames: ["script.js", "app.js", "main.js", "index.js"]
+            )
+        }
+        return nil
+    }
+
+    private static func bestAliasPath(
+        requestedPath: String,
+        candidatePaths: [String],
+        preferredBasenames: [String]
+    ) -> String? {
+        guard !candidatePaths.isEmpty else { return nil }
+
+        let requestedBase = (requestedPath as NSString).lastPathComponent.lowercased()
+        let requestedDir = (requestedPath as NSString).deletingLastPathComponent.lowercased()
+
+        if let sameNameSameDir = candidatePaths.first(where: { path in
+            let base = (path as NSString).lastPathComponent.lowercased()
+            let dir = (path as NSString).deletingLastPathComponent.lowercased()
+            return base == requestedBase && (requestedDir.isEmpty || requestedDir == dir)
+        }) {
+            return sameNameSameDir
+        }
+
+        if let sameNameAny = candidatePaths.first(where: {
+            ($0 as NSString).lastPathComponent.lowercased() == requestedBase
+        }) {
+            return sameNameAny
+        }
+
+        for preferredBase in preferredBasenames {
+            if let preferredSameDir = candidatePaths.first(where: { path in
+                let base = (path as NSString).lastPathComponent.lowercased()
+                let dir = (path as NSString).deletingLastPathComponent.lowercased()
+                return base == preferredBase && (requestedDir.isEmpty || requestedDir == dir)
+            }) {
+                return preferredSameDir
+            }
+            if let preferredAny = candidatePaths.first(where: {
+                ($0 as NSString).lastPathComponent.lowercased() == preferredBase
+            }) {
+                return preferredAny
+            }
+        }
+
+        if !requestedDir.isEmpty,
+           let sameDirAny = candidatePaths.first(where: {
+               ($0 as NSString).deletingLastPathComponent.lowercased() == requestedDir
+           }) {
+            return sameDirAny
+        }
+
+        return candidatePaths.first
     }
 
     private static func fallbackHTML(in text: String) -> String? {

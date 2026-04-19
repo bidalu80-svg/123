@@ -205,7 +205,12 @@ struct ChatScreen: View {
             .interactiveDismissDisabled(true)
         }
         .sheet(item: $autoFrontendPreview) { payload in
-            HTMLPreviewSheet(title: payload.title, html: payload.html, baseURL: payload.baseURL)
+            HTMLPreviewSheet(
+                title: payload.title,
+                html: payload.html,
+                baseURL: payload.baseURL,
+                entryFileURL: payload.entryFileURL
+            )
         }
     }
 
@@ -718,7 +723,8 @@ struct ChatScreen: View {
             autoFrontendPreview = AutoFrontendPreviewPayload(
                 title: "自动预览 · \(result.entryFileURL.lastPathComponent)",
                 html: result.entryHTML,
-                baseURL: result.projectDirectoryURL
+                baseURL: result.projectDirectoryURL,
+                entryFileURL: result.entryFileURL
             )
             viewModel.statusMessage = "前端项目已自动更新（\(result.writtenRelativePaths.count) 文件）"
         } catch {
@@ -2160,6 +2166,7 @@ private struct AutoFrontendPreviewPayload: Identifiable {
     let title: String
     let html: String
     let baseURL: URL?
+    let entryFileURL: URL?
 }
 
 private struct ScrollsToTopConfigurator: UIViewRepresentable {

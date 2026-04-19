@@ -44,7 +44,12 @@ struct MessageBubbleView: View {
             Text(saveFeedback ?? "")
         }
         .sheet(item: $activeHTMLPreview) { payload in
-            HTMLPreviewSheet(title: payload.title, html: payload.html, baseURL: payload.baseURL)
+            HTMLPreviewSheet(
+                title: payload.title,
+                html: payload.html,
+                baseURL: payload.baseURL,
+                entryFileURL: payload.entryFileURL
+            )
         }
         .sheet(item: $activeImagePreview) { payload in
             ImagePreviewSheet(
@@ -878,7 +883,8 @@ struct MessageBubbleView: View {
             activeHTMLPreview = HTMLPreviewPayload(
                 title: title,
                 html: result.entryHTML,
-                baseURL: result.projectDirectoryURL
+                baseURL: result.projectDirectoryURL,
+                entryFileURL: result.entryFileURL
             )
 
             switch mode {
@@ -917,7 +923,12 @@ struct MessageBubbleView: View {
             feedback(.light, "HTML 代码为空")
             return
         }
-        activeHTMLPreview = HTMLPreviewPayload(title: title, html: trimmed, baseURL: nil)
+        activeHTMLPreview = HTMLPreviewPayload(
+            title: title,
+            html: trimmed,
+            baseURL: nil,
+            entryFileURL: nil
+        )
     }
 
     @ViewBuilder
@@ -1328,6 +1339,7 @@ private struct HTMLPreviewPayload: Identifiable {
     let title: String
     let html: String
     let baseURL: URL?
+    let entryFileURL: URL?
 }
 
 private struct ImagePreviewPayload: Identifiable {

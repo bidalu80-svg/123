@@ -4,6 +4,8 @@ import UIKit
 struct SettingsScreen: View {
     @EnvironmentObject private var viewModel: ChatViewModel
     @EnvironmentObject private var authViewModel: AuthViewModel
+    @State private var projectActionFeedback: String?
+    @State private var latestPreviewPayload: LatestFrontendPreviewPayload?
 
     var body: some View {
         Form {
@@ -168,6 +170,56 @@ struct SettingsScreen: View {
                 }
             }
 
+            Section("前端项目") {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("项目根目录")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(FrontendProjectBuilder.projectsRootPathDisplay())
+                        .font(.system(.caption2, design: .monospaced))
+                        .textSelection(.enabled)
+                        .lineLimit(2)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("latest 目录")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(FrontendProjectBuilder.latestProjectPathDisplay())
+                        .font(.system(.caption2, design: .monospaced))
+                        .textSelection(.enabled)
+                        .lineLimit(2)
+                }
+
+                HStack(spacing: 10) {
+                    Button("复制根目录") {
+                        UIPasteboard.general.string = FrontendProjectBuilder.projectsRootPathDisplay()
+                        projectActionFeedback = "已复制项目根目录。"
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button("复制 latest") {
+                        UIPasteboard.general.string = FrontendProjectBuilder.latestProjectPathDisplay()
+                        projectActionFeedback = "已复制 latest 路径。"
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                HStack(spacing: 10) {
+                    Button("打开 latest 预览") {
+                        openLatestProjectPreview()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color(red: 0.06, green: 0.36, blue: 0.86))
+                    .foregroundStyle(.white)
+
+                    Button("清空 latest", role: .destructive) {
+                        clearLatestProject()
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+
             Section("操作") {
                 Button("测试连接") {
                     Task { await viewModel.runConnectionTest() }
@@ -215,6 +267,21 @@ struct SettingsScreen: View {
                 CornerClockBadge()
             }
         }
+        .alert("提示", isPresented: projectFeedbackBinding) {
+            Button("确定", role: .cancel) {
+                projectActionFeedback = nil
+            }
+        } message: {
+            Text(projectActionFeedback ?? "")
+        }
+        .sheet(item: $latestPreviewPayload) { payload in
+            HTMLPreviewSheet(
+                title: payload.title,
+                html: payload.html,
+                baseURL: payload.baseURL,
+                entryFileURL: payload.entryFileURL
+            )
+        }
     }
 
     private func statusRow(_ title: String, value: String) -> some View {
@@ -226,4 +293,51 @@ struct SettingsScreen: View {
                 .lineLimit(1)
         }
     }
+
+    private func openLatestProjectPreview() {
+        guard let entryFileURL = FrontendProjectBuilder.latestEntryFileURL() else {
+            projectActionFeedback = "latest 目录里还没有可预览的 HTML 文件。"
+            return
+        }
+
+        do {
+            let html = try String(contentsOf: entryFileURL, encoding: .utf8)
+            latestPreviewPayload = LatestFrontendPreviewPayload(
+                title: "latest 预览 · \(entryFileURL.lastPathComponent)",
+                html: html,
+                baseURL: FrontendProjectBuilder.latestProjectURL() ?? entryFileURL.deletingLastPathComponent(),
+                entryFileURL: entryFileURL
+            )
+        } catch {
+            projectActionFeedback = "读取 latest 预览失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func clearLatestProject() {
+        do {
+            try FrontendProjectBuilder.clearLatestProject()
+            projectActionFeedback = "latest 目录已清空。"
+        } catch {
+            projectActionFeedback = "清空 latest 失败：\(error.localizedDescription)"
+        }
+    }
+
+    private var projectFeedbackBinding: Binding<Bool> {
+        Binding(
+            get: { projectActionFeedback != nil },
+            set: { newValue in
+                if !newValue {
+                    projectActionFeedback = nil
+                }
+            }
+        )
+    }
+}
+
+private struct LatestFrontendPreviewPayload: Identifiable {
+    let id = UUID()
+    let title: String
+    let html: String
+    let baseURL: URL?
+    let entryFileURL: URL?
 }

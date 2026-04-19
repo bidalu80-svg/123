@@ -26,7 +26,7 @@ enum APIEndpointMode: String, Codable, CaseIterable {
         case .chatCompletions:
             return "聊天"
         case .responses:
-            return "Responses"
+            return "响应"
         case .imageGenerations:
             return "生图"
         case .videoGenerations:
@@ -45,7 +45,7 @@ enum APIEndpointMode: String, Codable, CaseIterable {
         case .chatCompletions:
             return "Chat"
         case .responses:
-            return "Responses"
+            return "响应"
         case .imageGenerations:
             return "Image"
         case .videoGenerations:
