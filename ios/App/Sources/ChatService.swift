@@ -735,6 +735,7 @@ final class ChatService {
             var pendingDeltaParts: [String] = []
             var pendingImageURLs = Set<String>()
             var thinkTagFilter = ThinkTagStreamFilter()
+            var accumulatedResponseText = ""
             var lastEmitAt = Date.distantPast
             let streamEmitInterval: TimeInterval = 0.012
 
@@ -771,8 +772,15 @@ final class ChatService {
                 if !chunk.deltaText.isEmpty {
                     let filtered = thinkTagFilter.filter(chunk.deltaText)
                     if !filtered.isEmpty {
-                        fullReplyParts.append(filtered)
-                        pendingDeltaParts.append(filtered)
+                        let incremental = incrementalStreamingTextDelta(
+                            existing: accumulatedResponseText,
+                            incoming: filtered
+                        )
+                        if !incremental.isEmpty {
+                            accumulatedResponseText += incremental
+                            fullReplyParts.append(incremental)
+                            pendingDeltaParts.append(incremental)
+                        }
                     }
                 }
 
@@ -793,8 +801,15 @@ final class ChatService {
 
             let trailingFiltered = thinkTagFilter.finalize()
             if !trailingFiltered.isEmpty {
-                fullReplyParts.append(trailingFiltered)
-                pendingDeltaParts.append(trailingFiltered)
+                let incremental = incrementalStreamingTextDelta(
+                    existing: accumulatedResponseText,
+                    incoming: trailingFiltered
+                )
+                if !incremental.isEmpty {
+                    accumulatedResponseText += incremental
+                    fullReplyParts.append(incremental)
+                    pendingDeltaParts.append(incremental)
+                }
             }
             emitPending(force: true)
 
@@ -1814,6 +1829,32 @@ final class ChatService {
             result.append(item)
         }
         return result
+    }
+
+    private func incrementalStreamingTextDelta(existing: String, incoming: String) -> String {
+        guard !incoming.isEmpty else { return "" }
+        guard !existing.isEmpty else { return incoming }
+
+        if incoming.hasPrefix(existing) {
+            return String(incoming.dropFirst(existing.count))
+        }
+
+        if existing.hasSuffix(incoming) {
+            return ""
+        }
+
+        let existingChars = Array(existing)
+        let incomingChars = Array(incoming)
+        let maxOverlap = min(existingChars.count, incomingChars.count)
+        if maxOverlap > 0 {
+            for overlap in stride(from: maxOverlap, through: 1, by: -1) {
+                if existingChars.suffix(overlap).elementsEqual(incomingChars.prefix(overlap)) {
+                    return String(incomingChars.dropFirst(overlap))
+                }
+            }
+        }
+
+        return incoming
     }
 
     private func mergeTextWithCitationURLs(_ text: String, citationURLs: [String]) -> String {
