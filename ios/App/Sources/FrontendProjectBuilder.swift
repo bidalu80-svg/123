@@ -65,6 +65,7 @@ enum FrontendProjectBuilder {
         let uniquePaths = Array(Set(normalizedPaths))
 
         let hasHTMLPath = uniquePaths.contains(where: { isHTMLPath($0) })
+        let hasHTMLLikeFile = parsed.contains(where: { looksLikeHTML($0.content) })
         let hasTaggedFile = containsWebTaggedFile(in: text)
         let hasHTMLText = looksLikeHTML(text)
         let hasFrontendAttachment = message.fileAttachments.contains(where: {
@@ -76,7 +77,7 @@ enum FrontendProjectBuilder {
 
         return ChatProgressSnapshot(
             detectedFileCount: uniquePaths.count,
-            hasEntryHTML: hasHTMLPath
+            hasEntryHTML: hasHTMLPath || hasHTMLLikeFile || hasHTMLText
         )
     }
 
@@ -95,25 +96,39 @@ enum FrontendProjectBuilder {
     static func latestEntryFileURL() -> URL? {
         guard let latest = latestProjectURL() else { return nil }
         let fileManager = FileManager.default
-        let primary = latest.appendingPathComponent("index.html", isDirectory: false)
-        if fileManager.fileExists(atPath: primary.path) {
-            return primary
-        }
-
         guard let enumerator = fileManager.enumerator(
             at: latest,
-            includingPropertiesForKeys: [.isRegularFileKey],
+            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
             options: [.skipsHiddenFiles]
         ) else {
             return nil
         }
 
+        var htmlCandidates: [(url: URL, size: Int)] = []
         for case let fileURL as URL in enumerator {
-            if isHTMLPath(fileURL.lastPathComponent) {
-                return fileURL
-            }
+            guard isHTMLPath(fileURL.lastPathComponent) else { continue }
+            let size = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            htmlCandidates.append((fileURL, size))
         }
-        return nil
+
+        guard !htmlCandidates.isEmpty else { return nil }
+
+        let minimumMeaningfulIndexBytes = 320
+        if let indexCandidate = htmlCandidates.first(where: { $0.url.lastPathComponent.lowercased() == "index.html" }),
+           indexCandidate.size >= minimumMeaningfulIndexBytes {
+            return indexCandidate.url
+        }
+
+        if let richest = htmlCandidates.max(by: { lhs, rhs in
+            if lhs.size == rhs.size {
+                return lhs.url.lastPathComponent.localizedStandardCompare(rhs.url.lastPathComponent) == .orderedAscending
+            }
+            return lhs.size < rhs.size
+        }) {
+            return richest.url
+        }
+
+        return htmlCandidates.first?.url
     }
 
     static func projectsRootPathDisplay() -> String {
@@ -161,6 +176,8 @@ enum FrontendProjectBuilder {
         guard !merged.isEmpty else {
             throw BuildError.noFrontendContent
         }
+
+        promoteHTMLLikeFilePathsIfNeeded(merged: &merged, orderedPaths: &orderedPaths)
 
         if !orderedPaths.contains(where: { isHTMLPath($0) }) {
             let stylePaths = orderedPaths.filter { isStylePath($0) }
@@ -788,6 +805,9 @@ enum FrontendProjectBuilder {
         switch mode {
         case .overwriteLatestProject:
             let latest = root.appendingPathComponent("latest", isDirectory: true)
+            if fileManager.fileExists(atPath: latest.path) {
+                try fileManager.removeItem(at: latest)
+            }
             try fileManager.createDirectory(at: latest, withIntermediateDirectories: true)
             return latest
         case .createNewProject:
@@ -813,6 +833,57 @@ enum FrontendProjectBuilder {
             return exact
         }
         return paths.first(where: { isHTMLPath($0) })
+    }
+
+    private static func promoteHTMLLikeFilePathsIfNeeded(
+        merged: inout [String: String],
+        orderedPaths: inout [String]
+    ) {
+        guard !orderedPaths.contains(where: { isHTMLPath($0) }) else { return }
+        guard let candidatePath = orderedPaths.first(where: { path in
+            guard let content = merged[path] else { return false }
+            return looksLikeHTML(content)
+        }) else {
+            return
+        }
+        guard let content = merged[candidatePath] else { return }
+
+        let promotedPath = promotedHTMLPath(from: candidatePath)
+        guard promotedPath != candidatePath else { return }
+
+        if merged[promotedPath] == nil {
+            merged[promotedPath] = content
+        }
+        merged.removeValue(forKey: candidatePath)
+
+        if let index = orderedPaths.firstIndex(of: candidatePath) {
+            orderedPaths[index] = promotedPath
+        } else {
+            orderedPaths.append(promotedPath)
+        }
+    }
+
+    private static func promotedHTMLPath(from rawPath: String) -> String {
+        if isHTMLPath(rawPath) { return rawPath }
+
+        let path = rawPath as NSString
+        let directory = path.deletingLastPathComponent
+        let fileName = path.lastPathComponent
+
+        let promotedName: String
+        if fileName.isEmpty {
+            promotedName = "index.html"
+        } else if fileName.contains(".") {
+            let stem = (fileName as NSString).deletingPathExtension
+            promotedName = stem.isEmpty ? "index.html" : "\(stem).html"
+        } else {
+            promotedName = fileName.lowercased() == "index" ? "index.html" : "\(fileName).html"
+        }
+
+        if directory.isEmpty {
+            return promotedName
+        }
+        return "\(directory)/\(promotedName)"
     }
 
     private static func isHTMLPath(_ path: String) -> Bool {
