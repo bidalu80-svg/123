@@ -97,24 +97,28 @@ enum StreamParser {
 
         if type == "response.content_part.added" || type == "response.content_part.done" {
             if let part = object["part"] as? [String: Any] {
-                appendResponsesContentPart(part, textParts: &textParts, imageURLs: &imageURLs)
+                var discardTextParts: [String] = []
+                appendResponsesContentPart(part, textParts: &discardTextParts, imageURLs: &imageURLs)
             }
             return
         }
 
         if type == "response.output_item.added" || type == "response.output_item.done" {
             if let item = object["item"] as? [String: Any] {
-                appendResponsesOutputItem(item, textParts: &textParts, imageURLs: &imageURLs)
+                var discardTextParts: [String] = []
+                appendResponsesOutputItem(item, textParts: &discardTextParts, imageURLs: &imageURLs)
             }
             return
         }
 
-        // If provider only sends final completed response object, parse it.
+        // `response.completed` often carries the full assembled text again.
+        // Keep only media URLs here; text stream should come from delta events.
         if type == "response.completed",
            let response = object["response"] as? [String: Any],
            let output = response["output"] as? [[String: Any]] {
+            var discardTextParts: [String] = []
             for item in output {
-                appendResponsesOutputItem(item, textParts: &textParts, imageURLs: &imageURLs)
+                appendResponsesOutputItem(item, textParts: &discardTextParts, imageURLs: &imageURLs)
             }
         }
     }
