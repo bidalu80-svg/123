@@ -23,6 +23,7 @@ struct ChatRequestBuilder {
     3) 若用户明确要求多文件，请按代码块分别给出完整文件内容，并在每个代码块前写清文件名。
     4) 回答结构优先为：先 1-2 句说明效果，再给完整代码。
     5) 不要输出后端服务、数据库或部署脚本，除非用户明确提出需要。
+    6) 若用户明确要求 `HTML + CSS + JavaScript` 三模块，必须输出并命名为 `index.html`、`styles.css`、`script.js`，并确保 `index.html` 正确引用另外两个文件。
     """
     private static let maxHistoryMessages = 22
     private static let maxHistoryCharacters = 42_000

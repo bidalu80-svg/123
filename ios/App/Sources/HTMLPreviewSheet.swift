@@ -54,21 +54,28 @@ private struct HTMLPreviewWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
+        let webViewIdentity = ObjectIdentifier(webView)
+        let sameWebView = context.coordinator.lastWebViewIdentity == webViewIdentity
+
         if let entryFileURL {
-            if context.coordinator.lastEntryFileURL == entryFileURL,
-               context.coordinator.lastBaseURL == baseURL {
+            if sameWebView,
+               context.coordinator.lastEntryFileURL == entryFileURL,
+               context.coordinator.lastBaseURL == baseURL,
+               webView.url == entryFileURL {
                 return
             }
 
             context.coordinator.lastLoadedHTML = html
             context.coordinator.lastBaseURL = baseURL
             context.coordinator.lastEntryFileURL = entryFileURL
+            context.coordinator.lastWebViewIdentity = webViewIdentity
             let readAccessURL = baseURL ?? entryFileURL.deletingLastPathComponent()
             webView.loadFileURL(entryFileURL, allowingReadAccessTo: readAccessURL)
             return
         }
 
-        if context.coordinator.lastLoadedHTML == html
+        if sameWebView,
+            context.coordinator.lastLoadedHTML == html
             && context.coordinator.lastBaseURL == baseURL
             && context.coordinator.lastEntryFileURL == nil {
             return
@@ -76,6 +83,7 @@ private struct HTMLPreviewWebView: UIViewRepresentable {
         context.coordinator.lastLoadedHTML = html
         context.coordinator.lastBaseURL = baseURL
         context.coordinator.lastEntryFileURL = nil
+        context.coordinator.lastWebViewIdentity = webViewIdentity
         webView.loadHTMLString(html, baseURL: baseURL)
     }
 
@@ -87,5 +95,6 @@ private struct HTMLPreviewWebView: UIViewRepresentable {
         var lastLoadedHTML: String = ""
         var lastBaseURL: URL?
         var lastEntryFileURL: URL?
+        var lastWebViewIdentity: ObjectIdentifier?
     }
 }

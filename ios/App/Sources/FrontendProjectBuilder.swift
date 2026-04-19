@@ -41,6 +41,15 @@ enum FrontendProjectBuilder {
         let content: String
     }
 
+    private static let knownLanguageDescriptors: Set<String> = [
+        "html", "htm", "xhtml", "text/html",
+        "css", "scss", "sass", "less",
+        "javascript", "js", "typescript", "ts", "json", "vue", "jsx", "tsx",
+        "xml", "yaml", "yml", "markdown", "md",
+        "python", "py", "swift", "bash",
+        "text", "plaintext", "plain", "code"
+    ]
+
     static func canGenerateProject(from message: ChatMessage) -> Bool {
         if message.fileAttachments.contains(where: {
             $0.binaryBase64 == nil && isLikelyFrontendPath($0.fileName)
@@ -113,10 +122,15 @@ enum FrontendProjectBuilder {
 
         guard !htmlCandidates.isEmpty else { return nil }
 
-        let minimumMeaningfulIndexBytes = 320
-        if let indexCandidate = htmlCandidates.first(where: { $0.url.lastPathComponent.lowercased() == "index.html" }),
-           indexCandidate.size >= minimumMeaningfulIndexBytes {
-            return indexCandidate.url
+        if let rootIndex = htmlCandidates.first(where: {
+            $0.url.lastPathComponent.lowercased() == "index.html"
+                && $0.url.deletingLastPathComponent().standardizedFileURL == latest.standardizedFileURL
+        }) {
+            return rootIndex.url
+        }
+
+        if let nestedIndex = htmlCandidates.first(where: { $0.url.lastPathComponent.lowercased() == "index.html" }) {
+            return nestedIndex.url
         }
 
         if let richest = htmlCandidates.max(by: { lhs, rhs in
@@ -317,13 +331,6 @@ enum FrontendProjectBuilder {
         }
 
         let loweredDescriptor = descriptor.lowercased()
-        if let hinted = sanitizeRelativePath(extractPathHintFromPrefix(prefixText)) {
-            return hinted
-        }
-        if let bareHint = sanitizeRelativePath(extractBarePathFromPrefix(prefixText)) {
-            return bareHint
-        }
-
         if let pathLike = pathLikeDescriptorPath(loweredDescriptor),
            let normalized = sanitizeRelativePath(pathLike) {
             return normalized
@@ -333,11 +340,26 @@ enum FrontendProjectBuilder {
             return mapped
         }
 
+        if shouldTryPrefixHints(for: loweredDescriptor) {
+            if let hinted = sanitizeRelativePath(extractPathHintFromPrefix(prefixText)) {
+                return hinted
+            }
+            if let bareHint = sanitizeRelativePath(extractBarePathFromPrefix(prefixText)) {
+                return bareHint
+            }
+        }
+
         if loweredDescriptor.isEmpty, looksLikeHTML(codeContent) {
             return "index.html"
         }
 
         return nil
+    }
+
+    private static func shouldTryPrefixHints(for descriptor: String) -> Bool {
+        let trimmed = descriptor.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return true }
+        return !knownLanguageDescriptors.contains(trimmed)
     }
 
     private static func containsWebTaggedFile(in text: String) -> Bool {
@@ -439,26 +461,37 @@ enum FrontendProjectBuilder {
             line = line.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !line.isEmpty else { continue }
 
-            let lowered = line.lowercased()
-            if line.contains("/") || line.contains("\\")
-                || lowered.hasSuffix(".html")
-                || lowered.hasSuffix(".htm")
-                || lowered.hasSuffix(".css")
-                || lowered.hasSuffix(".scss")
-                || lowered.hasSuffix(".sass")
-                || lowered.hasSuffix(".less")
-                || lowered.hasSuffix(".js")
-                || lowered.hasSuffix(".mjs")
-                || lowered.hasSuffix(".cjs")
-                || lowered.hasSuffix(".ts")
-                || lowered.hasSuffix(".tsx")
-                || lowered.hasSuffix(".jsx")
-                || lowered.hasSuffix(".vue") {
+            if isLikelyBarePathHint(line) {
                 return line
             }
         }
 
         return ""
+    }
+
+    private static func isLikelyBarePathHint(_ raw: String) -> Bool {
+        let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !line.isEmpty else { return false }
+
+        if line.contains("<")
+            || line.contains(">")
+            || line.contains("=")
+            || line.contains("\"")
+            || line.contains("'")
+            || line.contains("`") {
+            return false
+        }
+
+        let lowered = line.lowercased()
+        let webSuffixes = [
+            ".html", ".htm", ".css", ".scss", ".sass", ".less",
+            ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue"
+        ]
+        guard webSuffixes.contains(where: { lowered.hasSuffix($0) }) else {
+            return false
+        }
+
+        return line.range(of: #"^[A-Za-z0-9_./\\-]+$"#, options: .regularExpression) != nil
     }
 
     private static func pathLikeDescriptorPath(_ descriptor: String) -> String? {
@@ -469,12 +502,7 @@ enum FrontendProjectBuilder {
             return nil
         }
 
-        let knownLanguages: Set<String> = [
-            "html", "htm", "xhtml", "css", "scss", "sass", "less",
-            "javascript", "js", "typescript", "ts", "json", "vue", "jsx", "tsx",
-            "xml", "yaml", "yml", "markdown", "md", "python", "py", "swift", "bash"
-        ]
-        if knownLanguages.contains(trimmed) {
+        if knownLanguageDescriptors.contains(trimmed) {
             return nil
         }
 
@@ -489,8 +517,10 @@ enum FrontendProjectBuilder {
         case "html", "htm", "xhtml", "text/html":
             return "index.html"
         case "css", "scss", "sass", "less":
-            return "style.css"
-        case "javascript", "js", "typescript", "ts", "jsx", "tsx", "vue":
+            return "styles.css"
+        case "javascript", "js":
+            return "script.js"
+        case "typescript", "ts", "jsx", "tsx", "vue":
             return "app.js"
         default:
             return nil
