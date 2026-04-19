@@ -541,6 +541,7 @@ private struct FrontendProjectBrowserScreen: View {
 
     @State private var files: [FrontendProjectFileEntry] = []
     @State private var loadingError: String?
+    @State private var feedbackMessage: String?
 
     var body: some View {
         Group {
@@ -575,7 +576,12 @@ private struct FrontendProjectBrowserScreen: View {
             } else {
                 List(files) { entry in
                     NavigationLink {
-                        FrontendProjectFileViewerScreen(entry: entry)
+                        FrontendProjectFileViewerScreen(
+                            entry: entry,
+                            onDeleteSuccess: {
+                                loadFiles()
+                            }
+                        )
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(entry.relativePath)
@@ -586,6 +592,35 @@ private struct FrontendProjectBrowserScreen: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button(role: .destructive) {
+                            deleteFile(entry)
+                        } label: {
+                            Label("删文件", systemImage: "trash")
+                        }
+
+                        if let projectName = projectFolderName(for: entry), isProjectsRootBrowser {
+                            Button(role: .destructive) {
+                                deleteProjectFolder(named: projectName)
+                            } label: {
+                                Label("删项目", systemImage: "folder.badge.minus")
+                            }
+                        }
+                    }
+                    .contextMenu {
+                        Button(role: .destructive) {
+                            deleteFile(entry)
+                        } label: {
+                            Label("删除文件", systemImage: "trash")
+                        }
+                        if let projectName = projectFolderName(for: entry), isProjectsRootBrowser {
+                            Button(role: .destructive) {
+                                deleteProjectFolder(named: projectName)
+                            } label: {
+                                Label("删除整个项目：\(projectName)", systemImage: "folder.badge.minus")
+                            }
+                        }
+                    }
                 }
                 .listStyle(.insetGrouped)
             }
@@ -593,13 +628,29 @@ private struct FrontendProjectBrowserScreen: View {
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                if isProjectsRootBrowser {
+                    Button {
+                        cleanupGeneratedProjects()
+                    } label: {
+                        Image(systemName: "folder.badge.minus")
+                    }
+                    .accessibilityLabel("清理历史项目")
+                }
+
                 Button {
                     loadFiles()
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
             }
+        }
+        .alert("提示", isPresented: feedbackBinding) {
+            Button("确定", role: .cancel) {
+                feedbackMessage = nil
+            }
+        } message: {
+            Text(feedbackMessage ?? "")
         }
         .onAppear {
             loadFiles()
@@ -664,14 +715,139 @@ private struct FrontendProjectBrowserScreen: View {
     private func fileSizeText(_ size: Int) -> String {
         ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
     }
+
+    private var feedbackBinding: Binding<Bool> {
+        Binding(
+            get: { feedbackMessage != nil },
+            set: { shown in
+                if !shown {
+                    feedbackMessage = nil
+                }
+            }
+        )
+    }
+
+    private var isProjectsRootBrowser: Bool {
+        guard let projectsRootURL = FrontendProjectBuilder.projectsRootURL() else { return false }
+        return normalizedPath(rootURL) == normalizedPath(projectsRootURL)
+    }
+
+    private func normalizedPath(_ url: URL) -> String {
+        url.standardizedFileURL.resolvingSymlinksInPath().path
+    }
+
+    private func projectFolderName(for entry: FrontendProjectFileEntry) -> String? {
+        let components = entry.relativePath.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: true)
+        guard components.count > 1 else { return nil }
+        let name = String(components[0]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? nil : name
+    }
+
+    private func deleteFile(_ entry: FrontendProjectFileEntry) {
+        do {
+            try removeItemWithinRoot(entry.fileURL)
+            pruneEmptyParentDirectories(startingFrom: entry.fileURL.deletingLastPathComponent())
+            loadFiles()
+            feedbackMessage = "已删除 \(entry.relativePath)"
+        } catch {
+            feedbackMessage = "删除失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func deleteProjectFolder(named projectName: String) {
+        let targetURL = rootURL.appendingPathComponent(projectName, isDirectory: true)
+        do {
+            try removeItemWithinRoot(targetURL)
+            loadFiles()
+            feedbackMessage = "已删除项目 \(projectName)"
+        } catch {
+            feedbackMessage = "删除项目失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func cleanupGeneratedProjects() {
+        guard isProjectsRootBrowser else { return }
+        let fileManager = FileManager.default
+        do {
+            let items = try fileManager.contentsOfDirectory(
+                at: rootURL,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )
+
+            var removedCount = 0
+            for item in items {
+                let values = try? item.resourceValues(forKeys: [.isDirectoryKey])
+                guard values?.isDirectory == true else { continue }
+                let name = item.lastPathComponent
+                if name == "latest" { continue }
+                if name.lowercased().hasPrefix("site-") {
+                    try removeItemWithinRoot(item)
+                    removedCount += 1
+                }
+            }
+
+            loadFiles()
+            feedbackMessage = removedCount == 0
+                ? "没有可清理的历史项目。"
+                : "已清理 \(removedCount) 个历史项目。"
+        } catch {
+            feedbackMessage = "清理失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func removeItemWithinRoot(_ targetURL: URL) throws {
+        let fileManager = FileManager.default
+        let rootPath = normalizedPath(rootURL)
+        let targetPath = normalizedPath(targetURL)
+
+        guard targetPath == rootPath || targetPath.hasPrefix(rootPath + "/") else {
+            throw NSError(
+                domain: "FrontendProjectBrowser",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "目标不在项目目录内。"]
+            )
+        }
+        guard fileManager.fileExists(atPath: targetPath) else {
+            throw NSError(
+                domain: "FrontendProjectBrowser",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "目标不存在。"]
+            )
+        }
+        try fileManager.removeItem(at: URL(fileURLWithPath: targetPath))
+    }
+
+    private func pruneEmptyParentDirectories(startingFrom folderURL: URL) {
+        let fileManager = FileManager.default
+        let rootPath = normalizedPath(rootURL)
+        var current = folderURL.standardizedFileURL.resolvingSymlinksInPath()
+
+        while current.path != rootPath {
+            guard current.path.hasPrefix(rootPath + "/") else { break }
+            guard let items = try? fileManager.contentsOfDirectory(atPath: current.path),
+                  items.isEmpty else {
+                break
+            }
+            try? fileManager.removeItem(at: current)
+            let next = current.deletingLastPathComponent()
+            if next.path == current.path {
+                break
+            }
+            current = next
+        }
+    }
 }
 
 private struct FrontendProjectFileViewerScreen: View {
     let entry: FrontendProjectFileEntry
+    var onDeleteSuccess: (() -> Void)? = nil
 
+    @Environment(\.dismiss) private var dismiss
     @State private var content: String = ""
     @State private var statusText: String = "读取中…"
     @State private var readError: String?
+    @State private var feedbackMessage: String?
 
     var body: some View {
         Group {
@@ -702,14 +878,27 @@ private struct FrontendProjectFileViewerScreen: View {
         .navigationTitle(entry.relativePath)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
                 Button {
                     UIPasteboard.general.string = content
                 } label: {
                     Image(systemName: "doc.on.doc")
                 }
                 .disabled(content.isEmpty)
+
+                Button(role: .destructive) {
+                    deleteCurrentFile()
+                } label: {
+                    Image(systemName: "trash")
+                }
             }
+        }
+        .alert("提示", isPresented: feedbackBinding) {
+            Button("确定", role: .cancel) {
+                feedbackMessage = nil
+            }
+        } message: {
+            Text(feedbackMessage ?? "")
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             Text(statusText)
@@ -753,6 +942,32 @@ private struct FrontendProjectFileViewerScreen: View {
             readError = error.localizedDescription
             content = ""
             statusText = "读取失败"
+        }
+    }
+
+    private var feedbackBinding: Binding<Bool> {
+        Binding(
+            get: { feedbackMessage != nil },
+            set: { shown in
+                if !shown {
+                    feedbackMessage = nil
+                }
+            }
+        )
+    }
+
+    private func deleteCurrentFile() {
+        do {
+            let fileManager = FileManager.default
+            guard fileManager.fileExists(atPath: entry.fileURL.path) else {
+                feedbackMessage = "文件已不存在。"
+                return
+            }
+            try fileManager.removeItem(at: entry.fileURL)
+            onDeleteSuccess?()
+            dismiss()
+        } catch {
+            feedbackMessage = "删除失败：\(error.localizedDescription)"
         }
     }
 

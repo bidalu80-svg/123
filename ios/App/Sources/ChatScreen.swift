@@ -714,7 +714,7 @@ struct ChatScreen: View {
         previousMessages: [ChatMessage],
         newMessages: [ChatMessage]
     ) {
-        guard viewModel.config.frontendAutoBuildEnabled else { return }
+        guard shouldAutoBuildFrontendFromAssistantReply else { return }
         guard let latestAssistant = newMessages.last(where: { $0.role == .assistant }) else { return }
         guard !latestAssistant.isStreaming else { return }
         guard latestAssistant.id != lastAutoBuiltAssistantMessageID else { return }
@@ -1141,7 +1141,7 @@ struct ChatScreen: View {
     }
 
     private func frontendProgressDisplayMessage(for message: ChatMessage) -> ChatMessage? {
-        guard viewModel.config.frontendAutoBuildEnabled else { return nil }
+        guard shouldHideFrontendCodeInChat else { return nil }
         guard message.role == .assistant else { return nil }
         guard !message.isImageGenerationPlaceholder, !message.isVideoGenerationPlaceholder else { return nil }
         guard let snapshot = FrontendProjectBuilder.chatProgressSnapshot(from: message) else { return nil }
@@ -1180,6 +1180,14 @@ struct ChatScreen: View {
         ✓ \(entryHint)，可直接预览整站
         ✓ 代码可在「设置 > 前端项目 > 浏览 latest」查看
         """
+    }
+
+    private var shouldHideFrontendCodeInChat: Bool {
+        viewModel.config.endpointMode == .responses || viewModel.config.frontendAutoBuildEnabled
+    }
+
+    private var shouldAutoBuildFrontendFromAssistantReply: Bool {
+        viewModel.config.endpointMode == .responses || viewModel.config.frontendAutoBuildEnabled
     }
 
     private func renderWeight(for message: ChatMessage) -> Int {
