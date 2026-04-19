@@ -26,6 +26,7 @@ struct MessageBubbleView: View {
     @State private var pendingPythonRun: PendingPythonRun?
     @State private var pythonStdinDraft = ""
     @State private var waitingDotPulse = false
+    @State private var frontendProgressPulse = false
     private let chatUIFont = UIFont(name: "PingFangSC-Medium", size: 16) ?? UIFont.systemFont(ofSize: 16, weight: .medium)
 
     var body: some View {
@@ -75,7 +76,7 @@ struct MessageBubbleView: View {
 
             content
 
-            if showsAssistantActionBar {
+            if showsAssistantActionBar && frontendProgressPayload == nil {
                 assistantActionBar
                     .padding(.top, 2)
             }
@@ -305,7 +306,9 @@ struct MessageBubbleView: View {
 
     @ViewBuilder
     private var content: some View {
-        if message.isImageGenerationPlaceholder && message.imageAttachments.isEmpty {
+        if let payload = frontendProgressPayload {
+            frontendProgressTimeline(payload)
+        } else if message.isImageGenerationPlaceholder && message.imageAttachments.isEmpty {
             imageGenerationProgressCard
         } else if message.isVideoGenerationPlaceholder && message.videoAttachments.isEmpty {
             videoGenerationProgressContainer(streamingTextAnimated: false)
@@ -333,31 +336,35 @@ struct MessageBubbleView: View {
 
     @ViewBuilder
     private var streamingContent: some View {
-        let displayText = normalizedStreamingText(message.content)
-        if message.isImageGenerationPlaceholder && message.imageAttachments.isEmpty {
-            imageGenerationProgressCard
-        } else if message.isVideoGenerationPlaceholder && message.videoAttachments.isEmpty {
-            videoGenerationProgressContainer(streamingTextAnimated: true)
+        if let payload = frontendProgressPayload {
+            frontendProgressTimeline(payload)
         } else {
-            let segments = parsedStreamingSegments(for: displayText)
+            let displayText = normalizedStreamingText(message.content)
+            if message.isImageGenerationPlaceholder && message.imageAttachments.isEmpty {
+                imageGenerationProgressCard
+            } else if message.isVideoGenerationPlaceholder && message.videoAttachments.isEmpty {
+                videoGenerationProgressContainer(streamingTextAnimated: true)
+            } else {
+                let segments = parsedStreamingSegments(for: displayText)
 
-            if segments.isEmpty {
-                if !message.imageAttachments.isEmpty || !message.videoAttachments.isEmpty {
-                    VStack(alignment: .leading, spacing: 10) {
-                        ForEach(message.imageAttachments) { attachment in
-                            messageImage(attachment)
+                if segments.isEmpty {
+                    if !message.imageAttachments.isEmpty || !message.videoAttachments.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(message.imageAttachments) { attachment in
+                                messageImage(attachment)
+                            }
+                            ForEach(message.videoAttachments) { attachment in
+                                messageVideo(attachment)
+                            }
                         }
-                        ForEach(message.videoAttachments) { attachment in
-                            messageVideo(attachment)
-                        }
+                    } else {
+                        streamingWaitingDot
                     }
                 } else {
-                    streamingWaitingDot
-                }
-            } else {
-                VStack(alignment: .leading, spacing: 10) {
-                    ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
-                        segmentView(segment, streamingTextAnimated: true)
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                            segmentView(segment, streamingTextAnimated: true)
+                        }
                     }
                 }
             }
@@ -379,6 +386,162 @@ struct MessageBubbleView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityLabel("正在接收流式内容")
+    }
+
+    private var frontendProgressPayload: FrontendProgressPayload? {
+        FrontendProgressPayload.parse(from: message.content)
+    }
+
+    private func frontendProgressTimeline(_ payload: FrontendProgressPayload) -> some View {
+        let steps = frontendProgressSteps(for: payload)
+        return VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 8) {
+                Image(systemName: payload.isStreaming ? "hammer.fill" : "checkmark.seal.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(payload.isStreaming ? Color.cyan : Color.green)
+                Text(payload.isStreaming ? "正在生成网站项目" : "网站项目已生成完成")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.primary)
+                Spacer(minLength: 0)
+                Text("文件 \(max(payload.fileCount, 1))")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(Color(.secondarySystemBackground))
+                    )
+            }
+
+            ProgressView(value: frontendProgressValue(steps))
+                .progressViewStyle(.linear)
+                .tint(payload.isStreaming ? Color.cyan : Color.green)
+
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(steps) { step in
+                    frontendProgressStepRow(step: step, isStreaming: payload.isStreaming)
+                }
+            }
+
+            if !payload.isStreaming {
+                Button {
+                    openLatestProjectPreviewFromProgress()
+                } label: {
+                    Label("预览整站", systemImage: "globe")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(Color(red: 0.08, green: 0.45, blue: 0.90))
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .onAppear {
+            frontendProgressPulse = true
+        }
+        .onDisappear {
+            frontendProgressPulse = false
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func frontendProgressStepRow(step: FrontendProgressStep, isStreaming: Bool) -> some View {
+        HStack(spacing: 10) {
+            Group {
+                switch step.state {
+                case .completed:
+                    Image(systemName: "checkmark.circle.fill")
+                case .running:
+                    if isStreaming {
+                        Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
+                    } else {
+                        Image(systemName: "clock.badge.checkmark")
+                    }
+                case .pending:
+                    Image(systemName: "circle.dashed")
+                }
+            }
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(step.iconColor)
+            .scaleEffect(step.state == .running && isStreaming && frontendProgressPulse ? 1.08 : 1.0)
+            .animation(.easeInOut(duration: 0.65).repeatForever(autoreverses: true), value: frontendProgressPulse)
+
+            Text(step.title)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.96))
+                .lineLimit(1)
+
+            Spacer(minLength: 8)
+
+            Text(step.trailing)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(step.trailingColor)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.black.opacity(colorScheme == .dark ? 0.62 : 0.86))
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .stroke(Color.white.opacity(colorScheme == .dark ? 0.10 : 0.08), lineWidth: 0.8)
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func frontendProgressSteps(for payload: FrontendProgressPayload) -> [FrontendProgressStep] {
+        if payload.isStreaming {
+            let stage: Int
+            if payload.fileCount <= 0 {
+                stage = 1
+            } else if payload.fileCount <= 1 {
+                stage = 2
+            } else {
+                stage = 3
+            }
+            return [
+                FrontendProgressStep(
+                    title: "解析页面结构",
+                    state: stage >= 2 ? .completed : .running
+                ),
+                FrontendProgressStep(
+                    title: "生成 HTML / CSS / JS",
+                    state: stage >= 3 ? .completed : (stage == 2 ? .running : .pending)
+                ),
+                FrontendProgressStep(
+                    title: "写入 latest 项目目录",
+                    state: stage == 3 ? .running : .pending
+                ),
+                FrontendProgressStep(
+                    title: "准备整站预览",
+                    state: .pending
+                )
+            ]
+        }
+
+        return [
+            FrontendProgressStep(title: "解析页面结构", state: .completed),
+            FrontendProgressStep(title: "生成 HTML / CSS / JS", state: .completed),
+            FrontendProgressStep(title: "写入 latest 项目目录", state: .completed),
+            FrontendProgressStep(
+                title: payload.hasEntry ? "准备整站预览" : "等待入口页生成",
+                state: payload.hasEntry ? .completed : .pending
+            )
+        ]
+    }
+
+    private func frontendProgressValue(_ steps: [FrontendProgressStep]) -> Double {
+        guard !steps.isEmpty else { return 0 }
+        let completed = steps.filter { $0.state == .completed }.count
+        let running = steps.contains { $0.state == .running } ? 0.5 : 0
+        return min(1, (Double(completed) + running) / Double(steps.count))
     }
 
     private func normalizedStreamingText(_ raw: String) -> String {
@@ -1161,6 +1324,115 @@ struct MessageBubbleView: View {
         if let remote = attachment.renderURLString,
            let normalized = normalizedRemoteURLString(remote) {
             activeImagePreview = ImagePreviewPayload(source: .remote(urlString: normalized))
+        }
+    }
+
+    private func openLatestProjectPreviewFromProgress() {
+        guard let entryFileURL = FrontendProjectBuilder.latestEntryFileURL() else {
+            saveFeedback = "latest 目录里还没有可预览的 HTML 文件。"
+            return
+        }
+
+        do {
+            let html = try String(contentsOf: entryFileURL, encoding: .utf8)
+            activeHTMLPreview = HTMLPreviewPayload(
+                title: "latest 预览 · \(entryFileURL.lastPathComponent)",
+                html: html,
+                baseURL: FrontendProjectBuilder.latestProjectURL() ?? entryFileURL.deletingLastPathComponent(),
+                entryFileURL: entryFileURL
+            )
+        } catch {
+            saveFeedback = "读取 latest 预览失败：\(error.localizedDescription)"
+        }
+    }
+}
+
+private struct FrontendProgressPayload {
+    let state: String
+    let fileCount: Int
+    let hasEntry: Bool
+
+    var isStreaming: Bool {
+        state == "streaming"
+    }
+
+    static func parse(from raw: String) -> FrontendProgressPayload? {
+        let normalized = raw.replacingOccurrences(of: "\r\n", with: "\n")
+        let lines = normalized.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard let first = lines.first?.trimmingCharacters(in: .whitespacesAndNewlines),
+              first == "[IEXA_FRONTEND_PROGRESS]" else {
+            return nil
+        }
+
+        var state = "streaming"
+        var files = 0
+        var entry = false
+
+        for line in lines.dropFirst() {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let parts = trimmed.split(separator: "=", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { continue }
+            let key = parts[0].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let value = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            switch key {
+            case "state":
+                state = value.lowercased()
+            case "files":
+                files = max(0, Int(value) ?? 0)
+            case "entry":
+                entry = (Int(value) ?? 0) > 0
+            default:
+                continue
+            }
+        }
+
+        return FrontendProgressPayload(state: state, fileCount: files, hasEntry: entry)
+    }
+}
+
+private enum FrontendProgressStepState {
+    case pending
+    case running
+    case completed
+}
+
+private struct FrontendProgressStep: Identifiable {
+    let title: String
+    let state: FrontendProgressStepState
+
+    var id: String { title }
+
+    var trailing: String {
+        switch state {
+        case .pending:
+            return "等待"
+        case .running:
+            return "进行中"
+        case .completed:
+            return "完成"
+        }
+    }
+
+    var iconColor: Color {
+        switch state {
+        case .pending:
+            return Color.white.opacity(0.55)
+        case .running:
+            return Color.cyan
+        case .completed:
+            return Color.green
+        }
+    }
+
+    var trailingColor: Color {
+        switch state {
+        case .pending:
+            return Color.white.opacity(0.62)
+        case .running:
+            return Color.cyan.opacity(0.95)
+        case .completed:
+            return Color.green.opacity(0.95)
         }
     }
 }

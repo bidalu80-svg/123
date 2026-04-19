@@ -1156,29 +1156,14 @@ struct ChatScreen: View {
         snapshot: FrontendProjectBuilder.ChatProgressSnapshot,
         isStreaming: Bool
     ) -> String {
-        let fileHint: String
-        if snapshot.detectedFileCount > 0 {
-            fileHint = "（已识别 \(snapshot.detectedFileCount) 个文件）"
-        } else {
-            fileHint = ""
-        }
-
-        if isStreaming {
-            return """
-            正在构建网站项目\(fileHint)
-            · 解析页面结构
-            · 生成 HTML / CSS / JS
-            · 写入 latest 并准备预览
-            """
-        }
-
-        let finalizedCount = max(1, snapshot.detectedFileCount)
-        let entryHint = snapshot.hasEntryHTML ? "已定位入口页" : "已生成页面文件"
+        let state = isStreaming ? "streaming" : "completed"
+        let files = max(0, snapshot.detectedFileCount)
+        let entry = snapshot.hasEntryHTML ? 1 : 0
         return """
-        网站项目已生成完成
-        ✓ 已写入 \(finalizedCount) 个文件到 latest
-        ✓ \(entryHint)，可直接预览整站
-        ✓ 代码可在「设置 > 前端项目 > 浏览 latest」查看
+        [IEXA_FRONTEND_PROGRESS]
+        state=\(state)
+        files=\(files)
+        entry=\(entry)
         """
     }
 
