@@ -468,8 +468,14 @@ struct MessageBubbleView: View {
             }
             .font(.system(size: 14, weight: .semibold))
             .foregroundStyle(step.iconColor)
-            .scaleEffect(step.state == .running && isStreaming && frontendProgressPulse ? 1.08 : 1.0)
-            .animation(.easeInOut(duration: 0.65).repeatForever(autoreverses: true), value: frontendProgressPulse)
+            .scaleEffect(step.state == .running && isStreaming && frontendProgressPulse ? 1.05 : 1.0)
+            .rotationEffect(.degrees(rotationDegrees(for: step, isStreaming: isStreaming)))
+            .animation(
+                shouldRotate(step: step, isStreaming: isStreaming)
+                    ? .linear(duration: rotationDuration(for: step)).repeatForever(autoreverses: false)
+                    : .easeOut(duration: 0.12),
+                value: frontendProgressPulse
+            )
 
             Text(step.title)
                 .font(.system(size: 15, weight: .semibold))
@@ -542,6 +548,32 @@ struct MessageBubbleView: View {
         let completed = steps.filter { $0.state == .completed }.count
         let running = steps.contains { $0.state == .running } ? 0.5 : 0
         return min(1, (Double(completed) + running) / Double(steps.count))
+    }
+
+    private func shouldRotate(step: FrontendProgressStep, isStreaming: Bool) -> Bool {
+        guard isStreaming else { return false }
+        switch step.state {
+        case .completed:
+            return false
+        case .running, .pending:
+            return true
+        }
+    }
+
+    private func rotationDuration(for step: FrontendProgressStep) -> Double {
+        switch step.state {
+        case .running:
+            return 0.75
+        case .pending:
+            return 1.6
+        case .completed:
+            return 0.0
+        }
+    }
+
+    private func rotationDegrees(for step: FrontendProgressStep, isStreaming: Bool) -> Double {
+        guard shouldRotate(step: step, isStreaming: isStreaming) else { return 0 }
+        return frontendProgressPulse ? 360 : 0
     }
 
     private func normalizedStreamingText(_ raw: String) -> String {
