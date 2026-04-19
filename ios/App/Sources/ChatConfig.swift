@@ -14,7 +14,9 @@ enum CodeThemeMode: String, Codable, CaseIterable {
 
 enum APIEndpointMode: String, Codable, CaseIterable {
     case chatCompletions
+    case responses
     case imageGenerations
+    case videoGenerations
     case audioTranscriptions
     case embeddings
     case models
@@ -23,8 +25,12 @@ enum APIEndpointMode: String, Codable, CaseIterable {
         switch self {
         case .chatCompletions:
             return "聊天"
+        case .responses:
+            return "Responses"
         case .imageGenerations:
             return "生图"
+        case .videoGenerations:
+            return "生视频"
         case .audioTranscriptions:
             return "语音转文字"
         case .embeddings:
@@ -38,8 +44,12 @@ enum APIEndpointMode: String, Codable, CaseIterable {
         switch self {
         case .chatCompletions:
             return "Chat"
+        case .responses:
+            return "Responses"
         case .imageGenerations:
             return "Image"
+        case .videoGenerations:
+            return "Video"
         case .audioTranscriptions:
             return "Audio"
         case .embeddings:
@@ -51,7 +61,7 @@ enum APIEndpointMode: String, Codable, CaseIterable {
 
     var requiresTextPrompt: Bool {
         switch self {
-        case .chatCompletions, .imageGenerations, .embeddings:
+        case .chatCompletions, .responses, .imageGenerations, .videoGenerations, .embeddings:
             return true
         case .audioTranscriptions, .models:
             return false
@@ -61,7 +71,9 @@ enum APIEndpointMode: String, Codable, CaseIterable {
 
 struct ChatConfig: Codable, Equatable {
     static let defaultChatCompletionsPath = "/v1/chat/completions"
+    static let defaultResponsesPath = "/v1/responses"
     static let defaultImagesGenerationsPath = "/v1/images/generations"
+    static let defaultVideoGenerationsPath = "/v1/videos/generations"
     static let defaultAudioTranscriptionsPath = "/v1/audio/transcriptions"
     static let defaultEmbeddingsPath = "/v1/embeddings"
     static let defaultModelsPath = "/v1/models"
@@ -71,13 +83,16 @@ struct ChatConfig: Codable, Equatable {
     var model: String
     var endpointMode: APIEndpointMode
     var chatCompletionsPath: String
+    var responsesPath: String
     var imagesGenerationsPath: String
+    var videoGenerationsPath: String
     var audioTranscriptionsPath: String
     var embeddingsPath: String
     var modelsPath: String
     var imageGenerationSize: String
     var timeout: Double
     var streamEnabled: Bool
+    var frontendAutoBuildEnabled: Bool
     var themeMode: AppThemeMode
     var codeThemeMode: CodeThemeMode
     var realtimeContextEnabled: Bool
@@ -96,13 +111,16 @@ struct ChatConfig: Codable, Equatable {
         model: "gpt-5.4",
         endpointMode: .chatCompletions,
         chatCompletionsPath: ChatConfig.defaultChatCompletionsPath,
+        responsesPath: ChatConfig.defaultResponsesPath,
         imagesGenerationsPath: ChatConfig.defaultImagesGenerationsPath,
+        videoGenerationsPath: ChatConfig.defaultVideoGenerationsPath,
         audioTranscriptionsPath: ChatConfig.defaultAudioTranscriptionsPath,
         embeddingsPath: ChatConfig.defaultEmbeddingsPath,
         modelsPath: ChatConfig.defaultModelsPath,
         imageGenerationSize: "1024x1024",
         timeout: 30,
         streamEnabled: true,
+        frontendAutoBuildEnabled: false,
         themeMode: .system,
         codeThemeMode: .followApp,
         realtimeContextEnabled: false,
@@ -122,13 +140,16 @@ struct ChatConfig: Codable, Equatable {
         model: String,
         endpointMode: APIEndpointMode = .chatCompletions,
         chatCompletionsPath: String = ChatConfig.defaultChatCompletionsPath,
+        responsesPath: String = ChatConfig.defaultResponsesPath,
         imagesGenerationsPath: String = ChatConfig.defaultImagesGenerationsPath,
+        videoGenerationsPath: String = ChatConfig.defaultVideoGenerationsPath,
         audioTranscriptionsPath: String = ChatConfig.defaultAudioTranscriptionsPath,
         embeddingsPath: String = ChatConfig.defaultEmbeddingsPath,
         modelsPath: String = ChatConfig.defaultModelsPath,
         imageGenerationSize: String = "1024x1024",
         timeout: Double,
         streamEnabled: Bool,
+        frontendAutoBuildEnabled: Bool = false,
         themeMode: AppThemeMode = .system,
         codeThemeMode: CodeThemeMode = .followApp,
         realtimeContextEnabled: Bool = false,
@@ -146,13 +167,16 @@ struct ChatConfig: Codable, Equatable {
         self.model = model
         self.endpointMode = endpointMode
         self.chatCompletionsPath = chatCompletionsPath
+        self.responsesPath = responsesPath
         self.imagesGenerationsPath = imagesGenerationsPath
+        self.videoGenerationsPath = videoGenerationsPath
         self.audioTranscriptionsPath = audioTranscriptionsPath
         self.embeddingsPath = embeddingsPath
         self.modelsPath = modelsPath
         self.imageGenerationSize = imageGenerationSize
         self.timeout = timeout
         self.streamEnabled = streamEnabled
+        self.frontendAutoBuildEnabled = frontendAutoBuildEnabled
         self.themeMode = themeMode
         self.codeThemeMode = codeThemeMode
         self.realtimeContextEnabled = realtimeContextEnabled
@@ -173,13 +197,16 @@ struct ChatConfig: Codable, Equatable {
         model = try c.decode(String.self, forKey: .model)
         endpointMode = try c.decodeIfPresent(APIEndpointMode.self, forKey: .endpointMode) ?? .chatCompletions
         chatCompletionsPath = try c.decodeIfPresent(String.self, forKey: .chatCompletionsPath) ?? ChatConfig.defaultChatCompletionsPath
+        responsesPath = try c.decodeIfPresent(String.self, forKey: .responsesPath) ?? ChatConfig.defaultResponsesPath
         imagesGenerationsPath = try c.decodeIfPresent(String.self, forKey: .imagesGenerationsPath) ?? ChatConfig.defaultImagesGenerationsPath
+        videoGenerationsPath = try c.decodeIfPresent(String.self, forKey: .videoGenerationsPath) ?? ChatConfig.defaultVideoGenerationsPath
         audioTranscriptionsPath = try c.decodeIfPresent(String.self, forKey: .audioTranscriptionsPath) ?? ChatConfig.defaultAudioTranscriptionsPath
         embeddingsPath = try c.decodeIfPresent(String.self, forKey: .embeddingsPath) ?? ChatConfig.defaultEmbeddingsPath
         modelsPath = try c.decodeIfPresent(String.self, forKey: .modelsPath) ?? ChatConfig.defaultModelsPath
         imageGenerationSize = try c.decodeIfPresent(String.self, forKey: .imageGenerationSize) ?? "1024x1024"
         timeout = try c.decode(Double.self, forKey: .timeout)
         streamEnabled = try c.decode(Bool.self, forKey: .streamEnabled)
+        frontendAutoBuildEnabled = try c.decodeIfPresent(Bool.self, forKey: .frontendAutoBuildEnabled) ?? false
         themeMode = try c.decodeIfPresent(AppThemeMode.self, forKey: .themeMode) ?? .system
         codeThemeMode = try c.decodeIfPresent(CodeThemeMode.self, forKey: .codeThemeMode) ?? .followApp
         realtimeContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .realtimeContextEnabled) ?? false
@@ -201,8 +228,16 @@ struct ChatConfig: Codable, Equatable {
         ChatConfigStore.endpointURL(apiURL, path: chatCompletionsPath, fallback: ChatConfig.defaultChatCompletionsPath)
     }
 
+    var responsesURLString: String {
+        ChatConfigStore.endpointURL(apiURL, path: responsesPath, fallback: ChatConfig.defaultResponsesPath)
+    }
+
     var imagesGenerationsURLString: String {
         ChatConfigStore.endpointURL(apiURL, path: imagesGenerationsPath, fallback: ChatConfig.defaultImagesGenerationsPath)
+    }
+
+    var videoGenerationsURLString: String {
+        ChatConfigStore.endpointURL(apiURL, path: videoGenerationsPath, fallback: ChatConfig.defaultVideoGenerationsPath)
     }
 
     var audioTranscriptionsURLString: String {
@@ -217,8 +252,12 @@ struct ChatConfig: Codable, Equatable {
         switch endpointMode {
         case .chatCompletions:
             return chatCompletionsURLString
+        case .responses:
+            return responsesURLString
         case .imageGenerations:
             return imagesGenerationsURLString
+        case .videoGenerations:
+            return videoGenerationsURLString
         case .audioTranscriptions:
             return audioTranscriptionsURLString
         case .embeddings:
@@ -265,13 +304,16 @@ enum ChatConfigStore {
             model: bundleModel,
             endpointMode: ChatConfig.default.endpointMode,
             chatCompletionsPath: ChatConfig.default.chatCompletionsPath,
+            responsesPath: ChatConfig.default.responsesPath,
             imagesGenerationsPath: ChatConfig.default.imagesGenerationsPath,
+            videoGenerationsPath: ChatConfig.default.videoGenerationsPath,
             audioTranscriptionsPath: ChatConfig.default.audioTranscriptionsPath,
             embeddingsPath: ChatConfig.default.embeddingsPath,
             modelsPath: ChatConfig.default.modelsPath,
             imageGenerationSize: ChatConfig.default.imageGenerationSize,
             timeout: ChatConfig.default.timeout,
             streamEnabled: ChatConfig.default.streamEnabled,
+            frontendAutoBuildEnabled: ChatConfig.default.frontendAutoBuildEnabled,
             themeMode: ChatConfig.default.themeMode,
             codeThemeMode: ChatConfig.default.codeThemeMode,
             realtimeContextEnabled: ChatConfig.default.realtimeContextEnabled,
@@ -355,7 +397,9 @@ enum ChatConfigStore {
     private static func endpointSuffixCandidates() -> [String] {
         [
             ChatConfig.defaultChatCompletionsPath,
+            ChatConfig.defaultResponsesPath,
             ChatConfig.defaultImagesGenerationsPath,
+            ChatConfig.defaultVideoGenerationsPath,
             ChatConfig.defaultAudioTranscriptionsPath,
             ChatConfig.defaultEmbeddingsPath,
             ChatConfig.defaultModelsPath
@@ -370,7 +414,9 @@ enum ChatConfigStore {
             model: normalizedModel.trimmingCharacters(in: .whitespacesAndNewlines),
             endpointMode: config.endpointMode,
             chatCompletionsPath: normalizeEndpointPath(config.chatCompletionsPath, fallback: ChatConfig.defaultChatCompletionsPath),
+            responsesPath: normalizeEndpointPath(config.responsesPath, fallback: ChatConfig.defaultResponsesPath),
             imagesGenerationsPath: normalizeEndpointPath(config.imagesGenerationsPath, fallback: ChatConfig.defaultImagesGenerationsPath),
+            videoGenerationsPath: normalizeEndpointPath(config.videoGenerationsPath, fallback: ChatConfig.defaultVideoGenerationsPath),
             audioTranscriptionsPath: normalizeEndpointPath(config.audioTranscriptionsPath, fallback: ChatConfig.defaultAudioTranscriptionsPath),
             embeddingsPath: normalizeEndpointPath(config.embeddingsPath, fallback: ChatConfig.defaultEmbeddingsPath),
             modelsPath: normalizeEndpointPath(config.modelsPath, fallback: ChatConfig.defaultModelsPath),
@@ -379,6 +425,7 @@ enum ChatConfigStore {
                 : config.imageGenerationSize.trimmingCharacters(in: .whitespacesAndNewlines),
             timeout: min(max(config.timeout, 5), 120),
             streamEnabled: config.streamEnabled,
+            frontendAutoBuildEnabled: config.frontendAutoBuildEnabled,
             themeMode: config.themeMode,
             codeThemeMode: config.codeThemeMode,
             realtimeContextEnabled: config.realtimeContextEnabled,

@@ -2,7 +2,8 @@ import Foundation
 
 struct ChatReply: Equatable {
     var text: String
-    var imageAttachments: [ChatImageAttachment]
+    var imageAttachments: [ChatImageAttachment] = []
+    var videoAttachments: [ChatVideoAttachment] = []
 }
 
 struct ChatRequestBuilder {
@@ -12,7 +13,16 @@ struct ChatRequestBuilder {
     - 使用自然、清晰、专业的语气，优先按用户语言回复。
     - 不强制使用项目符号或 emoji；在确实有助于理解时再使用 Markdown 结构。
     - 对代码、命令、路径等使用代码格式；长答案先给结论再展开。
+    - 涉及实时资讯、统计数据、榜单、新闻或可争议事实时，在结尾补充“来源：”并给出 1-3 个可点击网址。
     - 用户明确要求特定格式时，严格遵循用户要求。
+    """
+    private static let frontendAutoBuildSystemPrompt = """
+    你当前处于“前端自动生成模式”。当用户让你做网页、前端页面、Landing Page、H5、小程序界面原型或静态网站时，遵循以下规则：
+    1) 默认输出“可直接运行”的单文件 `index.html`，并内嵌全部 CSS/JS（除非用户明确要求 React/Vue/多文件）。
+    2) 代码必须完整可运行，不允许省略关键结构，不要使用伪代码或“略”。
+    3) 若用户明确要求多文件，请按代码块分别给出完整文件内容，并在每个代码块前写清文件名。
+    4) 回答结构优先为：先 1-2 句说明效果，再给完整代码。
+    5) 不要输出后端服务、数据库或部署脚本，除非用户明确提出需要。
     """
     private static let maxHistoryMessages = 22
     private static let maxHistoryCharacters = 42_000
@@ -45,7 +55,8 @@ struct ChatRequestBuilder {
             history: history,
             message: message,
             realtimeSystemContext: realtimeSystemContext,
-            memorySystemContext: memorySystemContext
+            memorySystemContext: memorySystemContext,
+            frontendAutoBuildEnabled: config.frontendAutoBuildEnabled
         )
 
         let payload: [String: Any] = [
@@ -62,7 +73,8 @@ struct ChatRequestBuilder {
         history: [ChatMessage],
         message: ChatMessage,
         realtimeSystemContext: String?,
-        memorySystemContext: String?
+        memorySystemContext: String?,
+        frontendAutoBuildEnabled: Bool
     ) -> [[String: Any]] {
         let hasSystemMessage = history.contains { $0.role == .system } || message.role == .system
         var prefix: [[String: Any]] = []
@@ -86,6 +98,13 @@ struct ChatRequestBuilder {
             prefix.append([
                 "role": "system",
                 "content": trimmedMemoryContext
+            ])
+        }
+
+        if frontendAutoBuildEnabled {
+            prefix.append([
+                "role": "system",
+                "content": frontendAutoBuildSystemPrompt
             ])
         }
 
@@ -175,7 +194,120 @@ struct ChatRequestBuilder {
             partial + min(file.textContent.count, maxHistoryFilePreviewChars)
         }
         let imageWeight = message.imageAttachments.count * 640
-        return textWeight + fileWeight + imageWeight + 180
+        let videoWeight = message.videoAttachments.count * 760
+        return textWeight + fileWeight + imageWeight + videoWeight + 180
+    }
+
+    static func makeResponsesRequest(
+        config: ChatConfig,
+        history: [ChatMessage],
+        message: ChatMessage,
+        realtimeSystemContext: String? = nil,
+        memorySystemContext: String? = nil,
+        stream: Bool? = nil
+    ) throws -> URLRequest {
+        let endpoint = config.responsesURLString
+        guard let url = URL(string: endpoint), !endpoint.isEmpty else {
+            throw ChatServiceError.invalidURL
+        }
+
+        var request = URLRequest(url: url, timeoutInterval: config.timeout)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let trimmedAPIKey = config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedAPIKey.isEmpty {
+            request.setValue("Bearer \(trimmedAPIKey)", forHTTPHeaderField: "Authorization")
+        }
+
+        let normalizedMessages = buildMessagesWithIdentity(
+            history: history,
+            message: message,
+            realtimeSystemContext: realtimeSystemContext,
+            memorySystemContext: memorySystemContext,
+            frontendAutoBuildEnabled: config.frontendAutoBuildEnabled
+        )
+
+        let shouldStream = stream ?? config.streamEnabled
+        let payload: [String: Any] = [
+            "model": config.model,
+            "input": makeResponsesInput(from: normalizedMessages),
+            "stream": shouldStream
+        ]
+
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        return request
+    }
+
+    private static func makeResponsesInput(from messages: [[String: Any]]) -> [[String: Any]] {
+        var input: [[String: Any]] = []
+
+        for message in messages {
+            let rawRole = (message["role"] as? String ?? "user").lowercased()
+            // Responses API commonly uses developer/user/assistant roles.
+            let role: String = rawRole == "system" ? "developer" : rawRole
+            let normalizedContent = makeResponsesContent(from: message["content"])
+            guard !normalizedContent.isEmpty else { continue }
+            input.append([
+                "role": role,
+                "content": normalizedContent
+            ])
+        }
+
+        return input
+    }
+
+    private static func makeResponsesContent(from rawContent: Any?) -> [[String: Any]] {
+        guard let rawContent else { return [] }
+
+        if let text = rawContent as? String {
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return [] }
+            return [[
+                "type": "input_text",
+                "text": trimmed
+            ]]
+        }
+
+        guard let rows = rawContent as? [[String: Any]] else { return [] }
+
+        var result: [[String: Any]] = []
+        result.reserveCapacity(rows.count)
+
+        for row in rows {
+            let type = (row["type"] as? String ?? "").lowercased()
+            if type == "text" || type == "input_text" || type == "output_text" {
+                if let text = row["text"] as? String,
+                   !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    result.append([
+                        "type": "input_text",
+                        "text": text
+                    ])
+                }
+                continue
+            }
+
+            if type == "image_url" || type == "input_image" || type == "output_image" {
+                let imageURL: String?
+                if let value = row["image_url"] as? String {
+                    imageURL = value
+                } else if let dict = row["image_url"] as? [String: Any] {
+                    imageURL = dict["url"] as? String
+                } else {
+                    imageURL = row["url"] as? String
+                }
+
+                if let imageURL,
+                   !imageURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    result.append([
+                        "type": "input_image",
+                        "image_url": imageURL
+                    ])
+                }
+            }
+        }
+
+        return result
     }
 
     static func makeModelsRequest(config: ChatConfig) throws -> URLRequest {
@@ -210,6 +342,26 @@ struct ChatRequestBuilder {
         }
 
         let payload = makeImageGenerationPayload(config: config, prompt: prompt)
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        return request
+    }
+
+    static func makeVideoGenerationRequest(config: ChatConfig, prompt: String) throws -> URLRequest {
+        let endpoint = config.videoGenerationsURLString
+        guard let url = URL(string: endpoint), !endpoint.isEmpty else {
+            throw ChatServiceError.invalidURL
+        }
+
+        var request = URLRequest(url: url, timeoutInterval: max(config.timeout, 120))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let trimmedAPIKey = config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedAPIKey.isEmpty {
+            request.setValue("Bearer \(trimmedAPIKey)", forHTTPHeaderField: "Authorization")
+        }
+
+        let payload = makeVideoGenerationPayload(config: config, prompt: prompt)
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
         return request
     }
@@ -312,6 +464,21 @@ struct ChatRequestBuilder {
             "size": size,
             "n": 1
         ]
+    }
+
+    private static func makeVideoGenerationPayload(config: ChatConfig, prompt: String) -> [String: Any] {
+        var payload: [String: Any] = [
+            "model": config.model,
+            "prompt": prompt
+        ]
+
+        let loweredModel = config.model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        // Better compatibility with OpenAI-compatible gateways that expect this hint.
+        if loweredModel.contains("qwen") || loweredModel.contains("video") {
+            payload["n"] = 1
+            payload["response_format"] = "url"
+        }
+        return payload
     }
 
     private static func normalizedAspectRatio(from raw: String) -> String? {
@@ -437,8 +604,21 @@ final class ChatService {
                 message: message,
                 onEvent: onEvent
             )
+        case .responses:
+            return try await sendResponses(
+                config: config,
+                history: history,
+                message: message,
+                onEvent: onEvent
+            )
         case .imageGenerations:
             return try await sendImageGeneration(
+                config: config,
+                message: message,
+                onEvent: onEvent
+            )
+        case .videoGenerations:
+            return try await sendVideoGeneration(
                 config: config,
                 message: message,
                 onEvent: onEvent
@@ -460,6 +640,251 @@ final class ChatService {
                 message: message,
                 onEvent: onEvent
             )
+        }
+    }
+
+    private func sendResponses(
+        config: ChatConfig,
+        history: [ChatMessage],
+        message: ChatMessage,
+        onEvent: @escaping @Sendable (StreamChunk) -> Void
+    ) async throws -> ChatReply {
+        let memoryContext: String?
+        if config.memoryModeEnabled {
+            await memoryStore.remember(message)
+            memoryContext = await memoryStore.buildSystemContext()
+        } else {
+            memoryContext = nil
+        }
+
+        let realtimeContext = await realtimeContextProvider.buildSystemContext(
+            config: config,
+            userPrompt: message.copyableText
+        )
+
+        if config.streamEnabled {
+            do {
+                return try await sendResponsesStreaming(
+                    config: config,
+                    history: history,
+                    message: message,
+                    realtimeSystemContext: realtimeContext,
+                    memorySystemContext: memoryContext,
+                    onEvent: onEvent
+                )
+            } catch {
+                if shouldFallbackResponsesStreamError(error) {
+                    return try await sendResponsesNonStreaming(
+                        config: config,
+                        history: history,
+                        message: message,
+                        realtimeSystemContext: realtimeContext,
+                        memorySystemContext: memoryContext,
+                        onEvent: onEvent
+                    )
+                }
+                throw error
+            }
+        }
+
+        return try await sendResponsesNonStreaming(
+            config: config,
+            history: history,
+            message: message,
+            realtimeSystemContext: realtimeContext,
+            memorySystemContext: memoryContext,
+            onEvent: onEvent
+        )
+    }
+
+    private func sendResponsesStreaming(
+        config: ChatConfig,
+        history: [ChatMessage],
+        message: ChatMessage,
+        realtimeSystemContext: String?,
+        memorySystemContext: String?,
+        onEvent: @escaping @Sendable (StreamChunk) -> Void
+    ) async throws -> ChatReply {
+        let request = try ChatRequestBuilder.makeResponsesRequest(
+            config: config,
+            history: history,
+            message: message,
+            realtimeSystemContext: realtimeSystemContext,
+            memorySystemContext: memorySystemContext,
+            stream: true
+        )
+
+        return try await withRetry { [self] in
+            let (bytes, response) = try await session.bytes(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw ChatServiceError.invalidResponse
+            }
+
+            guard (200...299).contains(httpResponse.statusCode) else {
+                if httpResponse.statusCode == 404 {
+                    throw ChatServiceError.invalidInput("当前站点未提供 /v1/responses 接口（404）。请切回聊天模式或确认网关支持 Responses API。")
+                }
+                throw ChatServiceError.httpError(httpResponse.statusCode)
+            }
+
+            var fullReplyParts: [String] = []
+            var imageURLs = Set<String>()
+            var videoURLStrings = Set<String>()
+            var citationURLs = Set<String>()
+            var pendingDeltaParts: [String] = []
+            var pendingImageURLs = Set<String>()
+            var thinkTagFilter = ThinkTagStreamFilter()
+            var lastEmitAt = Date.distantPast
+            let streamEmitInterval: TimeInterval = 0.012
+
+            func emitPending(force: Bool = false) {
+                let pendingDeltaText = pendingDeltaParts.joined()
+                guard !pendingDeltaText.isEmpty || !pendingImageURLs.isEmpty else { return }
+                let now = Date()
+                if !force && now.timeIntervalSince(lastEmitAt) < streamEmitInterval {
+                    return
+                }
+                onEvent(
+                    StreamChunk(
+                        rawLine: "",
+                        deltaText: pendingDeltaText,
+                        imageURLs: Array(pendingImageURLs),
+                        isDone: false
+                    )
+                )
+                pendingDeltaParts.removeAll(keepingCapacity: true)
+                pendingImageURLs.removeAll()
+                lastEmitAt = now
+            }
+
+            for try await line in bytes.lines {
+                try Task.checkCancellation()
+                guard let chunk = StreamParser.parse(line: line) else { continue }
+                if chunk.isDone { break }
+
+                let parsedCitationURLs = StreamParser.extractCitationURLs(line: line)
+                if !parsedCitationURLs.isEmpty {
+                    parsedCitationURLs.forEach { citationURLs.insert($0) }
+                }
+
+                if !chunk.deltaText.isEmpty {
+                    let filtered = thinkTagFilter.filter(chunk.deltaText)
+                    if !filtered.isEmpty {
+                        fullReplyParts.append(filtered)
+                        pendingDeltaParts.append(filtered)
+                    }
+                }
+
+                if !chunk.imageURLs.isEmpty {
+                    chunk.imageURLs.forEach { imageURLs.insert($0) }
+                    chunk.imageURLs.forEach { pendingImageURLs.insert($0) }
+                }
+
+                if let eventObject = parseJSONObjectFromSSELine(line) {
+                    let videos = extractVideoAttachments(from: eventObject, baseURL: config.normalizedBaseURL)
+                    if !videos.isEmpty {
+                        videos.forEach { videoURLStrings.insert($0.requestURLString) }
+                    }
+                }
+
+                emitPending()
+            }
+
+            let trailingFiltered = thinkTagFilter.finalize()
+            if !trailingFiltered.isEmpty {
+                fullReplyParts.append(trailingFiltered)
+                pendingDeltaParts.append(trailingFiltered)
+            }
+            emitPending(force: true)
+
+            let fullReply = fullReplyParts.joined()
+            let cleanedText = ResponseCleaner.cleanAssistantText(fullReply)
+            let mergedText = mergeTextWithCitationURLs(cleanedText, citationURLs: Array(citationURLs))
+            let images = deduplicateImages(
+                imageURLs.map { ChatImageAttachment(dataURL: $0, mimeType: "image/*", remoteURL: $0) }
+            )
+            let videos = deduplicateVideos(
+                videoURLStrings.map {
+                    ChatVideoAttachment(
+                        remoteURL: $0,
+                        mimeType: normalizedVideoMimeType(urlString: $0, preferred: nil)
+                    )
+                }
+            )
+
+            if mergedText.isEmpty && images.isEmpty && videos.isEmpty {
+                throw ChatServiceError.noData
+            }
+
+            return ChatReply(text: mergedText, imageAttachments: images, videoAttachments: videos)
+        }
+    }
+
+    private func sendResponsesNonStreaming(
+        config: ChatConfig,
+        history: [ChatMessage],
+        message: ChatMessage,
+        realtimeSystemContext: String?,
+        memorySystemContext: String?,
+        onEvent: @escaping @Sendable (StreamChunk) -> Void
+    ) async throws -> ChatReply {
+        let request = try ChatRequestBuilder.makeResponsesRequest(
+            config: config,
+            history: history,
+            message: message,
+            realtimeSystemContext: realtimeSystemContext,
+            memorySystemContext: memorySystemContext,
+            stream: false
+        )
+
+        let (data, response) = try await withRetry { [self] in
+            try await session.data(for: request)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw ChatServiceError.invalidResponse
+        }
+
+        guard (200...299).contains(httpResponse.statusCode) else {
+            if httpResponse.statusCode == 404 {
+                throw ChatServiceError.invalidInput("当前站点未提供 /v1/responses 接口（404）。请切回聊天模式或确认网关支持 Responses API。")
+            }
+            throw ChatServiceError.httpError(httpResponse.statusCode)
+        }
+
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw ChatServiceError.noData
+        }
+
+        let parsed = StreamParser.extractPayload(from: object)
+        let citationURLs = StreamParser.extractCitationURLs(from: object)
+        let cleanedText = ResponseCleaner.cleanAssistantText(parsed.text)
+        let mergedText = mergeTextWithCitationURLs(cleanedText, citationURLs: citationURLs)
+        let images = deduplicateImages(
+            parsed.imageURLs.map { ChatImageAttachment(dataURL: $0, mimeType: "image/*", remoteURL: $0) }
+        )
+        let videos = deduplicateVideos(extractVideoAttachments(from: object, baseURL: config.normalizedBaseURL))
+
+        if mergedText.isEmpty && images.isEmpty && videos.isEmpty {
+            throw ChatServiceError.noData
+        }
+
+        onEvent(StreamChunk(rawLine: "", deltaText: mergedText, imageURLs: images.map(\.requestURLString), isDone: false))
+        return ChatReply(text: mergedText, imageAttachments: images, videoAttachments: videos)
+    }
+
+    private func shouldFallbackResponsesStreamError(_ error: Error) -> Bool {
+        guard let serviceError = error as? ChatServiceError else { return false }
+        switch serviceError {
+        case .httpError(let code):
+            return [400, 404, 405, 415, 422].contains(code)
+        case .invalidResponse, .noData:
+            return true
+        case .invalidInput(let reason):
+            return reason.contains("/v1/responses")
+        case .invalidURL, .unsupported:
+            return false
         }
     }
 
@@ -502,10 +927,13 @@ final class ChatService {
 
                 var fullReplyParts: [String] = []
                 var imageURLs = Set<String>()
+                var citationURLs = Set<String>()
                 var pendingDeltaParts: [String] = []
                 var pendingImageURLs = Set<String>()
+                var thinkTagFilter = ThinkTagStreamFilter()
                 var lastEmitAt = Date.distantPast
-                let streamEmitInterval: TimeInterval = 0.03
+                // Emit smaller, more frequent deltas to keep the UI feed visually continuous.
+                let streamEmitInterval: TimeInterval = 0.012
 
                 func emitPending(force: Bool = false) {
                     let pendingDeltaText = pendingDeltaParts.joined()
@@ -532,9 +960,17 @@ final class ChatService {
                     guard let chunk = StreamParser.parse(line: line) else { continue }
                     if chunk.isDone { break }
 
+                    let parsedCitationURLs = StreamParser.extractCitationURLs(line: line)
+                    if !parsedCitationURLs.isEmpty {
+                        parsedCitationURLs.forEach { citationURLs.insert($0) }
+                    }
+
                     if !chunk.deltaText.isEmpty {
-                        fullReplyParts.append(chunk.deltaText)
-                        pendingDeltaParts.append(chunk.deltaText)
+                        let filtered = thinkTagFilter.filter(chunk.deltaText)
+                        if !filtered.isEmpty {
+                            fullReplyParts.append(filtered)
+                            pendingDeltaParts.append(filtered)
+                        }
                     }
                     if !chunk.imageURLs.isEmpty {
                         chunk.imageURLs.forEach { imageURLs.insert($0) }
@@ -543,15 +979,22 @@ final class ChatService {
 
                     emitPending()
                 }
+
+                let trailingFiltered = thinkTagFilter.finalize()
+                if !trailingFiltered.isEmpty {
+                    fullReplyParts.append(trailingFiltered)
+                    pendingDeltaParts.append(trailingFiltered)
+                }
                 emitPending(force: true)
 
                 let fullReply = fullReplyParts.joined()
                 let cleaned = ResponseCleaner.cleanAssistantText(fullReply)
+                let mergedText = mergeTextWithCitationURLs(cleaned, citationURLs: Array(citationURLs))
                 let images = imageURLs.map { ChatImageAttachment(dataURL: $0, mimeType: "image/*", remoteURL: $0) }
-                if cleaned.isEmpty && images.isEmpty {
+                if mergedText.isEmpty && images.isEmpty {
                     throw ChatServiceError.noData
                 }
-                return ChatReply(text: cleaned, imageAttachments: images)
+                return ChatReply(text: mergedText, imageAttachments: images)
             }
         }
 
@@ -572,8 +1015,10 @@ final class ChatService {
         }
 
         let parsed = StreamParser.extractPayload(from: object)
+        let citationURLs = StreamParser.extractCitationURLs(from: object)
+        let cleanedText = ResponseCleaner.cleanAssistantText(parsed.text)
         let reply = ChatReply(
-            text: ResponseCleaner.cleanAssistantText(parsed.text),
+            text: mergeTextWithCitationURLs(cleanedText, citationURLs: citationURLs),
             imageAttachments: deduplicateImages(
                 parsed.imageURLs.map { ChatImageAttachment(dataURL: $0, mimeType: "image/*", remoteURL: $0) }
             )
@@ -596,22 +1041,6 @@ final class ChatService {
         guard !prompt.isEmpty else {
             throw ChatServiceError.invalidInput("生图模式需要输入图片描述（prompt）。")
         }
-
-        let progressTask = Task.detached(priority: .utility) {
-            let steps = [
-                "生图进度：正在理解提示词…",
-                "生图进度：正在构图…",
-                "生图进度：正在细化细节…",
-                "生图进度：正在高质量渲染…"
-            ]
-            for (index, line) in steps.enumerated() {
-                if Task.isCancelled { return }
-                let delta = index == 0 ? line : "\n\(line)"
-                onEvent(StreamChunk(rawLine: "", deltaText: delta, imageURLs: [], isDone: false))
-                try? await Task.sleep(nanoseconds: 700_000_000)
-            }
-        }
-        defer { progressTask.cancel() }
 
         let request = try ChatRequestBuilder.makeImagesGenerationRequest(config: config, prompt: prompt)
         let (data, response) = try await withRetry { [self] in
@@ -638,17 +1067,524 @@ final class ChatService {
         }
 
         let revisedPrompt = object["revised_prompt"] as? String
+        let parsedText = parsed.text.trimmingCharacters(in: .whitespacesAndNewlines)
         let text: String
-        if let revisedPrompt, !revisedPrompt.isEmpty {
-            text = "生图完成（\(images.count) 张）\n优化提示词：\(revisedPrompt)"
-        } else if !parsed.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            text = parsed.text
+        if !parsedText.isEmpty {
+            text = parsedText
+        } else if let revisedPrompt, !revisedPrompt.isEmpty {
+            text = "优化提示词：\(revisedPrompt)"
         } else {
-            text = "生图完成（\(images.count) 张）"
+            text = ""
         }
 
         onEvent(StreamChunk(rawLine: "", deltaText: text, imageURLs: images.map(\.requestURLString), isDone: false))
         return ChatReply(text: text, imageAttachments: images)
+    }
+
+    private func sendVideoGeneration(
+        config: ChatConfig,
+        message: ChatMessage,
+        onEvent: @escaping @Sendable (StreamChunk) -> Void
+    ) async throws -> ChatReply {
+        let prompt = message.copyableText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty else {
+            throw ChatServiceError.invalidInput("生视频模式需要输入视频描述（prompt）。")
+        }
+
+        let request = try ChatRequestBuilder.makeVideoGenerationRequest(config: config, prompt: prompt)
+        let (data, response) = try await withRetry { [self] in
+            try await session.data(for: request)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw ChatServiceError.invalidResponse
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw ChatServiceError.httpError(httpResponse.statusCode)
+        }
+
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw ChatServiceError.noData
+        }
+
+        let immediateVideos = deduplicateVideos(extractVideoAttachments(from: object, baseURL: config.normalizedBaseURL))
+        if !immediateVideos.isEmpty {
+            let text = videoReplyText(from: object, fallbackCount: immediateVideos.count)
+            onEvent(StreamChunk(rawLine: "", deltaText: text, imageURLs: [], isDone: false))
+            return ChatReply(text: text, videoAttachments: immediateVideos)
+        }
+
+        let taskID = extractVideoTaskID(from: object)
+        guard let pollURL = resolveVideoPollURL(from: object, taskID: taskID, config: config) else {
+            throw ChatServiceError.noData
+        }
+
+        onEvent(
+            StreamChunk(
+                rawLine: "",
+                deltaText: "视频任务已提交，正在生成…",
+                imageURLs: [],
+                isDone: false
+            )
+        )
+
+        return try await pollVideoGeneration(
+            config: config,
+            pollURLString: pollURL,
+            taskID: taskID,
+            onEvent: onEvent
+        )
+    }
+
+    private func pollVideoGeneration(
+        config: ChatConfig,
+        pollURLString: String,
+        taskID: String?,
+        onEvent: @escaping @Sendable (StreamChunk) -> Void
+    ) async throws -> ChatReply {
+        let timeout = max(config.timeout, 180)
+        let deadline = Date().addingTimeInterval(timeout)
+        var statusURL = pollURLString
+        var lastStatusLine = ""
+        var attempts = 0
+
+        while Date() < deadline {
+            try Task.checkCancellation()
+
+            guard let url = URL(string: statusURL), !statusURL.isEmpty else {
+                throw ChatServiceError.invalidURL
+            }
+
+            var request = URLRequest(url: url, timeoutInterval: max(config.timeout, 60))
+            request.httpMethod = "GET"
+            let trimmedAPIKey = config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedAPIKey.isEmpty {
+                request.setValue("Bearer \(trimmedAPIKey)", forHTTPHeaderField: "Authorization")
+            }
+
+            let (data, response) = try await withRetry { [self] in
+                try await session.data(for: request)
+            }
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw ChatServiceError.invalidResponse
+            }
+            guard (200...299).contains(httpResponse.statusCode) else {
+                throw ChatServiceError.httpError(httpResponse.statusCode)
+            }
+
+            guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw ChatServiceError.noData
+            }
+
+            let videos = deduplicateVideos(extractVideoAttachments(from: object, baseURL: config.normalizedBaseURL))
+            let status = extractVideoTaskStatus(from: object)
+            let progress = extractVideoProgress(from: object)
+            let statusLine = readableVideoStatusLine(status: status, progress: progress)
+            if !statusLine.isEmpty, statusLine != lastStatusLine {
+                onEvent(StreamChunk(rawLine: "", deltaText: "\n\(statusLine)", imageURLs: [], isDone: false))
+                lastStatusLine = statusLine
+            }
+
+            if let status, isVideoTaskFailureStatus(status) {
+                let reason = extractVideoFailureReason(from: object)
+                if let reason, !reason.isEmpty {
+                    throw ChatServiceError.invalidInput("视频生成失败：\(reason)")
+                }
+                throw ChatServiceError.invalidInput("视频生成失败（状态：\(status)）。")
+            }
+
+            if !videos.isEmpty, status == nil || isVideoTaskSuccessStatus(status ?? "") {
+                let text = videoReplyText(from: object, fallbackCount: videos.count)
+                onEvent(StreamChunk(rawLine: "", deltaText: "\n视频生成完成。", imageURLs: [], isDone: false))
+                return ChatReply(text: text, videoAttachments: videos)
+            }
+
+            if let status, isVideoTaskSuccessStatus(status), videos.isEmpty {
+                if attempts >= 1 {
+                    throw ChatServiceError.noData
+                }
+            }
+
+            if let nextURL = resolveVideoPollURL(from: object, taskID: taskID, config: config) {
+                statusURL = nextURL
+            }
+
+            attempts += 1
+            let sleepSeconds = min(2.6, 1.4 + (Double(attempts) * 0.06))
+            try await Task.sleep(nanoseconds: UInt64(sleepSeconds * 1_000_000_000))
+        }
+
+        throw ChatServiceError.invalidInput("视频生成超时，请稍后重试。")
+    }
+
+    private func extractVideoAttachments(from object: [String: Any], baseURL: String) -> [ChatVideoAttachment] {
+        var collected: [(url: String, mimeType: String?)] = []
+        collectVideoCandidates(in: object, keyPath: [], collected: &collected)
+
+        let parsedText = StreamParser.extractPayload(from: object).text
+        let inlineURLs = extractWebURLs(from: parsedText)
+        for url in inlineURLs where isLikelyVideoURL(url) {
+            collected.append((url, nil))
+        }
+
+        var result: [ChatVideoAttachment] = []
+        var seen = Set<String>()
+        for item in collected {
+            guard let normalized = normalizeVideoURL(item.url, baseURL: baseURL),
+                  !normalized.isEmpty,
+                  seen.insert(normalized).inserted else {
+                continue
+            }
+            let mime = normalizedVideoMimeType(urlString: normalized, preferred: item.mimeType)
+            result.append(ChatVideoAttachment(remoteURL: normalized, mimeType: mime))
+        }
+        return result
+    }
+
+    private func collectVideoCandidates(
+        in node: Any,
+        keyPath: [String],
+        collected: inout [(url: String, mimeType: String?)]
+    ) {
+        if let dict = node as? [String: Any] {
+            for (rawKey, value) in dict {
+                let key = rawKey.lowercased()
+                let nextPath = keyPath + [key]
+
+                if let stringValue = value as? String {
+                    let mimeHint = (dict["mime_type"] as? String)
+                        ?? (dict["mime"] as? String)
+                        ?? (dict["content_type"] as? String)
+                    if shouldTreatAsVideoURL(
+                        stringValue,
+                        key: key,
+                        path: nextPath
+                    ) {
+                        collected.append((stringValue, mimeHint))
+                    }
+                } else if let nested = value as? [String: Any] {
+                    collectVideoCandidates(in: nested, keyPath: nextPath, collected: &collected)
+                } else if let array = value as? [Any] {
+                    collectVideoCandidates(in: array, keyPath: nextPath, collected: &collected)
+                }
+            }
+            return
+        }
+
+        if let array = node as? [Any] {
+            for item in array {
+                collectVideoCandidates(in: item, keyPath: keyPath, collected: &collected)
+            }
+        }
+    }
+
+    private func shouldTreatAsVideoURL(_ raw: String, key: String, path: [String]) -> Bool {
+        let cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return false }
+        let looksLikeURL = cleaned.hasPrefix("http://")
+            || cleaned.hasPrefix("https://")
+            || cleaned.hasPrefix("//")
+            || cleaned.hasPrefix("/")
+        guard looksLikeURL else { return false }
+
+        let lowerPath = path.joined(separator: ".")
+        if key.contains("status") || key.contains("poll") || key.contains("operation") {
+            return false
+        }
+        if lowerPath.contains("status_url")
+            || lowerPath.contains("poll_url")
+            || lowerPath.contains("operation_url")
+            || lowerPath.contains("task_url") {
+            return false
+        }
+
+        if isLikelyVideoURL(cleaned) {
+            return true
+        }
+
+        if key.contains("video") {
+            return true
+        }
+
+        return lowerPath.contains("video")
+    }
+
+    private func isLikelyVideoURL(_ raw: String) -> Bool {
+        let lowered = raw.lowercased()
+        let videoSuffixes = [".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi", ".wmv", ".flv", ".m3u8"]
+        if videoSuffixes.contains(where: { lowered.contains($0) }) {
+            return true
+        }
+        if lowered.contains("mime=video/") || lowered.contains("content-type=video/") {
+            return true
+        }
+        return false
+    }
+
+    private func normalizeVideoURL(_ raw: String, baseURL: String) -> String? {
+        var cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        cleaned = cleaned.trimmingCharacters(in: CharacterSet(charactersIn: "<>\"'"))
+        cleaned = cleaned.replacingOccurrences(of: "\\/", with: "/")
+        cleaned = cleaned.replacingOccurrences(of: "&amp;", with: "&")
+
+        if cleaned.hasPrefix("//") {
+            return "https:\(cleaned)"
+        }
+
+        if cleaned.hasPrefix("/") {
+            let base = baseURL
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            guard !base.isEmpty else { return nil }
+            return "\(base)\(cleaned)"
+        }
+
+        if cleaned.hasPrefix("http://") || cleaned.hasPrefix("https://") {
+            return cleaned
+        }
+
+        if cleaned.contains("/"), !cleaned.contains(" ") {
+            let base = baseURL
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            guard !base.isEmpty else { return nil }
+            return "\(base)/\(cleaned)"
+        }
+        return nil
+    }
+
+    private func normalizedVideoMimeType(urlString: String, preferred: String?) -> String {
+        if let preferred, preferred.lowercased().hasPrefix("video/") {
+            return preferred
+        }
+
+        let lowered = urlString.lowercased()
+        if lowered.contains(".webm") { return "video/webm" }
+        if lowered.contains(".mov") { return "video/quicktime" }
+        if lowered.contains(".m3u8") { return "application/x-mpegURL" }
+        return "video/mp4"
+    }
+
+    private func extractVideoTaskID(from object: [String: Any]) -> String? {
+        let keys = ["task_id", "id", "job_id", "generation_id", "request_id"]
+        return firstStringValue(for: keys, in: object)
+    }
+
+    private func extractVideoTaskStatus(from object: [String: Any]) -> String? {
+        let keys = ["status", "state", "task_status", "job_status"]
+        return firstStringValue(for: keys, in: object)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+    }
+
+    private func extractVideoProgress(from object: [String: Any]) -> Int? {
+        let keyCandidates = ["progress", "percent", "percentage"]
+        if let number = firstNumberValue(for: keyCandidates, in: object) {
+            if number <= 1 {
+                return max(0, min(100, Int(number * 100)))
+            }
+            return max(0, min(100, Int(number)))
+        }
+        return nil
+    }
+
+    private func resolveVideoPollURL(from object: [String: Any], taskID: String?, config: ChatConfig) -> String? {
+        let keys = ["status_url", "poll_url", "operation_url", "task_url"]
+        if let direct = firstStringValue(for: keys, in: object),
+           let normalized = normalizeVideoURL(direct, baseURL: config.normalizedBaseURL) {
+            return normalized
+        }
+
+        guard let taskID, !taskID.isEmpty else { return nil }
+        let endpoint = config.videoGenerationsURLString
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !endpoint.isEmpty else { return nil }
+
+        let encodedID = taskID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? taskID
+        return "\(endpoint)/\(encodedID)"
+    }
+
+    private func readableVideoStatusLine(status: String?, progress: Int?) -> String {
+        let normalized = status?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if normalized.isEmpty {
+            if let progress {
+                return "视频生成中（\(progress)%）…"
+            }
+            return "视频生成中…"
+        }
+
+        if isVideoTaskSuccessStatus(normalized) {
+            return "视频已生成，正在整理结果…"
+        }
+        if isVideoTaskFailureStatus(normalized) {
+            return "视频生成失败（\(normalized)）"
+        }
+
+        if let progress {
+            return "视频生成中（\(progress)%）…"
+        }
+        return "视频生成状态：\(normalized)"
+    }
+
+    private func isVideoTaskSuccessStatus(_ status: String) -> Bool {
+        let normalized = status.lowercased()
+        return normalized == "succeeded"
+            || normalized == "success"
+            || normalized == "completed"
+            || normalized == "done"
+            || normalized == "finished"
+    }
+
+    private func isVideoTaskFailureStatus(_ status: String) -> Bool {
+        let normalized = status.lowercased()
+        return normalized == "failed"
+            || normalized == "error"
+            || normalized == "cancelled"
+            || normalized == "canceled"
+            || normalized == "rejected"
+            || normalized == "expired"
+    }
+
+    private func extractVideoFailureReason(from object: [String: Any]) -> String? {
+        if let errorNode = object["error"] {
+            if let text = errorNode as? String, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return text.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            if let dict = errorNode as? [String: Any] {
+                let keys = ["message", "detail", "reason", "error_message"]
+                if let text = firstStringValue(for: keys, in: dict),
+                   !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return text.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            }
+        }
+
+        let keys = ["message", "detail", "reason", "error_message"]
+        if let text = firstStringValue(for: keys, in: object),
+           !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return nil
+    }
+
+    private func videoReplyText(from object: [String: Any], fallbackCount: Int) -> String {
+        let payloadText = StreamParser.extractPayload(from: object).text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !payloadText.isEmpty {
+            return payloadText
+        }
+
+        if let revisedPrompt = firstStringValue(for: ["revised_prompt"], in: object),
+           !revisedPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "优化提示词：\(revisedPrompt)"
+        }
+        return "视频生成完成（\(fallbackCount) 个）"
+    }
+
+    private func firstStringValue(for keys: [String], in node: Any) -> String? {
+        let normalizedKeys = Set(keys.map { $0.lowercased() })
+
+        if let dict = node as? [String: Any] {
+            for (rawKey, value) in dict {
+                let loweredKey = rawKey.lowercased()
+                if normalizedKeys.contains(loweredKey),
+                   let text = value as? String,
+                   !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return text
+                }
+            }
+            for value in dict.values {
+                if let found = firstStringValue(for: keys, in: value) {
+                    return found
+                }
+            }
+            return nil
+        }
+
+        if let array = node as? [Any] {
+            for item in array {
+                if let found = firstStringValue(for: keys, in: item) {
+                    return found
+                }
+            }
+            return nil
+        }
+
+        return nil
+    }
+
+    private func firstNumberValue(for keys: [String], in node: Any) -> Double? {
+        let normalizedKeys = Set(keys.map { $0.lowercased() })
+
+        if let dict = node as? [String: Any] {
+            for (rawKey, value) in dict where normalizedKeys.contains(rawKey.lowercased()) {
+                if let number = value as? NSNumber {
+                    return number.doubleValue
+                }
+                if let string = value as? String, let double = Double(string) {
+                    return double
+                }
+            }
+            for value in dict.values {
+                if let found = firstNumberValue(for: keys, in: value) {
+                    return found
+                }
+            }
+            return nil
+        }
+
+        if let array = node as? [Any] {
+            for item in array {
+                if let found = firstNumberValue(for: keys, in: item) {
+                    return found
+                }
+            }
+        }
+
+        return nil
+    }
+
+    private func parseJSONObjectFromSSELine(_ line: String) -> [String: Any]? {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return nil }
+
+        let payload: String
+        if trimmed.hasPrefix("data:") {
+            payload = String(trimmed.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines)
+        } else if trimmed.hasPrefix("event:") || trimmed.hasPrefix(":") {
+            return nil
+        } else {
+            payload = trimmed
+        }
+
+        if payload == "[DONE]" { return nil }
+
+        guard let data = payload.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return object
+    }
+
+    private func extractWebURLs(from text: String) -> [String] {
+        guard !text.isEmpty,
+              let regex = try? NSRegularExpression(pattern: #"https?://[^\s\"<>)\]]+"#) else {
+            return []
+        }
+
+        let nsRange = NSRange(text.startIndex..<text.endIndex, in: text)
+        let matches = regex.matches(in: text, range: nsRange)
+        guard !matches.isEmpty else { return [] }
+
+        var urls: [String] = []
+        urls.reserveCapacity(matches.count)
+        for match in matches {
+            guard let range = Range(match.range, in: text) else { continue }
+            urls.append(String(text[range]))
+        }
+        return urls
     }
 
     private func sendEmbeddings(
@@ -868,6 +1804,87 @@ final class ChatService {
         return result
     }
 
+    private func deduplicateVideos(_ attachments: [ChatVideoAttachment]) -> [ChatVideoAttachment] {
+        var seen = Set<String>()
+        var result: [ChatVideoAttachment] = []
+        for item in attachments {
+            let key = item.requestURLString
+            if key.isEmpty || seen.contains(key) { continue }
+            seen.insert(key)
+            result.append(item)
+        }
+        return result
+    }
+
+    private func mergeTextWithCitationURLs(_ text: String, citationURLs: [String]) -> String {
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if citationURLs.isEmpty {
+            return trimmedText
+        }
+
+        var orderedURLs: [String] = []
+        var seen = Set<String>()
+        for raw in citationURLs {
+            let normalized = normalizeCitationURL(raw)
+            guard !normalized.isEmpty else { continue }
+            if seen.insert(normalized).inserted {
+                orderedURLs.append(normalized)
+            }
+        }
+        if orderedURLs.isEmpty {
+            return trimmedText
+        }
+
+        let existingLower = trimmedText.lowercased()
+        let freshURLs = orderedURLs.filter { !existingLower.contains($0.lowercased()) }
+        if freshURLs.isEmpty {
+            return trimmedText
+        }
+
+        let sourceLines = freshURLs.prefix(3).map { url in
+            "- [\(citationLabel(for: url))](\(url))"
+        }
+        let sourceBlock = "来源：\n" + sourceLines.joined(separator: "\n")
+
+        if trimmedText.isEmpty {
+            return sourceBlock
+        }
+        return trimmedText + "\n\n" + sourceBlock
+    }
+
+    private func normalizeCitationURL(_ raw: String) -> String {
+        var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        value = value.trimmingCharacters(in: CharacterSet(charactersIn: "\"'<>[](){}.,;:"))
+        if value.hasPrefix("http://") || value.hasPrefix("https://") {
+            return value
+        }
+        return ""
+    }
+
+    private func citationLabel(for urlString: String) -> String {
+        guard let url = URL(string: urlString),
+              let host = url.host?.lowercased(),
+              !host.isEmpty else {
+            return "source"
+        }
+
+        var label = host
+        if label.hasPrefix("www.") {
+            label.removeFirst(4)
+        }
+
+        let pathComponents = url.pathComponents
+            .filter { $0 != "/" && !$0.isEmpty }
+        if let firstComponent = pathComponents.first,
+           firstComponent.count <= 18 {
+            label += "/\(firstComponent)"
+        }
+
+        return label
+            .replacingOccurrences(of: "[", with: "")
+            .replacingOccurrences(of: "]", with: "")
+    }
+
     private func withRetry<T>(maxRetries: Int = 2, operation: @escaping () async throws -> T) async throws -> T {
         var attempt = 0
 
@@ -912,6 +1929,139 @@ final class ChatService {
         }
 
         return false
+    }
+}
+
+private struct ThinkTagStreamFilter {
+    private static let openTag = "<think>"
+    private static let closeTag = "</think>"
+    private static let maxCarryCharacters = max(openTag.count, closeTag.count) - 1
+
+    private var insideThinkBlock = false
+    private var carry = ""
+
+    mutating func filter(_ chunk: String) -> String {
+        guard !chunk.isEmpty else { return "" }
+
+        let input = carry + chunk
+        carry.removeAll(keepingCapacity: true)
+        var output = ""
+        var cursor = input.startIndex
+
+        while cursor < input.endIndex {
+            if insideThinkBlock {
+                if let closeRange = input.range(
+                    of: Self.closeTag,
+                    options: [.caseInsensitive],
+                    range: cursor..<input.endIndex
+                ) {
+                    cursor = closeRange.upperBound
+                    insideThinkBlock = false
+                    continue
+                }
+
+                carry = trailingPartialPrefix(in: String(input[cursor...]), tag: Self.closeTag)
+                return output
+            }
+
+            let openRange = input.range(
+                of: Self.openTag,
+                options: [.caseInsensitive],
+                range: cursor..<input.endIndex
+            )
+            let closeRange = input.range(
+                of: Self.closeTag,
+                options: [.caseInsensitive],
+                range: cursor..<input.endIndex
+            )
+
+            guard openRange != nil || closeRange != nil else {
+                let tail = String(input[cursor...])
+                let partial = trailingPartialTagPrefix(in: tail)
+                if partial.isEmpty {
+                    output += tail
+                } else {
+                    output += String(tail.dropLast(partial.count))
+                    carry = partial
+                }
+                return output
+            }
+
+            let nextRange: Range<String.Index>
+            let nextIsOpenTag: Bool
+            switch (openRange, closeRange) {
+            case let (.some(open), .some(close)):
+                if open.lowerBound <= close.lowerBound {
+                    nextRange = open
+                    nextIsOpenTag = true
+                } else {
+                    nextRange = close
+                    nextIsOpenTag = false
+                }
+            case let (.some(open), .none):
+                nextRange = open
+                nextIsOpenTag = true
+            case let (.none, .some(close)):
+                nextRange = close
+                nextIsOpenTag = false
+            case (.none, .none):
+                return output
+            }
+
+            output += String(input[cursor..<nextRange.lowerBound])
+            if nextIsOpenTag {
+                insideThinkBlock = true
+            }
+            // If a stray close tag appears outside think block, drop it directly.
+            cursor = nextRange.upperBound
+        }
+
+        carry.removeAll(keepingCapacity: true)
+        return output
+    }
+
+    mutating func finalize() -> String {
+        guard !carry.isEmpty else {
+            if insideThinkBlock {
+                insideThinkBlock = false
+            }
+            return ""
+        }
+
+        defer {
+            carry.removeAll(keepingCapacity: false)
+            insideThinkBlock = false
+        }
+
+        if insideThinkBlock || looksLikeTagPrefix(carry) {
+            return ""
+        }
+        return carry
+    }
+
+    private func trailingPartialTagPrefix(in text: String) -> String {
+        let openPartial = trailingPartialPrefix(in: text, tag: Self.openTag)
+        let closePartial = trailingPartialPrefix(in: text, tag: Self.closeTag)
+        return openPartial.count >= closePartial.count ? openPartial : closePartial
+    }
+
+    private func trailingPartialPrefix(in text: String, tag: String) -> String {
+        guard !text.isEmpty else { return "" }
+        let maxCheck = min(Self.maxCarryCharacters, text.count)
+        guard maxCheck > 0 else { return "" }
+
+        for length in stride(from: maxCheck, through: 1, by: -1) {
+            let suffix = String(text.suffix(length))
+            if tag.lowercased().hasPrefix(suffix.lowercased()) {
+                return suffix
+            }
+        }
+        return ""
+    }
+
+    private func looksLikeTagPrefix(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        return Self.openTag.hasPrefix(lower) || Self.closeTag.hasPrefix(lower)
     }
 }
 

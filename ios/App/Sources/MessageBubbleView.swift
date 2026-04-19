@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import Photos
+import AVKit
 
 struct MessageBubbleView: View {
     let message: ChatMessage
@@ -18,8 +19,10 @@ struct MessageBubbleView: View {
     @State private var pythonRunTasks: [String: Task<Void, Never>] = [:]
     @State private var codeRunOutputs: [String: String] = [:]
     @State private var codeRunErrors: [String: String] = [:]
+    @State private var isBuildingFrontendProject = false
     @State private var activeHTMLPreview: HTMLPreviewPayload?
     @State private var activeImagePreview: ImagePreviewPayload?
+    @State private var activeVideoPreview: VideoPreviewPayload?
     @State private var pendingPythonRun: PendingPythonRun?
     @State private var pythonStdinDraft = ""
     @State private var waitingDotPulse = false
@@ -41,7 +44,7 @@ struct MessageBubbleView: View {
             Text(saveFeedback ?? "")
         }
         .sheet(item: $activeHTMLPreview) { payload in
-            HTMLPreviewSheet(title: payload.title, html: payload.html)
+            HTMLPreviewSheet(title: payload.title, html: payload.html, baseURL: payload.baseURL)
         }
         .sheet(item: $activeImagePreview) { payload in
             ImagePreviewSheet(
@@ -49,6 +52,9 @@ struct MessageBubbleView: View {
                 apiKey: apiKey,
                 apiBaseURL: apiBaseURL
             )
+        }
+        .sheet(item: $activeVideoPreview) { payload in
+            VideoPreviewSheet(urlString: payload.urlString)
         }
         .sheet(item: $pendingPythonRun) { payload in
             pythonInputSheet(payload: payload)
@@ -147,6 +153,25 @@ struct MessageBubbleView: View {
                 }
             }
 
+            if canGenerateFrontendProject {
+                Menu {
+                    Button("生成到新项目", systemImage: "folder.badge.plus") {
+                        generateFrontendProject(mode: .createNewProject)
+                    }
+                    Button("覆盖更新 latest", systemImage: "arrow.triangle.2.circlepath") {
+                        generateFrontendProject(mode: .overwriteLatestProject)
+                    }
+                } label: {
+                    Image(systemName: "hammer")
+                        .font(.system(size: 17, weight: .regular))
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(MiniIconButtonStyle())
+                .foregroundStyle(.secondary)
+                .disabled(isBuildingFrontendProject)
+            }
+
             Menu {
                 Button("复制全部", systemImage: "doc.on.doc") {
                     UIPasteboard.general.string = message.copyableText
@@ -158,6 +183,15 @@ struct MessageBubbleView: View {
                         feedback(.light, "正在重试…")
                     }
                 }
+                if canGenerateFrontendProject {
+                    Divider()
+                    Button("生成到新项目", systemImage: "folder.badge.plus") {
+                        generateFrontendProject(mode: .createNewProject)
+                    }
+                    Button("覆盖更新 latest", systemImage: "arrow.triangle.2.circlepath") {
+                        generateFrontendProject(mode: .overwriteLatestProject)
+                    }
+                }
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 17, weight: .regular))
@@ -166,12 +200,19 @@ struct MessageBubbleView: View {
             }
             .buttonStyle(MiniIconButtonStyle())
             .foregroundStyle(.secondary)
+            .disabled(isBuildingFrontendProject)
 
             if let actionFeedback {
                 Text(actionFeedback)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
                     .transition(.opacity.combined(with: .move(edge: .trailing)))
+            }
+
+            if isBuildingFrontendProject {
+                Text("生成中…")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -261,6 +302,8 @@ struct MessageBubbleView: View {
     private var content: some View {
         if message.isImageGenerationPlaceholder && message.imageAttachments.isEmpty {
             imageGenerationProgressCard
+        } else if message.isVideoGenerationPlaceholder && message.videoAttachments.isEmpty {
+            videoGenerationProgressContainer(streamingTextAnimated: false)
         } else if message.isStreaming {
             streamingContent
         } else {
@@ -288,14 +331,19 @@ struct MessageBubbleView: View {
         let displayText = normalizedStreamingText(message.content)
         if message.isImageGenerationPlaceholder && message.imageAttachments.isEmpty {
             imageGenerationProgressCard
+        } else if message.isVideoGenerationPlaceholder && message.videoAttachments.isEmpty {
+            videoGenerationProgressContainer(streamingTextAnimated: true)
         } else {
             let segments = parsedStreamingSegments(for: displayText)
 
             if segments.isEmpty {
-                if !message.imageAttachments.isEmpty {
+                if !message.imageAttachments.isEmpty || !message.videoAttachments.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
                         ForEach(message.imageAttachments) { attachment in
                             messageImage(attachment)
+                        }
+                        ForEach(message.videoAttachments) { attachment in
+                            messageVideo(attachment)
                         }
                     }
                 } else {
@@ -340,7 +388,9 @@ struct MessageBubbleView: View {
             createdAt: message.createdAt,
             isStreaming: true,
             isImageGenerationPlaceholder: message.isImageGenerationPlaceholder,
+            isVideoGenerationPlaceholder: message.isVideoGenerationPlaceholder,
             imageAttachments: message.imageAttachments,
+            videoAttachments: message.videoAttachments,
             fileAttachments: message.fileAttachments
         )
         return MessageContentParser.parse(streamingMessage)
@@ -360,6 +410,42 @@ struct MessageBubbleView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityLabel("生图中")
+    }
+
+    private var videoGenerationProgressCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            TimelineView(.animation(minimumInterval: 0.12, paused: false)) { timeline in
+                ImageGenerationPlaceholderPattern(phase: timeline.date.timeIntervalSinceReferenceDate)
+            }
+            .frame(width: 300, height: 180, alignment: .center)
+            .overlay {
+                VStack(spacing: 10) {
+                    Image(systemName: "film")
+                        .font(.system(size: 24, weight: .medium))
+                        .foregroundStyle(Color.white.opacity(0.9))
+                    Text("视频生成中…")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Color.white.opacity(0.95))
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.black.opacity(colorScheme == .dark ? 0.14 : 0.08), lineWidth: 1)
+            )
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityLabel("生视频中")
+    }
+
+    private func videoGenerationProgressContainer(streamingTextAnimated: Bool) -> some View {
+        let status = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        VStack(alignment: .leading, spacing: 10) {
+            videoGenerationProgressCard
+            if !status.isEmpty {
+                selectableTextContent(status, streamingTextAnimated: streamingTextAnimated)
+            }
+        }
     }
 
     private var fallbackPlainText: String? {
@@ -386,6 +472,8 @@ struct MessageBubbleView: View {
             markdownTableCard(headers: headers, rows: rows)
         case .image(let attachment):
             messageImage(attachment)
+        case .video(let attachment):
+            messageVideo(attachment)
         case .divider:
             sectionDivider
         }
@@ -404,6 +492,8 @@ struct MessageBubbleView: View {
             markdownTableCard(headers: headers, rows: rows)
         case .image(let attachment):
             messageImage(attachment)
+        case .video(let attachment):
+            messageVideo(attachment)
         case .divider:
             sectionDivider
         }
@@ -530,6 +620,13 @@ struct MessageBubbleView: View {
                     .buttonStyle(.borderedProminent)
                     .tint(Color(red: 0.06, green: 0.36, blue: 0.86))
                     .foregroundStyle(.white)
+
+                    Button("生成项目") {
+                        generateFrontendProject(mode: .createNewProject)
+                    }
+                    .font(.caption2)
+                    .buttonStyle(.bordered)
+                    .disabled(isBuildingFrontendProject)
                 }
                 Button(isCopied ? "已复制" : "复制代码") {
                     UIPasteboard.general.string = content
@@ -761,6 +858,41 @@ struct MessageBubbleView: View {
         }
     }
 
+    private var canGenerateFrontendProject: Bool {
+        message.role == .assistant && FrontendProjectBuilder.canGenerateProject(from: message)
+    }
+
+    private func generateFrontendProject(mode: FrontendProjectBuilder.BuildMode) {
+        guard canGenerateFrontendProject else {
+            saveFeedback = "当前消息没有可识别的前端代码。"
+            return
+        }
+        guard !isBuildingFrontendProject else { return }
+        isBuildingFrontendProject = true
+        defer { isBuildingFrontendProject = false }
+
+        do {
+            let result = try FrontendProjectBuilder.buildProject(from: message, mode: mode)
+            let fileCount = result.writtenRelativePaths.count
+            let title = "网页预览 · \(result.entryFileURL.lastPathComponent)"
+            activeHTMLPreview = HTMLPreviewPayload(
+                title: title,
+                html: result.entryHTML,
+                baseURL: result.projectDirectoryURL
+            )
+
+            switch mode {
+            case .createNewProject:
+                feedback(.success, "已生成项目（\(fileCount) 文件）")
+            case .overwriteLatestProject:
+                feedback(.success, "已覆盖更新（\(fileCount) 文件）")
+            }
+        } catch {
+            let text = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            saveFeedback = text
+        }
+    }
+
     private func supportsHTMLPreview(language: String?, title: String, content: String) -> Bool {
         let normalizedLanguage = (language ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if ["html", "htm", "xhtml", "text/html"].contains(normalizedLanguage) {
@@ -785,7 +917,7 @@ struct MessageBubbleView: View {
             feedback(.light, "HTML 代码为空")
             return
         }
-        activeHTMLPreview = HTMLPreviewPayload(title: title, html: trimmed)
+        activeHTMLPreview = HTMLPreviewPayload(title: title, html: trimmed, baseURL: nil)
     }
 
     @ViewBuilder
@@ -822,6 +954,51 @@ struct MessageBubbleView: View {
     }
 
     @ViewBuilder
+    private func messageVideo(_ attachment: ChatVideoAttachment) -> some View {
+        let revealID = attachment.requestURLString.isEmpty
+            ? attachment.id.uuidString
+            : attachment.requestURLString
+
+        if let normalizedURL = normalizedRemoteURLString(attachment.requestURLString) {
+            GeneratedImageRevealCard(revealID: revealID) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color.black.opacity(0.86),
+                                    Color.black.opacity(0.68)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+
+                    VStack(spacing: 8) {
+                        Image(systemName: "play.rectangle.fill")
+                            .font(.system(size: 34, weight: .medium))
+                            .foregroundStyle(Color.white.opacity(0.92))
+
+                        Text("点击预览视频")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(Color.white.opacity(0.95))
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 12)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+                .frame(maxWidth: 300, maxHeight: 170, alignment: .leading)
+                .onTapGesture {
+                    activeVideoPreview = VideoPreviewPayload(urlString: normalizedURL)
+                }
+                .contextMenu {
+                    videoContextActions(for: attachment, normalizedURL: normalizedURL)
+                }
+        }
+    }
+
+    @ViewBuilder
     private func imageContextActions(for attachment: ChatImageAttachment) -> some View {
         if !attachment.requestURLString.isEmpty {
             Button("复制图片链接") {
@@ -830,6 +1007,20 @@ struct MessageBubbleView: View {
         }
         Button("保存到相册") {
             saveImageAttachment(attachment)
+        }
+    }
+
+    @ViewBuilder
+    private func videoContextActions(for attachment: ChatVideoAttachment, normalizedURL: String) -> some View {
+        if !attachment.requestURLString.isEmpty {
+            Button("复制视频链接") {
+                UIPasteboard.general.string = attachment.requestURLString
+            }
+        }
+        Button("打开视频") {
+            if let url = URL(string: normalizedURL) {
+                UIApplication.shared.open(url)
+            }
         }
     }
 
@@ -1136,11 +1327,17 @@ private struct HTMLPreviewPayload: Identifiable {
     let id = UUID()
     let title: String
     let html: String
+    let baseURL: URL?
 }
 
 private struct ImagePreviewPayload: Identifiable {
     let id = UUID()
     let source: ImagePreviewSheet.Source
+}
+
+private struct VideoPreviewPayload: Identifiable {
+    let id = UUID()
+    let urlString: String
 }
 
 private struct PendingPythonRun: Identifiable {
@@ -1158,6 +1355,45 @@ private enum AssistantReaction {
 private enum ActionFeedbackKind {
     case success
     case light
+}
+
+private struct VideoPreviewSheet: View {
+    let urlString: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var player = AVPlayer()
+
+    var body: some View {
+        NavigationStack {
+            VideoPlayer(player: player)
+                .ignoresSafeArea(edges: .bottom)
+                .background(Color.black.ignoresSafeArea())
+                .onAppear {
+                    guard let url = URL(string: urlString) else { return }
+                    let item = AVPlayerItem(url: url)
+                    player.replaceCurrentItem(with: item)
+                }
+                .onDisappear {
+                    player.pause()
+                    player.replaceCurrentItem(with: nil)
+                }
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("关闭") {
+                            dismiss()
+                        }
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("打开链接") {
+                            if let url = URL(string: urlString) {
+                                UIApplication.shared.open(url)
+                            }
+                        }
+                    }
+                }
+                .navigationTitle("视频预览")
+                .navigationBarTitleDisplayMode(.inline)
+        }
+    }
 }
 
 private struct MiniIconButtonStyle: ButtonStyle {

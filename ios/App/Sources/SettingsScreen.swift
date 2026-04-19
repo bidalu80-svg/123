@@ -98,6 +98,12 @@ struct SettingsScreen: View {
 
             Section("请求选项") {
                 Toggle("启用流式输出", isOn: $viewModel.config.streamEnabled)
+                Toggle("前端自动生成模式", isOn: $viewModel.config.frontendAutoBuildEnabled)
+                Text(viewModel.config.frontendAutoBuildEnabled
+                    ? "开启后会注入前端生成提示词，并在助手回复完成后自动落盘到 latest 并弹出预览。"
+                    : "关闭后仅保留普通聊天，不自动生成本地前端项目。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
                 Toggle("启用消息音效（发送/回复完成）", isOn: $viewModel.config.soundEffectsEnabled)
                 Toggle("开启记忆模式", isOn: $viewModel.config.memoryModeEnabled)
 
@@ -199,6 +205,7 @@ struct SettingsScreen: View {
                 statusRow("当前接口", value: viewModel.config.endpointMode.title)
                 statusRow("当前模型", value: viewModel.config.model)
                 statusRow("流式模式", value: viewModel.config.streamEnabled ? "开启" : "关闭")
+                statusRow("前端自动生成", value: viewModel.config.frontendAutoBuildEnabled ? "开启" : "关闭")
                 statusRow("记忆模式", value: viewModel.config.memoryModeEnabled ? "开启" : "关闭")
             }
         }

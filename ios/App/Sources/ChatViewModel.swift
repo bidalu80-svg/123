@@ -218,6 +218,11 @@ final class ChatViewModel: ObservableObject {
     }
 
     func sendCurrentMessage() async {
+        if (config.endpointMode == .chatCompletions || config.endpointMode == .imageGenerations),
+           Self.isLikelyVideoGenerationModel(config.model) {
+            config.endpointMode = .videoGenerations
+        }
+
         let text = draftMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         let images = draftImageAttachments
         let file = draftFileAttachment
@@ -265,7 +270,8 @@ final class ChatViewModel: ObservableObject {
             role: .assistant,
             content: "",
             isStreaming: isStreamingPlaceholderEnabled(for: config.endpointMode),
-            isImageGenerationPlaceholder: config.endpointMode == .imageGenerations
+            isImageGenerationPlaceholder: config.endpointMode == .imageGenerations,
+            isVideoGenerationPlaceholder: config.endpointMode == .videoGenerations
         )
 
         var historyBeforeSend: [ChatMessage] = []
@@ -375,7 +381,8 @@ final class ChatViewModel: ObservableObject {
             role: .assistant,
             content: "",
             isStreaming: isStreamingPlaceholderEnabled(for: config.endpointMode),
-            isImageGenerationPlaceholder: config.endpointMode == .imageGenerations
+            isImageGenerationPlaceholder: config.endpointMode == .imageGenerations,
+            isVideoGenerationPlaceholder: config.endpointMode == .videoGenerations
         )
         appendMessageToTargetSession(placeholder, target: targetContext)
         persistSessions()
@@ -607,6 +614,10 @@ final class ChatViewModel: ObservableObject {
         let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         config.model = trimmed
+        if (config.endpointMode == .chatCompletions || config.endpointMode == .imageGenerations),
+           Self.isLikelyVideoGenerationModel(trimmed) {
+            config.endpointMode = .videoGenerations
+        }
         selectedModelFromList = trimmed
     }
 
@@ -688,8 +699,13 @@ final class ChatViewModel: ObservableObject {
         switch endpointMode {
         case .chatCompletions:
             return config.streamEnabled
+        case .responses:
+            return true
         case .imageGenerations:
             // Keep the placeholder in streaming state so users can see image-generation progress.
+            return true
+        case .videoGenerations:
+            // Video generation is usually asynchronous, keep placeholder in streaming state for progress text.
             return true
         case .audioTranscriptions, .embeddings, .models:
             return false
@@ -870,8 +886,12 @@ final class ChatViewModel: ObservableObject {
             privateMessages[msgIndex].imageAttachments = deduplicateImages(
                 privateMessages[msgIndex].imageAttachments + reply.imageAttachments
             )
+            privateMessages[msgIndex].videoAttachments = deduplicateVideos(
+                privateMessages[msgIndex].videoAttachments + reply.videoAttachments
+            )
             privateMessages[msgIndex].isStreaming = false
             privateMessages[msgIndex].isImageGenerationPlaceholder = false
+            privateMessages[msgIndex].isVideoGenerationPlaceholder = false
             syncVisibleMessagesIfNeeded(for: target)
             signalStreamScroll(force: true)
             if config.soundEffectsEnabled {
@@ -894,8 +914,12 @@ final class ChatViewModel: ObservableObject {
         sessions[index].messages[msgIndex].imageAttachments = deduplicateImages(
             sessions[index].messages[msgIndex].imageAttachments + reply.imageAttachments
         )
+        sessions[index].messages[msgIndex].videoAttachments = deduplicateVideos(
+            sessions[index].messages[msgIndex].videoAttachments + reply.videoAttachments
+        )
         sessions[index].messages[msgIndex].isStreaming = false
         sessions[index].messages[msgIndex].isImageGenerationPlaceholder = false
+        sessions[index].messages[msgIndex].isVideoGenerationPlaceholder = false
         sessions[index].updatedAt = Date()
         sessions[index].title = buildSessionTitle(from: sessions[index])
         syncVisibleMessagesIfNeeded(for: target)
@@ -910,8 +934,10 @@ final class ChatViewModel: ObservableObject {
             guard let msgIndex = privateMessages.firstIndex(where: { $0.id == id }) else { return }
             privateMessages[msgIndex].isStreaming = false
             privateMessages[msgIndex].isImageGenerationPlaceholder = false
+            privateMessages[msgIndex].isVideoGenerationPlaceholder = false
             if privateMessages[msgIndex].content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-                privateMessages[msgIndex].imageAttachments.isEmpty {
+                privateMessages[msgIndex].imageAttachments.isEmpty &&
+                privateMessages[msgIndex].videoAttachments.isEmpty {
                 privateMessages.remove(at: msgIndex)
             }
             syncVisibleMessagesIfNeeded(for: target)
@@ -926,8 +952,10 @@ final class ChatViewModel: ObservableObject {
 
         sessions[index].messages[msgIndex].isStreaming = false
         sessions[index].messages[msgIndex].isImageGenerationPlaceholder = false
+        sessions[index].messages[msgIndex].isVideoGenerationPlaceholder = false
         if sessions[index].messages[msgIndex].content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-            sessions[index].messages[msgIndex].imageAttachments.isEmpty {
+            sessions[index].messages[msgIndex].imageAttachments.isEmpty &&
+            sessions[index].messages[msgIndex].videoAttachments.isEmpty {
             sessions[index].messages.remove(at: msgIndex)
         }
 
@@ -944,6 +972,7 @@ final class ChatViewModel: ObservableObject {
             guard let msgIndex = privateMessages.firstIndex(where: { $0.id == id }) else { return }
             privateMessages[msgIndex].isStreaming = false
             privateMessages[msgIndex].isImageGenerationPlaceholder = false
+            privateMessages[msgIndex].isVideoGenerationPlaceholder = false
             syncVisibleMessagesIfNeeded(for: target)
             statusMessage = "连接中断，已保留已生成内容"
             chatState = .error(error.localizedDescription)
@@ -956,6 +985,7 @@ final class ChatViewModel: ObservableObject {
 
         sessions[index].messages[msgIndex].isStreaming = false
         sessions[index].messages[msgIndex].isImageGenerationPlaceholder = false
+        sessions[index].messages[msgIndex].isVideoGenerationPlaceholder = false
         sessions[index].updatedAt = Date()
         sessions[index].title = buildSessionTitle(from: sessions[index])
         syncVisibleMessagesIfNeeded(for: target)
@@ -992,11 +1022,11 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func finalizedAssistantContent(existingContent: String, fallbackReplyText: String) -> String {
-        let existing = existingContent.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !existing.isEmpty {
-            return existingContent
+        let fallback = fallbackReplyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !fallback.isEmpty {
+            return fallbackReplyText
         }
-        return fallbackReplyText
+        return existingContent
     }
 
     private func removeMessage(id: UUID, target: StreamTargetContext) {
@@ -1082,6 +1112,9 @@ final class ChatViewModel: ObservableObject {
             if !firstUser.imageAttachments.isEmpty {
                 return "图片会话"
             }
+            if !firstUser.videoAttachments.isEmpty {
+                return "视频会话"
+            }
         }
         return "新会话"
     }
@@ -1098,12 +1131,24 @@ final class ChatViewModel: ObservableObject {
         return result
     }
 
+    private func deduplicateVideos(_ videos: [ChatVideoAttachment]) -> [ChatVideoAttachment] {
+        var seen = Set<String>()
+        var result: [ChatVideoAttachment] = []
+        for video in videos {
+            let key = video.requestURLString
+            if key.isEmpty || seen.contains(key) { continue }
+            seen.insert(key)
+            result.append(video)
+        }
+        return result
+    }
+
     private func hasRenderableContent(for id: UUID, target: StreamTargetContext) -> Bool {
         if target.isPrivateMode {
             guard let msgIndex = privateMessages.firstIndex(where: { $0.id == id }) else { return false }
             let message = privateMessages[msgIndex]
             let text = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
-            return !text.isEmpty || !message.imageAttachments.isEmpty
+            return !text.isEmpty || !message.imageAttachments.isEmpty || !message.videoAttachments.isEmpty
         }
 
         guard let index = sessionIndex(for: target),
@@ -1111,7 +1156,7 @@ final class ChatViewModel: ObservableObject {
 
         let message = sessions[index].messages[msgIndex]
         let text = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !text.isEmpty || !message.imageAttachments.isEmpty
+        return !text.isEmpty || !message.imageAttachments.isEmpty || !message.videoAttachments.isEmpty
     }
 
     private func beginBackgroundSendTask() {
@@ -1139,7 +1184,9 @@ final class ChatViewModel: ObservableObject {
             model: input.model.trimmingCharacters(in: .whitespacesAndNewlines),
             endpointMode: input.endpointMode,
             chatCompletionsPath: ChatConfigStore.normalizeEndpointPath(input.chatCompletionsPath, fallback: ChatConfig.defaultChatCompletionsPath),
+            responsesPath: ChatConfigStore.normalizeEndpointPath(input.responsesPath, fallback: ChatConfig.defaultResponsesPath),
             imagesGenerationsPath: ChatConfigStore.normalizeEndpointPath(input.imagesGenerationsPath, fallback: ChatConfig.defaultImagesGenerationsPath),
+            videoGenerationsPath: ChatConfigStore.normalizeEndpointPath(input.videoGenerationsPath, fallback: ChatConfig.defaultVideoGenerationsPath),
             audioTranscriptionsPath: ChatConfigStore.normalizeEndpointPath(input.audioTranscriptionsPath, fallback: ChatConfig.defaultAudioTranscriptionsPath),
             embeddingsPath: ChatConfigStore.normalizeEndpointPath(input.embeddingsPath, fallback: ChatConfig.defaultEmbeddingsPath),
             modelsPath: ChatConfigStore.normalizeEndpointPath(input.modelsPath, fallback: ChatConfig.defaultModelsPath),
@@ -1148,6 +1195,7 @@ final class ChatViewModel: ObservableObject {
                 : input.imageGenerationSize.trimmingCharacters(in: .whitespacesAndNewlines),
             timeout: min(max(input.timeout, 5), 120),
             streamEnabled: input.streamEnabled,
+            frontendAutoBuildEnabled: input.frontendAutoBuildEnabled,
             themeMode: input.themeMode,
             codeThemeMode: input.codeThemeMode,
             realtimeContextEnabled: input.realtimeContextEnabled,
@@ -1183,5 +1231,16 @@ final class ChatViewModel: ObservableObject {
         }
         monitor.start(queue: pathMonitorQueue)
         pathMonitor = monitor
+    }
+
+    private static func isLikelyVideoGenerationModel(_ rawModel: String) -> Bool {
+        let model = rawModel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !model.isEmpty else { return false }
+        return model.contains("video")
+            || model.contains("text-to-video")
+            || model.contains("video-generation")
+            || model.contains("video-gen")
+            || model.hasSuffix("-vid")
+            || model.hasSuffix("_vid")
     }
 }

@@ -72,6 +72,37 @@ struct ChatImageAttachment: Identifiable, Codable, Equatable {
     }
 }
 
+struct ChatVideoAttachment: Identifiable, Codable, Equatable {
+    let id: UUID
+    var remoteURL: String
+    var mimeType: String
+    var posterURL: String?
+
+    init(
+        id: UUID = UUID(),
+        remoteURL: String,
+        mimeType: String = "video/mp4",
+        posterURL: String? = nil
+    ) {
+        self.id = id
+        self.remoteURL = remoteURL
+        self.mimeType = mimeType
+        self.posterURL = posterURL
+    }
+
+    var requestURLString: String {
+        remoteURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var displayURLString: String? {
+        let cleaned = requestURLString
+        if cleaned.hasPrefix("http://") || cleaned.hasPrefix("https://") {
+            return cleaned
+        }
+        return nil
+    }
+}
+
 struct ChatFileAttachment: Identifiable, Codable, Equatable {
     let id: UUID
     var fileName: String
@@ -234,7 +265,9 @@ struct ChatMessage: Identifiable, Codable, Equatable {
     let createdAt: Date
     var isStreaming: Bool
     var isImageGenerationPlaceholder: Bool
+    var isVideoGenerationPlaceholder: Bool
     var imageAttachments: [ChatImageAttachment]
+    var videoAttachments: [ChatVideoAttachment]
     var fileAttachments: [ChatFileAttachment]
 
     init(
@@ -244,7 +277,9 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         createdAt: Date = Date(),
         isStreaming: Bool = false,
         isImageGenerationPlaceholder: Bool = false,
+        isVideoGenerationPlaceholder: Bool = false,
         imageAttachments: [ChatImageAttachment] = [],
+        videoAttachments: [ChatVideoAttachment] = [],
         fileAttachments: [ChatFileAttachment] = []
     ) {
         self.id = id
@@ -253,7 +288,9 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         self.createdAt = createdAt
         self.isStreaming = isStreaming
         self.isImageGenerationPlaceholder = isImageGenerationPlaceholder
+        self.isVideoGenerationPlaceholder = isVideoGenerationPlaceholder
         self.imageAttachments = imageAttachments
+        self.videoAttachments = videoAttachments
         self.fileAttachments = fileAttachments
     }
 
@@ -265,6 +302,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         isStreaming = try container.decodeIfPresent(Bool.self, forKey: .isStreaming) ?? false
         isImageGenerationPlaceholder = try container.decodeIfPresent(Bool.self, forKey: .isImageGenerationPlaceholder) ?? false
+        isVideoGenerationPlaceholder = try container.decodeIfPresent(Bool.self, forKey: .isVideoGenerationPlaceholder) ?? false
 
         if let images = try container.decodeIfPresent([ChatImageAttachment].self, forKey: .imageAttachments) {
             imageAttachments = images
@@ -272,6 +310,14 @@ struct ChatMessage: Identifiable, Codable, Equatable {
             imageAttachments = legacy
         } else {
             imageAttachments = []
+        }
+
+        if let videos = try container.decodeIfPresent([ChatVideoAttachment].self, forKey: .videoAttachments) {
+            videoAttachments = videos
+        } else if let legacy = try container.decodeIfPresent([ChatVideoAttachment].self, forKey: .videos) {
+            videoAttachments = legacy
+        } else {
+            videoAttachments = []
         }
 
         fileAttachments = try container.decodeIfPresent([ChatFileAttachment].self, forKey: .fileAttachments) ?? []
@@ -285,7 +331,9 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(isStreaming, forKey: .isStreaming)
         try container.encode(isImageGenerationPlaceholder, forKey: .isImageGenerationPlaceholder)
+        try container.encode(isVideoGenerationPlaceholder, forKey: .isVideoGenerationPlaceholder)
         try container.encode(imageAttachments, forKey: .imageAttachments)
+        try container.encode(videoAttachments, forKey: .videoAttachments)
         try container.encode(fileAttachments, forKey: .fileAttachments)
     }
 
@@ -296,9 +344,12 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         case createdAt
         case isStreaming
         case isImageGenerationPlaceholder
+        case isVideoGenerationPlaceholder
         case imageAttachments
+        case videoAttachments
         case fileAttachments
         case attachments
+        case videos
     }
 
     var apiPayload: [String: Any] {
@@ -320,6 +371,11 @@ struct ChatMessage: Identifiable, Codable, Equatable {
             parts.append(imageURLs.joined(separator: "\n"))
         }
 
+        let videoURLs = videoAttachments.map(\.requestURLString).filter { !$0.isEmpty }
+        if !videoURLs.isEmpty {
+            parts.append(videoURLs.joined(separator: "\n"))
+        }
+
         if !fileAttachments.isEmpty {
             let fileBlocks = fileAttachments.map { $0.promptBlock }
             parts.append(fileBlocks.joined(separator: "\n\n"))
@@ -329,7 +385,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
     }
 
     private var apiContent: Any {
-        if imageAttachments.isEmpty && fileAttachments.isEmpty {
+        if imageAttachments.isEmpty && videoAttachments.isEmpty && fileAttachments.isEmpty {
             return content
         }
 
@@ -355,6 +411,13 @@ struct ChatMessage: Identifiable, Codable, Equatable {
                 "image_url": [
                     "url": attachment.requestURLString
                 ]
+            ])
+        }
+
+        for attachment in videoAttachments {
+            segments.append([
+                "type": "text",
+                "text": "[VIDEO_URL] \(attachment.requestURLString)"
             ])
         }
 

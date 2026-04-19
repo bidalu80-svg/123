@@ -41,6 +41,8 @@ struct ChatScreen: View {
     @StateObject private var speechToText = SpeechToTextService(localeIdentifier: "zh-CN")
     @State private var speechDraftPrefix = ""
     @State private var showInitialConfigSheet = false
+    @State private var autoFrontendPreview: AutoFrontendPreviewPayload?
+    @State private var lastAutoBuiltAssistantMessageID: UUID?
     @State private var headerLeadingWidth: CGFloat = 36
     @State private var headerTrailingWidth: CGFloat = 108
     @State private var transcriptMetrics = ChatTranscriptMetrics()
@@ -94,8 +96,29 @@ struct ChatScreen: View {
         .onAppear {
             refreshStarterPromptsIfNeeded()
             ensureRecentPhotoAssets()
+            seedAutoFrontendBuildCursor()
             if !hasCompletedInitialConfig {
                 showInitialConfigSheet = true
+            }
+        }
+        .onChange(of: viewModel.messages) { oldMessages, newMessages in
+            runAutoFrontendBuildIfNeeded(previousMessages: oldMessages, newMessages: newMessages)
+        }
+        .onChange(of: viewModel.currentSessionID) { _, _ in
+            DispatchQueue.main.async {
+                seedAutoFrontendBuildCursor()
+            }
+        }
+        .onChange(of: viewModel.isPrivateMode) { _, _ in
+            DispatchQueue.main.async {
+                seedAutoFrontendBuildCursor()
+            }
+        }
+        .onChange(of: viewModel.config.frontendAutoBuildEnabled) { _, enabled in
+            if enabled {
+                seedAutoFrontendBuildCursor()
+            } else {
+                lastAutoBuiltAssistantMessageID = nil
             }
         }
         .onChange(of: selectedPhotoItems) { _, newItems in
@@ -180,6 +203,9 @@ struct ChatScreen: View {
             }
             .environmentObject(viewModel)
             .interactiveDismissDisabled(true)
+        }
+        .sheet(item: $autoFrontendPreview) { payload in
+            HTMLPreviewSheet(title: payload.title, html: payload.html, baseURL: payload.baseURL)
         }
     }
 
@@ -493,7 +519,9 @@ struct ChatScreen: View {
                     apiKey: viewModel.config.apiKey,
                     apiBaseURL: viewModel.config.normalizedBaseURL,
                     showsAssistantActionBar: message.role == .assistant && !message.isStreaming,
-                    onRegenerate: (isLatestAssistant && viewModel.config.endpointMode == .chatCompletions && !viewModel.isPrivateMode) ? {
+                    onRegenerate: (isLatestAssistant
+                        && (viewModel.config.endpointMode == .chatCompletions || viewModel.config.endpointMode == .responses)
+                        && !viewModel.isPrivateMode) ? {
                         Task { await viewModel.regenerateLastAssistantReply() }
                     } : nil
                 )
@@ -653,6 +681,51 @@ struct ChatScreen: View {
 
     private var canTapPrimaryComposerButton: Bool {
         viewModel.isSending || shouldUseVoicePrimaryAction || viewModel.canSend
+    }
+
+    private func seedAutoFrontendBuildCursor() {
+        lastAutoBuiltAssistantMessageID = viewModel.messages
+            .last(where: { $0.role == .assistant })?
+            .id
+    }
+
+    private func runAutoFrontendBuildIfNeeded(
+        previousMessages: [ChatMessage],
+        newMessages: [ChatMessage]
+    ) {
+        guard viewModel.config.frontendAutoBuildEnabled else { return }
+        guard let latestAssistant = newMessages.last(where: { $0.role == .assistant }) else { return }
+        guard !latestAssistant.isStreaming else { return }
+        guard latestAssistant.id != lastAutoBuiltAssistantMessageID else { return }
+
+        let previousVersion = previousMessages.first(where: { $0.id == latestAssistant.id })
+        if let previousVersion, previousVersion.isStreaming == false {
+            lastAutoBuiltAssistantMessageID = latestAssistant.id
+            return
+        }
+
+        lastAutoBuiltAssistantMessageID = latestAssistant.id
+
+        guard FrontendProjectBuilder.canGenerateProject(from: latestAssistant) else {
+            return
+        }
+
+        do {
+            let result = try FrontendProjectBuilder.buildProject(
+                from: latestAssistant,
+                mode: .overwriteLatestProject
+            )
+            autoFrontendPreview = AutoFrontendPreviewPayload(
+                title: "自动预览 · \(result.entryFileURL.lastPathComponent)",
+                html: result.entryHTML,
+                baseURL: result.projectDirectoryURL
+            )
+            viewModel.statusMessage = "前端项目已自动更新（\(result.writtenRelativePaths.count) 文件）"
+        } catch {
+            // Auto mode should stay non-blocking; report status but avoid interrupting chat.
+            let reason = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            viewModel.statusMessage = "前端自动落盘失败：\(reason)"
+        }
     }
 
 
@@ -952,7 +1025,7 @@ struct ChatScreen: View {
 
     private var activeStreamingLeadSignature: String? {
         activeStreamingLeadUserMessage.map {
-            "\($0.id.uuidString)|\($0.content.count)|\($0.imageAttachments.count)|\($0.fileAttachments.count)"
+            "\($0.id.uuidString)|\($0.content.count)|\($0.imageAttachments.count)|\($0.videoAttachments.count)|\($0.fileAttachments.count)"
         }
     }
 
@@ -991,8 +1064,11 @@ struct ChatScreen: View {
     private var transcriptHistoryVersion: String {
         let ids = frozenRenderedMessages.map(\.id.uuidString).joined(separator: ",")
         let lengths = frozenRenderedMessages.map { String($0.content.count) }.joined(separator: ",")
+        let attachments = frozenRenderedMessages
+            .map { "\($0.imageAttachments.count)-\($0.videoAttachments.count)-\($0.fileAttachments.count)" }
+            .joined(separator: ",")
         let windowFlag = isRenderingWindowed ? "1" : "0"
-        return "\(windowFlag)|\(ids)|\(lengths)"
+        return "\(windowFlag)|\(ids)|\(lengths)|\(attachments)"
     }
 
     private var renderWindowNotice: some View {
@@ -1044,7 +1120,8 @@ struct ChatScreen: View {
             partial + min(file.textContent.count, maxRenderedFilePreviewChars)
         }
         let imageWeight = message.imageAttachments.count * 800
-        return textWeight + fileWeight + imageWeight + 200
+        let videoWeight = message.videoAttachments.count * 1_600
+        return textWeight + fileWeight + imageWeight + videoWeight + 200
     }
 
     private func modelVendorSubtitle(_ rawModel: String, apiURL: String) -> String {
@@ -1932,7 +2009,7 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             }
 
             let newStreamingSignature = streamingMessage.map {
-                "\($0.id.uuidString)|\($0.content.count)|\($0.imageAttachments.count)|\($0.fileAttachments.count)"
+                "\($0.id.uuidString)|\($0.content.count)|\($0.imageAttachments.count)|\($0.videoAttachments.count)|\($0.fileAttachments.count)"
             }
             if let streamingMessage {
                 pendingStreamingHideWorkItem?.cancel()
@@ -2076,6 +2153,13 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             )
         }
     }
+}
+
+private struct AutoFrontendPreviewPayload: Identifiable {
+    let id = UUID()
+    let title: String
+    let html: String
+    let baseURL: URL?
 }
 
 private struct ScrollsToTopConfigurator: UIViewRepresentable {

@@ -6,6 +6,7 @@ enum MessageSegment: Equatable {
     case code(language: String?, content: String)
     case table(headers: [String], rows: [[String]])
     case image(ChatImageAttachment)
+    case video(ChatVideoAttachment)
     case file(name: String, language: String?, content: String)
     case divider
 }
@@ -15,6 +16,7 @@ enum MessageContentParser {
         let parsedAt: Date
         let contentLength: Int
         let imageCount: Int
+        let videoCount: Int
         let fileCount: Int
         let segments: [MessageSegment]
     }
@@ -34,6 +36,7 @@ enum MessageContentParser {
            Date().timeIntervalSince(snapshot.parsedAt) < streamingParseDebounce,
            message.content.count >= snapshot.contentLength,
            message.imageAttachments.count == snapshot.imageCount,
+           message.videoAttachments.count == snapshot.videoCount,
            message.fileAttachments.count == snapshot.fileCount {
             return snapshot.segments
         }
@@ -45,6 +48,7 @@ enum MessageContentParser {
                     parsedAt: Date(),
                     contentLength: message.content.count,
                     imageCount: message.imageAttachments.count,
+                    videoCount: message.videoAttachments.count,
                     fileCount: message.fileAttachments.count,
                     segments: cached
                 )
@@ -56,6 +60,10 @@ enum MessageContentParser {
 
         for image in message.imageAttachments {
             segments.append(.image(image))
+        }
+
+        for video in message.videoAttachments {
+            segments.append(.video(video))
         }
 
         for file in message.fileAttachments {
@@ -76,6 +84,7 @@ enum MessageContentParser {
                 parsedAt: Date(),
                 contentLength: message.content.count,
                 imageCount: message.imageAttachments.count,
+                videoCount: message.videoAttachments.count,
                 fileCount: message.fileAttachments.count,
                 segments: sectioned
             )
@@ -763,6 +772,7 @@ enum MessageContentParser {
             String(prefixHash),
             String(suffixHash),
             String(message.imageAttachments.count),
+            String(message.videoAttachments.count),
             String(message.fileAttachments.count),
             message.isStreaming ? "1" : "0"
         ].joined(separator: "|")
