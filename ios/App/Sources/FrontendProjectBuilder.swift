@@ -49,6 +49,7 @@ enum FrontendProjectBuilder {
         "python", "py", "swift", "bash",
         "text", "plaintext", "plain", "code"
     ]
+    private static let latestEntryPointerFileName = ".iexa-latest-entry"
 
     static func canGenerateProject(from message: ChatMessage) -> Bool {
         if message.fileAttachments.contains(where: {
@@ -104,6 +105,11 @@ enum FrontendProjectBuilder {
 
     static func latestEntryFileURL() -> URL? {
         guard let latest = latestProjectURL() else { return nil }
+
+        if let pointed = pointedLatestEntryFileURL(in: latest) {
+            return pointed
+        }
+
         let fileManager = FileManager.default
         guard let enumerator = fileManager.enumerator(
             at: latest,
@@ -143,6 +149,24 @@ enum FrontendProjectBuilder {
         }
 
         return htmlCandidates.first?.url
+    }
+
+    private static func pointedLatestEntryFileURL(in latest: URL) -> URL? {
+        let pointerURL = latest.appendingPathComponent(latestEntryPointerFileName, isDirectory: false)
+        guard let raw = try? String(contentsOf: pointerURL, encoding: .utf8) else { return nil }
+        let trimmed = raw
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .components(separatedBy: "\n")
+            .first?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        guard let relativePath = sanitizeRelativePath(trimmed), isHTMLPath(relativePath) else {
+            return nil
+        }
+
+        let candidate = latest.appendingPathComponent(relativePath, isDirectory: false)
+        guard FileManager.default.fileExists(atPath: candidate.path) else { return nil }
+        return candidate
     }
 
     static func projectsRootPathDisplay() -> String {
@@ -230,6 +254,12 @@ enum FrontendProjectBuilder {
             throw BuildError.missingEntryFile
         }
 
+        persistLatestEntryPointerIfNeeded(
+            mode: mode,
+            projectDirectoryURL: projectDirectoryURL,
+            entryRelativePath: entryRelativePath
+        )
+
         return BuildResult(
             projectDirectoryURL: projectDirectoryURL,
             entryFileURL: projectDirectoryURL.appendingPathComponent(entryRelativePath, isDirectory: false),
@@ -237,6 +267,18 @@ enum FrontendProjectBuilder {
             writtenRelativePaths: orderedPaths,
             createdNewProject: mode == .createNewProject
         )
+    }
+
+    private static func persistLatestEntryPointerIfNeeded(
+        mode: BuildMode,
+        projectDirectoryURL: URL,
+        entryRelativePath: String
+    ) {
+        guard mode == .overwriteLatestProject else { return }
+        guard let normalized = sanitizeRelativePath(entryRelativePath), isHTMLPath(normalized) else { return }
+
+        let pointerURL = projectDirectoryURL.appendingPathComponent(latestEntryPointerFileName, isDirectory: false)
+        try? "\(normalized)\n".write(to: pointerURL, atomically: true, encoding: .utf8)
     }
 
     private static func extractWebFiles(from message: ChatMessage) -> [ParsedWebFile] {

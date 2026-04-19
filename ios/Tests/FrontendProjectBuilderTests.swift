@@ -76,4 +76,47 @@ final class FrontendProjectBuilderTests: XCTestCase {
         let selected = try XCTUnwrap(FrontendProjectBuilder.latestEntryFileURL())
         XCTAssertEqual(selected.lastPathComponent.lowercased(), "index.html")
     }
+
+    func testLatestEntryFileURLUsesPersistedEntryFromAutoBuild() throws {
+        try FrontendProjectBuilder.clearLatestProject()
+
+        let message = ChatMessage(
+            role: .assistant,
+            content: "",
+            fileAttachments: [
+                ChatFileAttachment(
+                    fileName: "web/index.html",
+                    mimeType: "text/html",
+                    textContent: """
+                    <!doctype html>
+                    <html>
+                    <head>
+                      <meta charset="utf-8">
+                      <meta name="viewport" content="width=device-width, initial-scale=1">
+                    </head>
+                    <body>
+                      <h1>web entry</h1>
+                    </body>
+                    </html>
+                    """
+                ),
+                ChatFileAttachment(
+                    fileName: "index.html",
+                    mimeType: "text/html",
+                    textContent: """
+                    <!doctype html>
+                    <html>
+                    <body></body>
+                    </html>
+                    """
+                )
+            ]
+        )
+
+        let result = try FrontendProjectBuilder.buildProject(from: message, mode: .overwriteLatestProject)
+        XCTAssertTrue(result.entryFileURL.path.lowercased().hasSuffix("web/index.html"))
+
+        let selected = try XCTUnwrap(FrontendProjectBuilder.latestEntryFileURL())
+        XCTAssertEqual(selected.standardizedFileURL, result.entryFileURL.standardizedFileURL)
+    }
 }
