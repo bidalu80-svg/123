@@ -372,6 +372,10 @@ enum ChatConfigStore {
 
     static func normalizeEndpointPath(_ raw: String, fallback: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lowered = trimmed.lowercased()
+        if lowered.hasPrefix("http://") || lowered.hasPrefix("https://") {
+            return trimmed
+        }
         let base = trimmed.isEmpty ? fallback : trimmed
         if base.hasPrefix("/") {
             return base
@@ -380,9 +384,13 @@ enum ChatConfigStore {
     }
 
     static func endpointURL(_ raw: String, path: String, fallback: String) -> String {
+        let normalizedPath = normalizeEndpointPath(path, fallback: fallback)
+        let loweredPath = normalizedPath.lowercased()
+        if loweredPath.hasPrefix("http://") || loweredPath.hasPrefix("https://") {
+            return normalizedPath
+        }
         let base = normalizedBaseURL(raw)
         guard !base.isEmpty else { return "" }
-        let normalizedPath = normalizeEndpointPath(path, fallback: fallback)
         return "\(base)\(normalizedPath)"
     }
 

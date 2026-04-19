@@ -48,6 +48,38 @@ struct SettingsScreen: View {
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
+                    Text("接口路径（可填相对路径，也可直接填完整 URL）")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    TextField("聊天路径，如 /v1/chat/completions", text: $viewModel.config.chatCompletionsPath)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+
+                    TextField("响应路径，如 /v1/responses", text: $viewModel.config.responsesPath)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+
+                    HStack(spacing: 10) {
+                        Button("默认 /v1") {
+                            applyEndpointPathPreset(includeV1: true)
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button("去掉 /v1") {
+                            applyEndpointPathPreset(includeV1: false)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    Text("当前模式完整 URL：\(activeEndpointPreviewURL)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .lineLimit(2)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
                     Text("API Key（用于鉴权访问接口）")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -306,6 +338,30 @@ struct SettingsScreen: View {
                     rootURL: payload.rootURL
                 )
             }
+        }
+    }
+
+    private var activeEndpointPreviewURL: String {
+        viewModel.config.activeEndpointURLString
+    }
+
+    private func applyEndpointPathPreset(includeV1: Bool) {
+        if includeV1 {
+            viewModel.config.chatCompletionsPath = ChatConfig.defaultChatCompletionsPath
+            viewModel.config.responsesPath = ChatConfig.defaultResponsesPath
+            viewModel.config.imagesGenerationsPath = ChatConfig.defaultImagesGenerationsPath
+            viewModel.config.videoGenerationsPath = ChatConfig.defaultVideoGenerationsPath
+            viewModel.config.audioTranscriptionsPath = ChatConfig.defaultAudioTranscriptionsPath
+            viewModel.config.embeddingsPath = ChatConfig.defaultEmbeddingsPath
+            viewModel.config.modelsPath = ChatConfig.defaultModelsPath
+        } else {
+            viewModel.config.chatCompletionsPath = "/chat/completions"
+            viewModel.config.responsesPath = "/responses"
+            viewModel.config.imagesGenerationsPath = "/images/generations"
+            viewModel.config.videoGenerationsPath = "/videos/generations"
+            viewModel.config.audioTranscriptionsPath = "/audio/transcriptions"
+            viewModel.config.embeddingsPath = "/embeddings"
+            viewModel.config.modelsPath = "/models"
         }
     }
 
