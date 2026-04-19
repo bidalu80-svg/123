@@ -537,8 +537,8 @@ struct MessageBubbleView: View {
             FrontendProgressStep(title: "生成 HTML / CSS / JS", state: .completed),
             FrontendProgressStep(title: "写入 latest 项目目录", state: .completed),
             FrontendProgressStep(
-                title: payload.hasEntry ? "准备整站预览" : "等待入口页生成",
-                state: payload.hasEntry ? .completed : .pending
+                title: payload.hasEntry ? "准备整站预览" : "自动选择入口页并预览",
+                state: .completed
             )
         ]
     }
