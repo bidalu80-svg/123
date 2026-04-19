@@ -57,6 +57,27 @@ final class FrontendProjectBuilderTests: XCTestCase {
         XCTAssertTrue(indexHTML.contains("script.js"))
     }
 
+    func testBuildProjectFromPHPBlockCreatesIndexPHPEntry() throws {
+        let message = ChatMessage(
+            role: .assistant,
+            content: """
+            ```php
+            <?php
+            $db = new PDO('sqlite:/persist/project/data/app.db');
+            echo "<!doctype html><html><body><h1>PHP OK</h1></body></html>";
+            ```
+            """
+        )
+
+        let result = try FrontendProjectBuilder.buildProject(from: message, mode: .createNewProject)
+
+        XCTAssertEqual(result.entryFileURL.lastPathComponent.lowercased(), "index.php")
+        XCTAssertTrue(result.writtenRelativePaths.contains("index.php"))
+
+        let entryText = try String(contentsOf: result.entryFileURL, encoding: .utf8)
+        XCTAssertTrue(entryText.contains("sqlite:"))
+    }
+
     func testLatestEntryFileURLPrefersIndexHTMLWhenPresent() throws {
         try FrontendProjectBuilder.clearLatestProject()
         let latest = try XCTUnwrap(FrontendProjectBuilder.latestProjectURL())
@@ -118,5 +139,19 @@ final class FrontendProjectBuilderTests: XCTestCase {
 
         let selected = try XCTUnwrap(FrontendProjectBuilder.latestEntryFileURL())
         XCTAssertEqual(selected.standardizedFileURL, result.entryFileURL.standardizedFileURL)
+    }
+
+    func testLatestEntryFileURLReturnsIndexPHPForPHPOnlyProject() throws {
+        try FrontendProjectBuilder.clearLatestProject()
+        let latest = try XCTUnwrap(FrontendProjectBuilder.latestProjectURL())
+        let indexPHP = latest.appendingPathComponent("index.php")
+        let otherPHP = latest.appendingPathComponent("api/home.php")
+
+        try FileManager.default.createDirectory(at: otherPHP.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "<?php echo 'index';".write(to: indexPHP, atomically: true, encoding: .utf8)
+        try "<?php echo 'api';".write(to: otherPHP, atomically: true, encoding: .utf8)
+
+        let selected = try XCTUnwrap(FrontendProjectBuilder.latestEntryFileURL())
+        XCTAssertEqual(selected.lastPathComponent.lowercased(), "index.php")
     }
 }

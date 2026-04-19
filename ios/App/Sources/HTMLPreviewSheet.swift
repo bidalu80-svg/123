@@ -58,6 +58,33 @@ private struct HTMLPreviewWebView: UIViewRepresentable {
         let sameWebView = context.coordinator.lastWebViewIdentity == webViewIdentity
 
         if let entryFileURL {
+            let readAccessURL = baseURL ?? entryFileURL.deletingLastPathComponent()
+            let entryExt = entryFileURL.pathExtension.lowercased()
+            let shouldUsePHPRuntime = entryExt == "php"
+                || entryExt == "phtml"
+                || PHPPreviewRuntimeBuilder.projectContainsPHPFiles(projectRootURL: readAccessURL)
+
+            if shouldUsePHPRuntime,
+               let runtime = PHPPreviewRuntimeBuilder.makeRuntimeDocument(
+                   projectRootURL: readAccessURL,
+                   entryFileURL: entryFileURL
+               ) {
+                if sameWebView,
+                   context.coordinator.lastEntryFileURL == entryFileURL,
+                   context.coordinator.lastBaseURL == readAccessURL,
+                   context.coordinator.lastPHPRuntimeSignature == runtime.signature {
+                    return
+                }
+
+                context.coordinator.lastLoadedHTML = html
+                context.coordinator.lastBaseURL = readAccessURL
+                context.coordinator.lastEntryFileURL = entryFileURL
+                context.coordinator.lastWebViewIdentity = webViewIdentity
+                context.coordinator.lastPHPRuntimeSignature = runtime.signature
+                webView.loadHTMLString(runtime.html, baseURL: readAccessURL)
+                return
+            }
+
             if sameWebView,
                context.coordinator.lastEntryFileURL == entryFileURL,
                context.coordinator.lastBaseURL == baseURL,
@@ -69,7 +96,7 @@ private struct HTMLPreviewWebView: UIViewRepresentable {
             context.coordinator.lastBaseURL = baseURL
             context.coordinator.lastEntryFileURL = entryFileURL
             context.coordinator.lastWebViewIdentity = webViewIdentity
-            let readAccessURL = baseURL ?? entryFileURL.deletingLastPathComponent()
+            context.coordinator.lastPHPRuntimeSignature = nil
             webView.loadFileURL(entryFileURL, allowingReadAccessTo: readAccessURL)
             return
         }
@@ -84,6 +111,7 @@ private struct HTMLPreviewWebView: UIViewRepresentable {
         context.coordinator.lastBaseURL = baseURL
         context.coordinator.lastEntryFileURL = nil
         context.coordinator.lastWebViewIdentity = webViewIdentity
+        context.coordinator.lastPHPRuntimeSignature = nil
         webView.loadHTMLString(html, baseURL: baseURL)
     }
 
@@ -96,5 +124,6 @@ private struct HTMLPreviewWebView: UIViewRepresentable {
         var lastBaseURL: URL?
         var lastEntryFileURL: URL?
         var lastWebViewIdentity: ObjectIdentifier?
+        var lastPHPRuntimeSignature: String?
     }
 }

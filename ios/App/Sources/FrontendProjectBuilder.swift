@@ -31,7 +31,7 @@ enum FrontendProjectBuilder {
             case .invalidProjectDirectory:
                 return "无法创建本地项目目录。"
             case .missingEntryFile:
-                return "未找到可预览入口页（index.html）。"
+                return "未找到可预览入口页（index.html / index.php）。"
             }
         }
     }
@@ -44,6 +44,7 @@ enum FrontendProjectBuilder {
     private static let knownLanguageDescriptors: Set<String> = [
         "html", "htm", "xhtml", "text/html",
         "css", "scss", "sass", "less",
+        "php", "phtml",
         "javascript", "js", "typescript", "ts", "json", "vue", "jsx", "tsx",
         "xml", "yaml", "yml", "markdown", "md",
         "python", "py", "swift", "bash",
@@ -65,7 +66,7 @@ enum FrontendProjectBuilder {
         if containsLikelyWebFencedBlock(in: text) {
             return true
         }
-        return looksLikeHTML(text)
+        return looksLikeHTML(text) || looksLikePHP(text)
     }
 
     static func chatProgressSnapshot(from message: ChatMessage) -> ChatProgressSnapshot? {
@@ -75,19 +76,32 @@ enum FrontendProjectBuilder {
         let uniquePaths = Array(Set(normalizedPaths))
 
         let hasHTMLPath = uniquePaths.contains(where: { isHTMLPath($0) })
+        let hasPHPPath = uniquePaths.contains(where: { isPHPPath($0) })
         let hasHTMLLikeFile = parsed.contains(where: { looksLikeHTML($0.content) })
+        let hasPHPLikeFile = parsed.contains(where: { looksLikePHP($0.content) })
         let hasTaggedFile = containsWebTaggedFile(in: text)
         let hasHTMLText = looksLikeHTML(text)
+        let hasPHPText = looksLikePHP(text)
         let hasFrontendAttachment = message.fileAttachments.contains(where: {
             $0.binaryBase64 == nil && isLikelyFrontendPath($0.fileName)
         })
 
-        let shouldRenderProgress = hasHTMLPath || hasTaggedFile || hasHTMLText || hasFrontendAttachment
+        let shouldRenderProgress = hasHTMLPath
+            || hasPHPPath
+            || hasTaggedFile
+            || hasHTMLText
+            || hasPHPText
+            || hasFrontendAttachment
         guard shouldRenderProgress else { return nil }
 
         return ChatProgressSnapshot(
             detectedFileCount: uniquePaths.count,
-            hasEntryHTML: hasHTMLPath || hasHTMLLikeFile || hasHTMLText
+            hasEntryHTML: hasHTMLPath
+                || hasPHPPath
+                || hasHTMLLikeFile
+                || hasPHPLikeFile
+                || hasHTMLText
+                || hasPHPText
         )
     }
 
@@ -119,27 +133,38 @@ enum FrontendProjectBuilder {
             return nil
         }
 
-        var htmlCandidates: [(url: URL, size: Int)] = []
+        var entryCandidates: [(url: URL, size: Int)] = []
         for case let fileURL as URL in enumerator {
-            guard isHTMLPath(fileURL.lastPathComponent) else { continue }
+            guard isPreviewEntryPath(fileURL.lastPathComponent) else { continue }
             let size = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-            htmlCandidates.append((fileURL, size))
+            entryCandidates.append((fileURL, size))
         }
 
-        guard !htmlCandidates.isEmpty else { return nil }
+        guard !entryCandidates.isEmpty else { return nil }
 
-        if let rootIndex = htmlCandidates.first(where: {
+        if let rootIndexHTML = entryCandidates.first(where: {
             $0.url.lastPathComponent.lowercased() == "index.html"
                 && $0.url.deletingLastPathComponent().standardizedFileURL == latest.standardizedFileURL
         }) {
-            return rootIndex.url
+            return rootIndexHTML.url
         }
 
-        if let nestedIndex = htmlCandidates.first(where: { $0.url.lastPathComponent.lowercased() == "index.html" }) {
-            return nestedIndex.url
+        if let rootIndexPHP = entryCandidates.first(where: {
+            $0.url.lastPathComponent.lowercased() == "index.php"
+                && $0.url.deletingLastPathComponent().standardizedFileURL == latest.standardizedFileURL
+        }) {
+            return rootIndexPHP.url
         }
 
-        if let richest = htmlCandidates.max(by: { lhs, rhs in
+        if let nestedIndexHTML = entryCandidates.first(where: { $0.url.lastPathComponent.lowercased() == "index.html" }) {
+            return nestedIndexHTML.url
+        }
+
+        if let nestedIndexPHP = entryCandidates.first(where: { $0.url.lastPathComponent.lowercased() == "index.php" }) {
+            return nestedIndexPHP.url
+        }
+
+        if let richest = entryCandidates.max(by: { lhs, rhs in
             if lhs.size == rhs.size {
                 return lhs.url.lastPathComponent.localizedStandardCompare(rhs.url.lastPathComponent) == .orderedAscending
             }
@@ -148,7 +173,7 @@ enum FrontendProjectBuilder {
             return richest.url
         }
 
-        return htmlCandidates.first?.url
+        return entryCandidates.first?.url
     }
 
     private static func pointedLatestEntryFileURL(in latest: URL) -> URL? {
@@ -160,7 +185,7 @@ enum FrontendProjectBuilder {
             .first?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
-        guard let relativePath = sanitizeRelativePath(trimmed), isHTMLPath(relativePath) else {
+        guard let relativePath = sanitizeRelativePath(trimmed), isPreviewEntryPath(relativePath) else {
             return nil
         }
 
@@ -191,8 +216,12 @@ enum FrontendProjectBuilder {
 
     static func buildProject(from message: ChatMessage, mode: BuildMode) throws -> BuildResult {
         var parsedFiles = extractWebFiles(from: message)
-        if parsedFiles.isEmpty, let fallbackHTML = fallbackHTML(in: message.content) {
-            parsedFiles = [ParsedWebFile(path: "index.html", content: fallbackHTML)]
+        if parsedFiles.isEmpty {
+            if let fallbackHTML = fallbackHTML(in: message.content) {
+                parsedFiles = [ParsedWebFile(path: "index.html", content: fallbackHTML)]
+            } else if let fallbackPHP = fallbackPHP(in: message.content) {
+                parsedFiles = [ParsedWebFile(path: "index.php", content: fallbackPHP)]
+            }
         }
 
         guard !parsedFiles.isEmpty else {
@@ -217,7 +246,7 @@ enum FrontendProjectBuilder {
 
         promoteHTMLLikeFilePathsIfNeeded(merged: &merged, orderedPaths: &orderedPaths)
 
-        if !orderedPaths.contains(where: { isHTMLPath($0) }) {
+        if !orderedPaths.contains(where: { isPreviewEntryPath($0) }) {
             let stylePaths = orderedPaths.filter { isStylePath($0) }
             let scriptPaths = orderedPaths.filter { isScriptPath($0) }
             let synthesized = synthesizedIndexHTML(stylePaths: stylePaths, scriptPaths: scriptPaths)
@@ -232,12 +261,14 @@ enum FrontendProjectBuilder {
             throw BuildError.missingEntryFile
         }
 
-        resolveReferencedAssetAliases(
-            entryRelativePath: entryRelativePath,
-            entryHTML: entryHTML,
-            merged: &merged,
-            orderedPaths: &orderedPaths
-        )
+        if isHTMLPath(entryRelativePath) {
+            resolveReferencedAssetAliases(
+                entryRelativePath: entryRelativePath,
+                entryHTML: entryHTML,
+                merged: &merged,
+                orderedPaths: &orderedPaths
+            )
+        }
 
         let projectDirectoryURL = try prepareProjectDirectory(mode: mode)
         let fileManager = FileManager.default
@@ -275,7 +306,7 @@ enum FrontendProjectBuilder {
         entryRelativePath: String
     ) {
         guard mode == .overwriteLatestProject else { return }
-        guard let normalized = sanitizeRelativePath(entryRelativePath), isHTMLPath(normalized) else { return }
+        guard let normalized = sanitizeRelativePath(entryRelativePath), isPreviewEntryPath(normalized) else { return }
 
         let pointerURL = projectDirectoryURL.appendingPathComponent(latestEntryPointerFileName, isDirectory: false)
         try? "\(normalized)\n".write(to: pointerURL, atomically: true, encoding: .utf8)
@@ -394,6 +425,9 @@ enum FrontendProjectBuilder {
         if loweredDescriptor.isEmpty, looksLikeHTML(codeContent) {
             return "index.html"
         }
+        if loweredDescriptor.isEmpty, looksLikePHP(codeContent) {
+            return "index.php"
+        }
 
         return nil
     }
@@ -455,6 +489,9 @@ enum FrontendProjectBuilder {
             }
 
             if looksLikeHTML(content) {
+                return true
+            }
+            if looksLikePHP(content) {
                 return true
             }
         }
@@ -527,7 +564,8 @@ enum FrontendProjectBuilder {
         let lowered = line.lowercased()
         let webSuffixes = [
             ".html", ".htm", ".css", ".scss", ".sass", ".less",
-            ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue"
+            ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue",
+            ".php", ".phtml"
         ]
         guard webSuffixes.contains(where: { lowered.hasSuffix($0) }) else {
             return false
@@ -558,6 +596,8 @@ enum FrontendProjectBuilder {
         switch language {
         case "html", "htm", "xhtml", "text/html":
             return "index.html"
+        case "php", "phtml", "text/php", "application/php":
+            return "index.php"
         case "css", "scss", "sass", "less":
             return "styles.css"
         case "javascript", "js":
@@ -767,8 +807,35 @@ enum FrontendProjectBuilder {
         return nil
     }
 
+    private static func fallbackPHP(in text: String) -> String? {
+        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
+        let trimmed = normalized.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        if let fenced = firstFencedPHP(in: trimmed) {
+            return normalizeFileContent(fenced)
+        }
+
+        if looksLikePHP(trimmed) {
+            return normalizeFileContent(trimmed)
+        }
+        return nil
+    }
+
     private static func firstFencedHTML(in text: String) -> String? {
         let pattern = #"(?is)```(?:html|htm|xhtml|text/html)?\s*\n(.*?)```"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let nsText = text as NSString
+        let range = NSRange(location: 0, length: nsText.length)
+        guard let match = regex.firstMatch(in: text, range: range),
+              match.numberOfRanges > 1 else {
+            return nil
+        }
+        return nsText.substring(with: match.range(at: 1))
+    }
+
+    private static func firstFencedPHP(in text: String) -> String? {
+        let pattern = #"(?is)```(?:php|phtml|text/php|application/php)\s*\n(.*?)```"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
         let nsText = text as NSString
         let range = NSRange(location: 0, length: nsText.length)
@@ -788,6 +855,13 @@ enum FrontendProjectBuilder {
             || lowered.contains("</html>")
     }
 
+    private static func looksLikePHP(_ text: String) -> Bool {
+        let lowered = text.lowercased()
+        return lowered.contains("<?php")
+            || lowered.contains("<?= ")
+            || lowered.contains("<?=")
+    }
+
     private static func isLikelyFrontendPath(_ rawPath: String) -> Bool {
         let path = rawPath.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         guard !path.isEmpty else { return false }
@@ -798,7 +872,8 @@ enum FrontendProjectBuilder {
 
         let webSuffixes = [
             ".html", ".htm", ".css", ".scss", ".sass", ".less",
-            ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue"
+            ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue",
+            ".php", ".phtml"
         ]
         if webSuffixes.contains(where: { path.hasSuffix($0) }) {
             return true
@@ -904,7 +979,13 @@ enum FrontendProjectBuilder {
         if let exact = paths.first(where: { $0.lowercased().hasSuffix("index.html") }) {
             return exact
         }
-        return paths.first(where: { isHTMLPath($0) })
+        if let html = paths.first(where: { isHTMLPath($0) }) {
+            return html
+        }
+        if let exactPHP = paths.first(where: { $0.lowercased().hasSuffix("index.php") }) {
+            return exactPHP
+        }
+        return paths.first(where: { isPHPPath($0) })
     }
 
     private static func promoteHTMLLikeFilePathsIfNeeded(
@@ -960,6 +1041,15 @@ enum FrontendProjectBuilder {
 
     private static func isHTMLPath(_ path: String) -> Bool {
         path.lowercased().hasSuffix(".html") || path.lowercased().hasSuffix(".htm")
+    }
+
+    private static func isPHPPath(_ path: String) -> Bool {
+        let lowered = path.lowercased()
+        return lowered.hasSuffix(".php") || lowered.hasSuffix(".phtml")
+    }
+
+    private static func isPreviewEntryPath(_ path: String) -> Bool {
+        isHTMLPath(path) || isPHPPath(path)
     }
 
     private static func isStylePath(_ path: String) -> Bool {

@@ -24,6 +24,7 @@ struct ChatRequestBuilder {
     4) 回答结构优先为：先 1-2 句说明效果，再给完整代码。
     5) 不要输出后端服务、数据库或部署脚本，除非用户明确提出需要。
     6) 若用户明确要求 `HTML + CSS + JavaScript` 三模块，必须输出并命名为 `index.html`、`styles.css`、`script.js`，并确保 `index.html` 正确引用另外两个文件。
+    7) 若用户明确要求 PHP 全栈预览，请按多文件输出 `index.php` 与相关 `*.php` 文件，数据库默认使用 SQLite（PDO），并优先使用相对路径（如 `data/app.db`）。
     """
     private static let maxHistoryMessages = 22
     private static let maxHistoryCharacters = 42_000
