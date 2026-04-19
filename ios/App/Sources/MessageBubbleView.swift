@@ -440,7 +440,7 @@ struct MessageBubbleView: View {
 
     private func videoGenerationProgressContainer(streamingTextAnimated: Bool) -> some View {
         let status = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
-        VStack(alignment: .leading, spacing: 10) {
+        return VStack(alignment: .leading, spacing: 10) {
             videoGenerationProgressCard
             if !status.isEmpty {
                 selectableTextContent(status, streamingTextAnimated: streamingTextAnimated)
