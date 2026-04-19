@@ -14,6 +14,11 @@ enum FrontendProjectBuilder {
         let createdNewProject: Bool
     }
 
+    struct ChatProgressSnapshot {
+        let detectedFileCount: Int
+        let hasEntryHTML: Bool
+    }
+
     enum BuildError: LocalizedError {
         case noFrontendContent
         case invalidProjectDirectory
@@ -51,6 +56,28 @@ enum FrontendProjectBuilder {
             return true
         }
         return looksLikeHTML(text)
+    }
+
+    static func chatProgressSnapshot(from message: ChatMessage) -> ChatProgressSnapshot? {
+        let text = message.content.replacingOccurrences(of: "\r\n", with: "\n")
+        let parsed = extractWebFiles(from: message)
+        let normalizedPaths = parsed.map { $0.path.lowercased() }
+        let uniquePaths = Array(Set(normalizedPaths))
+
+        let hasHTMLPath = uniquePaths.contains(where: { isHTMLPath($0) })
+        let hasTaggedFile = containsWebTaggedFile(in: text)
+        let hasHTMLText = looksLikeHTML(text)
+        let hasFrontendAttachment = message.fileAttachments.contains(where: {
+            $0.binaryBase64 == nil && isLikelyFrontendPath($0.fileName)
+        })
+
+        let shouldRenderProgress = hasHTMLPath || hasTaggedFile || hasHTMLText || hasFrontendAttachment
+        guard shouldRenderProgress else { return nil }
+
+        return ChatProgressSnapshot(
+            detectedFileCount: uniquePaths.count,
+            hasEntryHTML: hasHTMLPath
+        )
     }
 
     static func projectsRootURL() -> URL? {

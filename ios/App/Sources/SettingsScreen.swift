@@ -6,6 +6,7 @@ struct SettingsScreen: View {
     @EnvironmentObject private var authViewModel: AuthViewModel
     @State private var projectActionFeedback: String?
     @State private var latestPreviewPayload: LatestFrontendPreviewPayload?
+    @State private var projectBrowserPayload: FrontendProjectBrowserPayload?
 
     var body: some View {
         Form {
@@ -171,52 +172,68 @@ struct SettingsScreen: View {
             }
 
             Section("前端项目") {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("项目根目录")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text(FrontendProjectBuilder.projectsRootPathDisplay())
-                        .font(.system(.caption2, design: .monospaced))
-                        .textSelection(.enabled)
-                        .lineLimit(2)
+                projectPathCard(
+                    title: "项目根目录",
+                    path: FrontendProjectBuilder.projectsRootPathDisplay()
+                ) {
+                    UIPasteboard.general.string = FrontendProjectBuilder.projectsRootPathDisplay()
+                    projectActionFeedback = "已复制项目根目录。"
                 }
 
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("latest 目录")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text(FrontendProjectBuilder.latestProjectPathDisplay())
-                        .font(.system(.caption2, design: .monospaced))
-                        .textSelection(.enabled)
-                        .lineLimit(2)
+                projectPathCard(
+                    title: "latest 目录",
+                    path: FrontendProjectBuilder.latestProjectPathDisplay()
+                ) {
+                    UIPasteboard.general.string = FrontendProjectBuilder.latestProjectPathDisplay()
+                    projectActionFeedback = "已复制 latest 路径。"
                 }
 
-                HStack(spacing: 10) {
-                    Button("复制根目录") {
-                        UIPasteboard.general.string = FrontendProjectBuilder.projectsRootPathDisplay()
-                        projectActionFeedback = "已复制项目根目录。"
-                    }
-                    .buttonStyle(.bordered)
-
-                    Button("复制 latest") {
-                        UIPasteboard.general.string = FrontendProjectBuilder.latestProjectPathDisplay()
-                        projectActionFeedback = "已复制 latest 路径。"
-                    }
-                    .buttonStyle(.bordered)
-                }
-
-                HStack(spacing: 10) {
-                    Button("打开 latest 预览") {
+                LazyVGrid(
+                    columns: [
+                        GridItem(.flexible(minimum: 120), spacing: 10),
+                        GridItem(.flexible(minimum: 120), spacing: 10)
+                    ],
+                    spacing: 10
+                ) {
+                    FrontendProjectActionButton(
+                        title: "打开预览",
+                        subtitle: "加载 latest 入口页",
+                        systemImage: "play.rectangle.fill",
+                        tint: Color(red: 0.05, green: 0.36, blue: 0.88),
+                        prominence: .primary
+                    ) {
                         openLatestProjectPreview()
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color(red: 0.06, green: 0.36, blue: 0.86))
-                    .foregroundStyle(.white)
 
-                    Button("清空 latest", role: .destructive) {
+                    FrontendProjectActionButton(
+                        title: "浏览 latest",
+                        subtitle: "进入目录看代码",
+                        systemImage: "doc.text.magnifyingglass",
+                        tint: Color(red: 0.17, green: 0.43, blue: 0.86),
+                        prominence: .secondary
+                    ) {
+                        openLatestProjectBrowser()
+                    }
+
+                    FrontendProjectActionButton(
+                        title: "浏览根目录",
+                        subtitle: "查看全部项目",
+                        systemImage: "folder.badge.gearshape",
+                        tint: Color(red: 0.08, green: 0.58, blue: 0.55),
+                        prominence: .secondary
+                    ) {
+                        openProjectsRootBrowser()
+                    }
+
+                    FrontendProjectActionButton(
+                        title: "清空 latest",
+                        subtitle: "删除并重建目录",
+                        systemImage: "trash",
+                        tint: .red,
+                        prominence: .danger
+                    ) {
                         clearLatestProject()
                     }
-                    .buttonStyle(.bordered)
                 }
             }
 
@@ -282,6 +299,14 @@ struct SettingsScreen: View {
                 entryFileURL: payload.entryFileURL
             )
         }
+        .sheet(item: $projectBrowserPayload) { payload in
+            NavigationStack {
+                FrontendProjectBrowserScreen(
+                    title: payload.title,
+                    rootURL: payload.rootURL
+                )
+            }
+        }
     }
 
     private func statusRow(_ title: String, value: String) -> some View {
@@ -322,6 +347,66 @@ struct SettingsScreen: View {
         }
     }
 
+    private func openLatestProjectBrowser() {
+        guard let latest = FrontendProjectBuilder.latestProjectURL() else {
+            projectActionFeedback = "latest 目录不可用。"
+            return
+        }
+        projectBrowserPayload = FrontendProjectBrowserPayload(
+            title: "latest 文件",
+            rootURL: latest
+        )
+    }
+
+    private func openProjectsRootBrowser() {
+        guard let root = FrontendProjectBuilder.projectsRootURL() else {
+            projectActionFeedback = "项目根目录不可用。"
+            return
+        }
+        projectBrowserPayload = FrontendProjectBrowserPayload(
+            title: "前端项目文件",
+            rootURL: root
+        )
+    }
+
+    private func projectPathCard(
+        title: String,
+        path: String,
+        onCopy: @escaping () -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 8) {
+                Label(title, systemImage: "folder")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button(action: onCopy) {
+                    Label("复制", systemImage: "doc.on.doc")
+                        .font(.system(size: 12, weight: .semibold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(Color(.tertiarySystemBackground))
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+
+            Text(path)
+                .font(.system(size: 12, weight: .regular, design: .monospaced))
+                .foregroundStyle(.primary)
+                .textSelection(.enabled)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(.secondarySystemBackground))
+        )
+    }
+
     private var projectFeedbackBinding: Binding<Bool> {
         Binding(
             get: { projectActionFeedback != nil },
@@ -340,4 +425,351 @@ private struct LatestFrontendPreviewPayload: Identifiable {
     let html: String
     let baseURL: URL?
     let entryFileURL: URL?
+}
+
+private struct FrontendProjectBrowserPayload: Identifiable {
+    let id = UUID()
+    let title: String
+    let rootURL: URL
+}
+
+private enum FrontendProjectActionProminence {
+    case primary
+    case secondary
+    case danger
+}
+
+private struct FrontendProjectActionButton: View {
+    let title: String
+    let subtitle: String
+    let systemImage: String
+    let tint: Color
+    let prominence: FrontendProjectActionProminence
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 14, weight: .semibold))
+                    Text(title)
+                        .font(.system(size: 15, weight: .semibold))
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+
+                Text(subtitle)
+                    .font(.system(size: 12, weight: .medium))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .foregroundStyle(subtitleColor)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .foregroundStyle(titleColor)
+            .background(backgroundView)
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(borderColor, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var backgroundView: some View {
+        RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .fill(backgroundColor)
+    }
+
+    private var backgroundColor: Color {
+        switch prominence {
+        case .primary:
+            return tint
+        case .secondary:
+            return tint.opacity(0.12)
+        case .danger:
+            return tint.opacity(0.12)
+        }
+    }
+
+    private var titleColor: Color {
+        switch prominence {
+        case .primary:
+            return .white
+        case .secondary:
+            return tint
+        case .danger:
+            return tint
+        }
+    }
+
+    private var subtitleColor: Color {
+        switch prominence {
+        case .primary:
+            return Color.white.opacity(0.9)
+        case .secondary:
+            return tint.opacity(0.9)
+        case .danger:
+            return tint.opacity(0.9)
+        }
+    }
+
+    private var borderColor: Color {
+        switch prominence {
+        case .primary:
+            return tint.opacity(0.95)
+        case .secondary:
+            return tint.opacity(0.28)
+        case .danger:
+            return tint.opacity(0.35)
+        }
+    }
+}
+
+private struct FrontendProjectFileEntry: Identifiable, Hashable {
+    let relativePath: String
+    let fileURL: URL
+    let size: Int
+
+    var id: String { relativePath }
+}
+
+private struct FrontendProjectBrowserScreen: View {
+    let title: String
+    let rootURL: URL
+
+    @State private var files: [FrontendProjectFileEntry] = []
+    @State private var loadingError: String?
+
+    var body: some View {
+        Group {
+            if let loadingError {
+                VStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 28, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Text("目录读取失败")
+                        .font(.headline)
+                    Text(loadingError)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(24)
+            } else if files.isEmpty {
+                VStack(spacing: 10) {
+                    Image(systemName: "doc.text")
+                        .font(.system(size: 28, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Text("目录里还没有文件")
+                        .font(.headline)
+                    Text(rootURL.path)
+                        .font(.system(size: 11, weight: .regular, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(24)
+            } else {
+                List(files) { entry in
+                    NavigationLink {
+                        FrontendProjectFileViewerScreen(entry: entry)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(entry.relativePath)
+                                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                                .lineLimit(1)
+                            Text(fileSizeText(entry.size))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .listStyle(.insetGrouped)
+            }
+        }
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    loadFiles()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+            }
+        }
+        .onAppear {
+            loadFiles()
+        }
+    }
+
+    private func loadFiles() {
+        let fileManager = FileManager.default
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: rootURL.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            files = []
+            loadingError = "目录不存在：\(rootURL.path)"
+            return
+        }
+
+        guard let enumerator = fileManager.enumerator(
+            at: rootURL,
+            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            files = []
+            loadingError = "无法遍历目录。"
+            return
+        }
+
+        var collected: [FrontendProjectFileEntry] = []
+        for case let fileURL as URL in enumerator {
+            guard let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+                  values.isRegularFile == true else {
+                continue
+            }
+            let relative = relativePath(fileURL)
+            let size = values.fileSize ?? 0
+            collected.append(
+                FrontendProjectFileEntry(
+                    relativePath: relative,
+                    fileURL: fileURL,
+                    size: size
+                )
+            )
+        }
+
+        collected.sort { lhs, rhs in
+            lhs.relativePath.localizedStandardCompare(rhs.relativePath) == .orderedAscending
+        }
+        files = collected
+        loadingError = nil
+    }
+
+    private func relativePath(_ fileURL: URL) -> String {
+        let rootPath = rootURL.standardizedFileURL.path
+        let absolute = fileURL.standardizedFileURL.path
+        if absolute == rootPath {
+            return fileURL.lastPathComponent
+        }
+        if absolute.hasPrefix(rootPath + "/") {
+            return String(absolute.dropFirst(rootPath.count + 1))
+        }
+        return fileURL.lastPathComponent
+    }
+
+    private func fileSizeText(_ size: Int) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
+    }
+}
+
+private struct FrontendProjectFileViewerScreen: View {
+    let entry: FrontendProjectFileEntry
+
+    @State private var content: String = ""
+    @State private var statusText: String = "读取中…"
+    @State private var readError: String?
+
+    var body: some View {
+        Group {
+            if let readError {
+                VStack(spacing: 10) {
+                    Image(systemName: "doc.text.magnifyingglass")
+                        .font(.system(size: 28, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Text("无法读取文件")
+                        .font(.headline)
+                    Text(readError)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(24)
+            } else {
+                ScrollView([.vertical, .horizontal]) {
+                    Text(content)
+                        .font(.system(size: 12, weight: .regular, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                        .padding(14)
+                }
+            }
+        }
+        .navigationTitle(entry.relativePath)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    UIPasteboard.general.string = content
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                }
+                .disabled(content.isEmpty)
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            Text(statusText)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.ultraThinMaterial)
+        }
+        .onAppear {
+            loadFile()
+        }
+    }
+
+    private func loadFile() {
+        do {
+            let data = try Data(contentsOf: entry.fileURL, options: [.mappedIfSafe])
+            let maxBytes = 300_000
+            let clipped = data.prefix(maxBytes)
+            guard let text = decodeText(Data(clipped)) else {
+                readError = "该文件不是可显示的文本格式。"
+                content = ""
+                statusText = "大小 \(ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file))"
+                return
+            }
+
+            var finalText = text
+            var suffix = ""
+            if data.count > maxBytes {
+                suffix = "\n\n/* 文件过大，仅显示前 \(maxBytes) 字节 */"
+                finalText.append(suffix)
+            }
+            content = finalText
+            readError = nil
+
+            let sizeText = ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)
+            let lineCount = max(1, finalText.components(separatedBy: "\n").count)
+            statusText = "\(sizeText) · \(lineCount) 行"
+        } catch {
+            readError = error.localizedDescription
+            content = ""
+            statusText = "读取失败"
+        }
+    }
+
+    private func decodeText(_ data: Data) -> String? {
+        let encodings: [String.Encoding] = [
+            .utf8,
+            .utf16LittleEndian,
+            .utf16BigEndian,
+            .unicode,
+            .ascii
+        ]
+
+        for encoding in encodings {
+            if let value = String(data: data, encoding: encoding) {
+                return value
+            }
+        }
+        return nil
+    }
 }

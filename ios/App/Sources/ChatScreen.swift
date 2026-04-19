@@ -1114,6 +1114,10 @@ struct ChatScreen: View {
     private func makeDisplaySafeMessage(_ message: ChatMessage, preserveStreamingState: Bool = false) -> ChatMessage {
         var safe = message
 
+        if let masked = frontendProgressDisplayMessage(for: safe) {
+            safe = masked
+        }
+
         if safe.content.count > maxSingleRenderedMessageChars {
             safe.content = String(safe.content.prefix(maxSingleRenderedMessageChars))
                 + "\n\n[该消息过长，已在聊天页截断显示。]"
@@ -1134,6 +1138,48 @@ struct ChatScreen: View {
         }
 
         return safe
+    }
+
+    private func frontendProgressDisplayMessage(for message: ChatMessage) -> ChatMessage? {
+        guard viewModel.config.frontendAutoBuildEnabled else { return nil }
+        guard message.role == .assistant else { return nil }
+        guard !message.isImageGenerationPlaceholder, !message.isVideoGenerationPlaceholder else { return nil }
+        guard let snapshot = FrontendProjectBuilder.chatProgressSnapshot(from: message) else { return nil }
+
+        var masked = message
+        masked.fileAttachments = []
+        masked.content = frontendProgressText(snapshot: snapshot, isStreaming: message.isStreaming)
+        return masked
+    }
+
+    private func frontendProgressText(
+        snapshot: FrontendProjectBuilder.ChatProgressSnapshot,
+        isStreaming: Bool
+    ) -> String {
+        let fileHint: String
+        if snapshot.detectedFileCount > 0 {
+            fileHint = "（已识别 \(snapshot.detectedFileCount) 个文件）"
+        } else {
+            fileHint = ""
+        }
+
+        if isStreaming {
+            return """
+            正在构建网站项目\(fileHint)
+            · 解析页面结构
+            · 生成 HTML / CSS / JS
+            · 写入 latest 并准备预览
+            """
+        }
+
+        let finalizedCount = max(1, snapshot.detectedFileCount)
+        let entryHint = snapshot.hasEntryHTML ? "已定位入口页" : "已生成页面文件"
+        return """
+        网站项目已生成完成
+        ✓ 已写入 \(finalizedCount) 个文件到 latest
+        ✓ \(entryHint)，可直接预览整站
+        ✓ 代码可在「设置 > 前端项目 > 浏览 latest」查看
+        """
     }
 
     private func renderWeight(for message: ChatMessage) -> Int {
