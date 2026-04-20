@@ -140,6 +140,7 @@ struct SettingsScreen: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 Toggle("启用消息音效（发送/回复完成）", isOn: $viewModel.config.soundEffectsEnabled)
+                Toggle("自动朗读 AI 回复", isOn: $viewModel.config.replySpeechPlaybackEnabled)
                 Toggle("开启记忆模式", isOn: $viewModel.config.memoryModeEnabled)
 
                 Text(viewModel.config.memoryModeEnabled ? "开启后会记录可复用的用户偏好，并在后续聊天中注入跨会话记忆。" : "关闭后不会记录新记忆，也不会把已有记忆注入请求。")
@@ -305,6 +306,7 @@ struct SettingsScreen: View {
                 statusRow("当前模型", value: viewModel.config.model)
                 statusRow("流式模式", value: viewModel.config.streamEnabled ? "开启" : "关闭")
                 statusRow("项目自动生成", value: viewModel.config.frontendAutoBuildEnabled ? "开启" : "关闭")
+                statusRow("回复朗读", value: viewModel.config.replySpeechPlaybackEnabled ? "开启" : "关闭")
                 statusRow("记忆模式", value: viewModel.config.memoryModeEnabled ? "开启" : "关闭")
             }
         }

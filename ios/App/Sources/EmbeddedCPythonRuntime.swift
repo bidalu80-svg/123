@@ -9,6 +9,7 @@ actor EmbeddedCPythonRuntime {
     private typealias PyRunSimpleStringFn = @convention(c) (UnsafePointer<CChar>?) -> Int32
     private typealias PyGILStateEnsureFn = @convention(c) () -> Int32
     private typealias PyGILStateReleaseFn = @convention(c) (Int32) -> Void
+    private typealias PyEvalSaveThreadFn = @convention(c) () -> UnsafeMutableRawPointer?
 
     private var handle: UnsafeMutableRawPointer?
     private var pyIsInitialized: PyIsInitializedFn?
@@ -16,7 +17,9 @@ actor EmbeddedCPythonRuntime {
     private var pyRunSimpleString: PyRunSimpleStringFn?
     private var pyGILStateEnsure: PyGILStateEnsureFn?
     private var pyGILStateRelease: PyGILStateReleaseFn?
+    private var pyEvalSaveThread: PyEvalSaveThreadFn?
     private var prepared = false
+    private var didReleaseInitialGIL = false
     private var cachedStatusHint = "未检测到嵌入 CPython 运行时，当前使用兼容模式。"
     private let runtimeQueue = DispatchQueue(label: "chatapp.embedded-python.runtime")
 
@@ -106,6 +109,7 @@ actor EmbeddedCPythonRuntime {
             pyRunSimpleString = loadSymbol("PyRun_SimpleString", as: PyRunSimpleStringFn.self)
             pyGILStateEnsure = loadSymbol("PyGILState_Ensure", as: PyGILStateEnsureFn.self)
             pyGILStateRelease = loadSymbol("PyGILState_Release", as: PyGILStateReleaseFn.self)
+            pyEvalSaveThread = loadSymbol("PyEval_SaveThread", as: PyEvalSaveThreadFn.self)
 
             if pyIsInitialized != nil,
                pyInitialize != nil,
@@ -123,6 +127,7 @@ actor EmbeddedCPythonRuntime {
             pyRunSimpleString = nil
             pyGILStateEnsure = nil
             pyGILStateRelease = nil
+            pyEvalSaveThread = nil
         }
 
         cachedStatusHint = "未检测到嵌入 CPython（Python.framework 未集成到 App）。"
@@ -133,8 +138,18 @@ actor EmbeddedCPythonRuntime {
         guard let pyIsInitialized, let pyInitialize else {
             throw NSError(domain: "EmbeddedCPython", code: 1001, userInfo: [NSLocalizedDescriptionKey: "CPython 符号缺失"])
         }
-        if pyIsInitialized() == 0 {
+        let wasInitialized = pyIsInitialized() != 0
+        if !wasInitialized {
             pyInitialize()
+        }
+        // Py_Initialize leaves the current OS thread holding the GIL.
+        // A serial DispatchQueue is not guaranteed to reuse the same thread forever,
+        // so later executions can hang once GCD hops to a different worker thread.
+        // Releasing the initial thread state here lets every run reacquire the GIL
+        // cleanly through PyGILState_Ensure / PyGILState_Release.
+        if !wasInitialized, !didReleaseInitialGIL, let pyEvalSaveThread {
+            _ = pyEvalSaveThread()
+            didReleaseInitialGIL = true
         }
     }
 

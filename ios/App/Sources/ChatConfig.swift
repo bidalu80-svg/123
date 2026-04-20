@@ -104,6 +104,7 @@ struct ChatConfig: Codable, Equatable {
     var hotNewsCount: Int
     var memoryModeEnabled: Bool
     var soundEffectsEnabled: Bool
+    var replySpeechPlaybackEnabled: Bool
 
     static let `default` = ChatConfig(
         apiURL: "https://xxx.com",
@@ -131,7 +132,8 @@ struct ChatConfig: Codable, Equatable {
         hotNewsContextEnabled: false,
         hotNewsCount: 6,
         memoryModeEnabled: false,
-        soundEffectsEnabled: true
+        soundEffectsEnabled: true,
+        replySpeechPlaybackEnabled: false
     )
 
     init(
@@ -160,7 +162,8 @@ struct ChatConfig: Codable, Equatable {
         hotNewsContextEnabled: Bool = false,
         hotNewsCount: Int = 6,
         memoryModeEnabled: Bool = false,
-        soundEffectsEnabled: Bool = true
+        soundEffectsEnabled: Bool = true,
+        replySpeechPlaybackEnabled: Bool = false
     ) {
         self.apiURL = apiURL
         self.apiKey = apiKey
@@ -188,6 +191,7 @@ struct ChatConfig: Codable, Equatable {
         self.hotNewsCount = hotNewsCount
         self.memoryModeEnabled = memoryModeEnabled
         self.soundEffectsEnabled = soundEffectsEnabled
+        self.replySpeechPlaybackEnabled = replySpeechPlaybackEnabled
     }
 
     init(from decoder: Decoder) throws {
@@ -218,6 +222,7 @@ struct ChatConfig: Codable, Equatable {
         hotNewsCount = try c.decodeIfPresent(Int.self, forKey: .hotNewsCount) ?? 6
         memoryModeEnabled = try c.decodeIfPresent(Bool.self, forKey: .memoryModeEnabled) ?? false
         soundEffectsEnabled = try c.decodeIfPresent(Bool.self, forKey: .soundEffectsEnabled) ?? true
+        replySpeechPlaybackEnabled = try c.decodeIfPresent(Bool.self, forKey: .replySpeechPlaybackEnabled) ?? false
     }
 
     var normalizedBaseURL: String {
@@ -324,7 +329,8 @@ enum ChatConfigStore {
             hotNewsContextEnabled: ChatConfig.default.hotNewsContextEnabled,
             hotNewsCount: ChatConfig.default.hotNewsCount,
             memoryModeEnabled: ChatConfig.default.memoryModeEnabled,
-            soundEffectsEnabled: ChatConfig.default.soundEffectsEnabled
+            soundEffectsEnabled: ChatConfig.default.soundEffectsEnabled,
+            replySpeechPlaybackEnabled: ChatConfig.default.replySpeechPlaybackEnabled
         )
     }
 
@@ -444,7 +450,8 @@ enum ChatConfigStore {
             hotNewsContextEnabled: config.hotNewsContextEnabled,
             hotNewsCount: min(max(config.hotNewsCount, 1), 12),
             memoryModeEnabled: config.memoryModeEnabled,
-            soundEffectsEnabled: config.soundEffectsEnabled
+            soundEffectsEnabled: config.soundEffectsEnabled,
+            replySpeechPlaybackEnabled: config.replySpeechPlaybackEnabled
         )
     }
 

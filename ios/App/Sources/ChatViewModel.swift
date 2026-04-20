@@ -892,11 +892,13 @@ final class ChatViewModel: ObservableObject {
             privateMessages[msgIndex].isStreaming = false
             privateMessages[msgIndex].isImageGenerationPlaceholder = false
             privateMessages[msgIndex].isVideoGenerationPlaceholder = false
+            let speechMessage = privateMessages[msgIndex]
             syncVisibleMessagesIfNeeded(for: target)
             signalStreamScroll(force: true)
             if config.soundEffectsEnabled {
                 SoundEffectPlayer.playReplyComplete()
             }
+            speakAssistantReplyIfNeeded(speechMessage)
             return
         }
 
@@ -920,6 +922,7 @@ final class ChatViewModel: ObservableObject {
         sessions[index].messages[msgIndex].isStreaming = false
         sessions[index].messages[msgIndex].isImageGenerationPlaceholder = false
         sessions[index].messages[msgIndex].isVideoGenerationPlaceholder = false
+        let speechMessage = sessions[index].messages[msgIndex]
         sessions[index].updatedAt = Date()
         sessions[index].title = buildSessionTitle(from: sessions[index])
         syncVisibleMessagesIfNeeded(for: target)
@@ -927,6 +930,7 @@ final class ChatViewModel: ObservableObject {
         if config.soundEffectsEnabled {
             SoundEffectPlayer.playReplyComplete()
         }
+        speakAssistantReplyIfNeeded(speechMessage)
     }
 
     private func finishCancellation(id: UUID, target: StreamTargetContext) {
@@ -1206,8 +1210,14 @@ final class ChatViewModel: ObservableObject {
             hotNewsContextEnabled: input.hotNewsContextEnabled,
             hotNewsCount: min(max(input.hotNewsCount, 1), 12),
             memoryModeEnabled: input.memoryModeEnabled,
-            soundEffectsEnabled: input.soundEffectsEnabled
+            soundEffectsEnabled: input.soundEffectsEnabled,
+            replySpeechPlaybackEnabled: input.replySpeechPlaybackEnabled
         )
+    }
+
+    private func speakAssistantReplyIfNeeded(_ message: ChatMessage) {
+        guard config.replySpeechPlaybackEnabled else { return }
+        _ = SpeechPlaybackService.shared.speak(message: message)
     }
 
     private func startNetworkMonitor() {

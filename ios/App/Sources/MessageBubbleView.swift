@@ -12,6 +12,7 @@ struct MessageBubbleView: View {
     let showsAssistantActionBar: Bool
     let onRegenerate: (() -> Void)?
     @Environment(\.colorScheme) private var colorScheme
+    @ObservedObject private var speechPlayback = SpeechPlaybackService.shared
     @State private var saveFeedback: String?
     @State private var reaction: AssistantReaction = .none
     @State private var actionFeedback: String?
@@ -151,6 +152,16 @@ struct MessageBubbleView: View {
                 feedback(.success, "已复制")
             }
 
+            if canPlayAssistantReply {
+                iconActionButton(
+                    systemName: isPlayingAssistantReply ? "stop.fill" : "speaker.wave.2",
+                    foregroundColor: isPlayingAssistantReply ? Color(red: 0.09, green: 0.43, blue: 0.88) : .secondary,
+                    accessibilityLabel: isPlayingAssistantReply ? "停止朗读" : "朗读回复"
+                ) {
+                    toggleAssistantSpeechPlayback()
+                }
+            }
+
             iconActionButton(
                 systemName: reaction == .up ? "hand.thumbsup.fill" : "hand.thumbsup",
                 foregroundColor: reaction == .up ? .blue : .secondary,
@@ -214,6 +225,14 @@ struct MessageBubbleView: View {
                 Button("复制全部", systemImage: "doc.on.doc") {
                     UIPasteboard.general.string = message.copyableText
                     feedback(.success, "已复制")
+                }
+                if canPlayAssistantReply {
+                    Button(
+                        isPlayingAssistantReply ? "停止朗读" : "朗读回复",
+                        systemImage: isPlayingAssistantReply ? "stop.fill" : "speaker.wave.2"
+                    ) {
+                        toggleAssistantSpeechPlayback()
+                    }
                 }
                 if let onRegenerate {
                     Button("重试", systemImage: "arrow.clockwise") {
@@ -1664,6 +1683,37 @@ struct MessageBubbleView: View {
         formatter.allowedUnits = [.useKB, .useMB]
         formatter.countStyle = .file
         return formatter.string(fromByteCount: Int64(bytes))
+    }
+
+    private var canPlayAssistantReply: Bool {
+        guard message.role == .assistant else { return false }
+        guard !message.isStreaming else { return false }
+        guard !message.isImageGenerationPlaceholder, !message.isVideoGenerationPlaceholder else { return false }
+
+        let hasText = !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasTextFiles = message.fileAttachments.contains { attachment in
+            attachment.binaryBase64 == nil
+                && !attachment.textContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        return hasText || hasTextFiles || !message.imageAttachments.isEmpty || !message.videoAttachments.isEmpty
+    }
+
+    private var isPlayingAssistantReply: Bool {
+        speechPlayback.isPlaying(messageID: message.id)
+    }
+
+    private func toggleAssistantSpeechPlayback() {
+        if isPlayingAssistantReply {
+            speechPlayback.stop(messageID: message.id)
+            feedback(.light, "已停止朗读")
+            return
+        }
+
+        if speechPlayback.speak(message: message) {
+            feedback(.light, "正在朗读…")
+        } else {
+            feedback(.light, "当前消息没有可朗读内容")
+        }
     }
 
     private func supportsHTMLPreview(language: String?, title: String, content: String) -> Bool {
