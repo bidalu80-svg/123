@@ -141,9 +141,48 @@ final class ExcelGenerationService {
 
         let segments = MessageContentParser.parse(message)
         for segment in segments {
+            switch segment {
+            case .table(let headers, let rows):
+                if let normalized = normalizeSheet(
+                    preferredName: "表\(collected.count + 1)",
+                    headers: headers,
+                    rows: rows
+                ) {
+                    collected.append(normalized)
+                }
+            case .file(let name, _, let content):
+                collected.append(contentsOf: extractSheets(fromRawText: content, preferredName: (name as NSString).deletingPathExtension))
+            default:
+                continue
+            }
+        }
+
+        for file in message.fileAttachments {
+            guard file.binaryBase64 == nil else { continue }
+            collected.append(contentsOf: extractSheets(
+                fromRawText: file.textContent,
+                preferredName: (file.fileName as NSString).deletingPathExtension
+            ))
+        }
+
+        let deduped = deduplicateSheets(collected)
+        let uniqued = ensureUniqueSheetNames(deduped)
+        return Array(uniqued.prefix(maxSheets))
+    }
+
+    static func extractSheets(fromRawText rawText: String, preferredName: String) -> [Sheet] {
+        let normalizedText = rawText
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedText.isEmpty else { return [] }
+
+        var collected: [Sheet] = []
+        let message = ChatMessage(role: .assistant, content: normalizedText)
+        let segments = MessageContentParser.parse(message)
+        for segment in segments {
             guard case let .table(headers, rows) = segment else { continue }
             if let normalized = normalizeSheet(
-                preferredName: "表\(collected.count + 1)",
+                preferredName: preferredName.isEmpty ? "表\(collected.count + 1)" : preferredName,
                 headers: headers,
                 rows: rows
             ) {
@@ -151,16 +190,23 @@ final class ExcelGenerationService {
             }
         }
 
-        for file in message.fileAttachments {
-            guard file.binaryBase64 == nil else { continue }
-            let ext = (file.fileName as NSString).pathExtension.lowercased()
-            guard ext == "csv" || ext == "tsv" else { continue }
-            let delimiter: Character = (ext == "tsv") ? "\t" : ","
-            let parsed = parseDelimitedTable(file.textContent, delimiter: delimiter)
+        if collected.isEmpty {
+            let parsedCSV = parseDelimitedTable(normalizedText, delimiter: ",")
             if let normalized = normalizeSheet(
-                preferredName: (file.fileName as NSString).deletingPathExtension,
-                headers: parsed.headers,
-                rows: parsed.rows
+                preferredName: preferredName.isEmpty ? "表1" : preferredName,
+                headers: parsedCSV.headers,
+                rows: parsedCSV.rows
+            ) {
+                collected.append(normalized)
+            }
+        }
+
+        if collected.isEmpty {
+            let parsedTSV = parseDelimitedTable(normalizedText, delimiter: "\t")
+            if let normalized = normalizeSheet(
+                preferredName: preferredName.isEmpty ? "表1" : preferredName,
+                headers: parsedTSV.headers,
+                rows: parsedTSV.rows
             ) {
                 collected.append(normalized)
             }

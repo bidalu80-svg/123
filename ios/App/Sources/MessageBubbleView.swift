@@ -820,7 +820,7 @@ struct MessageBubbleView: View {
         case .code(let language, let content):
             codeBlock(title: (language ?? "code").uppercased(), content: content, language: language)
         case .file(let name, let language, let content):
-            codeBlock(title: "FILE · \(name)", content: content, language: language)
+            fileSegmentView(name: name, language: language, content: content)
         case .table(let headers, let rows):
             markdownTableCard(headers: headers, rows: rows)
         case .image(let attachment):
@@ -840,7 +840,7 @@ struct MessageBubbleView: View {
         case .code(let language, let content):
             codeBlock(title: (language ?? "code").uppercased(), content: content, language: language)
         case .file(let name, let language, let content):
-            codeBlock(title: "FILE · \(name)", content: content, language: language)
+            fileSegmentView(name: name, language: language, content: content)
         case .table(let headers, let rows):
             markdownTableCard(headers: headers, rows: rows)
         case .image(let attachment):
@@ -856,6 +856,64 @@ struct MessageBubbleView: View {
         Divider()
             .overlay(Color.secondary.opacity(colorScheme == .dark ? 0.30 : 0.22))
             .padding(.vertical, 10)
+    }
+
+    @ViewBuilder
+    private func fileSegmentView(name: String, language: String?, content: String) -> some View {
+        let spreadsheetSheets = ExcelGenerationService.extractSheets(
+            fromRawText: content,
+            preferredName: (name as NSString).deletingPathExtension
+        )
+
+        if isSpreadsheetPreviewFile(name: name), let firstSheet = spreadsheetSheets.first {
+            spreadsheetPreviewCard(fileName: name, sheet: firstSheet)
+        } else {
+            codeBlock(title: "FILE · \(name)", content: content, language: language)
+        }
+    }
+
+    private func isSpreadsheetPreviewFile(name: String) -> Bool {
+        let ext = (name as NSString).pathExtension.lowercased()
+        return ext == "xlsx" || ext == "xls" || ext == "csv" || ext == "tsv"
+    }
+
+    private func spreadsheetPreviewCard(fileName: String, sheet: ExcelGenerationService.Sheet) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("表格")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(.primary)
+                Spacer()
+                Button {
+                    let lines = ([sheet.headers] + sheet.rows)
+                        .map { $0.joined(separator: "\t") }
+                        .joined(separator: "\n")
+                    UIPasteboard.general.string = lines
+                    feedback(.success, "已复制表格")
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+
+            Text(fileName)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+
+            markdownTableCard(headers: sheet.headers, rows: sheet.rows)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color(.systemBackground))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.black.opacity(colorScheme == .dark ? 0.16 : 0.08), lineWidth: 1)
+        )
     }
 
     private func markdownTableCard(headers: [String], rows: [[String]]) -> some View {

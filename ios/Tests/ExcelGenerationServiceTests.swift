@@ -48,4 +48,26 @@ final class ExcelGenerationServiceTests: XCTestCase {
         let message = ChatMessage(role: .assistant, content: "今天进展顺利。")
         XCTAssertFalse(ExcelGenerationService.canGenerate(from: message))
     }
+
+    func testCanGenerateFromSpreadsheetLikeFileBlock() {
+        let message = ChatMessage(
+            role: .assistant,
+            content: """
+            [[file:项目预算表.xlsx]]
+            这是项目预算数据：
+
+            | 项目 | 金额 |
+            | --- | --- |
+            | 设计 | 2000 |
+            | 开发 | 8000 |
+            [[endfile]]
+            """
+        )
+
+        let sheets = ExcelGenerationService.extractSheets(from: message)
+        XCTAssertEqual(sheets.count, 1)
+        XCTAssertEqual(sheets[0].headers, ["项目", "金额"])
+        XCTAssertEqual(sheets[0].rows.count, 2)
+        XCTAssertTrue(ExcelGenerationService.canGenerate(from: message))
+    }
 }
