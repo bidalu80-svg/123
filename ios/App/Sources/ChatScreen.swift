@@ -535,7 +535,7 @@ struct ChatScreen: View {
                 renderWindowNotice
             }
 
-            ForEach(frozenRenderedMessages) { message in
+            ForEach(frozenRenderedMessages, id: \.id) { message in
                 let isLatestAssistant = message.id == latestFrozenAssistantMessageID
                 let displayMessage = makeDisplaySafeMessage(message)
                 MessageBubbleView(

@@ -3,7 +3,7 @@ import AVFoundation
 import Combine
 
 @MainActor
-final class SpeechPlaybackService: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
+final class SpeechPlaybackService: NSObject, ObservableObject, @preconcurrency AVSpeechSynthesizerDelegate {
     static let shared = SpeechPlaybackService()
 
     @Published private(set) var isSpeaking = false

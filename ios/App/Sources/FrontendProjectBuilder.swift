@@ -1124,8 +1124,17 @@ enum FrontendProjectBuilder {
         guard inner.count >= 3 else { return normalized }
         inner.removeLast(3)
 
-        let parsed = parseCodeBlock(inner)
-        let content = normalizeFileContent(parsed.1)
+        let normalizedInner = normalizeFileContent(inner)
+        guard let newlineIndex = normalizedInner.firstIndex(of: "\n") else {
+            return normalizedInner
+        }
+
+        let descriptor = normalizedInner[..<newlineIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+        let bodyStart = normalizedInner.index(after: newlineIndex)
+        let body = normalizeFileContent(String(normalizedInner[bodyStart...]))
+        let content = (!descriptor.isEmpty && !descriptor.contains(" ") && !body.isEmpty)
+            ? body
+            : normalizedInner
         return content.isEmpty ? normalized : content
     }
 
