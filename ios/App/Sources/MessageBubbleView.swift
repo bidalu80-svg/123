@@ -6,7 +6,7 @@ import QuickLook
 
 struct MessageBubbleView: View {
     let message: ChatMessage
-    let sourceMessage: ChatMessage? = nil
+    let sourceMessage: ChatMessage?
     let codeThemeMode: CodeThemeMode
     let apiKey: String
     let apiBaseURL: String
@@ -42,6 +42,24 @@ struct MessageBubbleView: View {
     @State private var wordGenerationTask: Task<Void, Never>?
     @State private var excelGenerationTask: Task<Void, Never>?
     private let chatUIFont = UIFont(name: "PingFangSC-Medium", size: 16) ?? UIFont.systemFont(ofSize: 16, weight: .medium)
+
+    init(
+        message: ChatMessage,
+        sourceMessage: ChatMessage? = nil,
+        codeThemeMode: CodeThemeMode,
+        apiKey: String,
+        apiBaseURL: String,
+        showsAssistantActionBar: Bool,
+        onRegenerate: (() -> Void)?
+    ) {
+        self.message = message
+        self.sourceMessage = sourceMessage
+        self.codeThemeMode = codeThemeMode
+        self.apiKey = apiKey
+        self.apiBaseURL = apiBaseURL
+        self.showsAssistantActionBar = showsAssistantActionBar
+        self.onRegenerate = onRegenerate
+    }
 
     private var actionMessage: ChatMessage {
         sourceMessage ?? message
