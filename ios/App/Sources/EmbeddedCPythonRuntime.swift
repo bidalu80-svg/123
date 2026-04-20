@@ -3,6 +3,7 @@ import Darwin
 
 actor EmbeddedCPythonRuntime {
     static let shared = EmbeddedCPythonRuntime()
+    private static let maxInteractiveOutputLength = 24_000
 
     private typealias PyIsInitializedFn = @convention(c) () -> Int32
     private typealias PyInitializeFn = @convention(c) () -> Void
@@ -26,6 +27,30 @@ actor EmbeddedCPythonRuntime {
     func runIfAvailable(code: String, stdin: String?) -> PythonExecutionResult? {
         runOnRuntimeQueue {
             runIfAvailableLocked(code: code, stdin: stdin)
+        }
+    }
+
+    func startInteractiveSession(code: String) -> PythonInteractiveSessionSnapshot? {
+        runOnRuntimeQueue {
+            startInteractiveSessionLocked(code: code)
+        }
+    }
+
+    func pollInteractiveSession(sessionID: String) -> PythonInteractiveSessionSnapshot? {
+        runOnRuntimeQueue {
+            pollInteractiveSessionLocked(sessionID: sessionID)
+        }
+    }
+
+    func sendInteractiveInput(sessionID: String, input: String) -> PythonInteractiveSessionSnapshot? {
+        runOnRuntimeQueue {
+            sendInteractiveInputLocked(sessionID: sessionID, input: input)
+        }
+    }
+
+    func stopInteractiveSession(sessionID: String) -> PythonInteractiveSessionSnapshot? {
+        runOnRuntimeQueue {
+            stopInteractiveSessionLocked(sessionID: sessionID)
         }
     }
 
@@ -88,6 +113,89 @@ actor EmbeddedCPythonRuntime {
             return PythonExecutionResult(output: normalized, exitCode: exitCode)
         } catch {
             return PythonExecutionResult(output: "CPython 运行失败：\(error.localizedDescription)", exitCode: 1)
+        }
+    }
+
+    private func startInteractiveSessionLocked(code: String) -> PythonInteractiveSessionSnapshot? {
+        guard prepareIfNeededLocked() else { return nil }
+        do {
+            try ensureInitializedLocked()
+            let sessionID = UUID().uuidString
+            let outputURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("py-interactive-start-\(sessionID).json")
+            defer { try? FileManager.default.removeItem(at: outputURL) }
+
+            let script = interactiveBootstrapScript() + """
+_chatapp_session_id = \(pythonLiteral(sessionID))
+_chatapp_code = \(pythonLiteral(code))
+_chatapp_out = \(pythonLiteral(outputURL.path))
+if _chatapp_session_id in _chatapp_interactive_sessions:
+    _chatapp_close_session(_chatapp_session_id)
+_chatapp_start_session(_chatapp_session_id, _chatapp_code)
+with open(_chatapp_out, "w", encoding="utf-8") as _chatapp_file:
+    _chatapp_file.write(json.dumps(_chatapp_snapshot(_chatapp_session_id), ensure_ascii=False))
+"""
+
+            guard runPythonBridgeScriptLocked(script) else { return nil }
+            return readInteractiveSnapshot(from: outputURL)
+        } catch {
+            return nil
+        }
+    }
+
+    private func pollInteractiveSessionLocked(sessionID: String) -> PythonInteractiveSessionSnapshot? {
+        runInteractiveCommandLocked(
+            sessionID: sessionID,
+            command: """
+with open(_chatapp_out, "w", encoding="utf-8") as _chatapp_file:
+    _chatapp_file.write(json.dumps(_chatapp_snapshot(_chatapp_session_id), ensure_ascii=False))
+"""
+        )
+    }
+
+    private func sendInteractiveInputLocked(sessionID: String, input: String) -> PythonInteractiveSessionSnapshot? {
+        runInteractiveCommandLocked(
+            sessionID: sessionID,
+            command: """
+_chatapp_push_input(_chatapp_session_id, \(pythonLiteral(input)))
+with open(_chatapp_out, "w", encoding="utf-8") as _chatapp_file:
+    _chatapp_file.write(json.dumps(_chatapp_snapshot(_chatapp_session_id), ensure_ascii=False))
+"""
+        )
+    }
+
+    private func stopInteractiveSessionLocked(sessionID: String) -> PythonInteractiveSessionSnapshot? {
+        runInteractiveCommandLocked(
+            sessionID: sessionID,
+            command: """
+_chatapp_close_session(_chatapp_session_id)
+with open(_chatapp_out, "w", encoding="utf-8") as _chatapp_file:
+    _chatapp_file.write(json.dumps(_chatapp_snapshot(_chatapp_session_id), ensure_ascii=False))
+"""
+        )
+    }
+
+    private func runInteractiveCommandLocked(
+        sessionID: String,
+        command: String
+    ) -> PythonInteractiveSessionSnapshot? {
+        guard prepareIfNeededLocked() else { return nil }
+        do {
+            try ensureInitializedLocked()
+            let outputURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("py-interactive-\(sessionID)-\(UUID().uuidString).json")
+            defer { try? FileManager.default.removeItem(at: outputURL) }
+
+            let script = interactiveBootstrapScript() + """
+_chatapp_session_id = \(pythonLiteral(sessionID))
+_chatapp_out = \(pythonLiteral(outputURL.path))
+\(command)
+"""
+
+            guard runPythonBridgeScriptLocked(script) else { return nil }
+            return readInteractiveSnapshot(from: outputURL)
+        } catch {
+            return nil
         }
     }
 
@@ -262,6 +370,222 @@ with open(\(out), "w", encoding="utf-8") as f:
     f.write(_text)
 with open(\(exit), "w", encoding="utf-8") as f:
     f.write(str(_exit))
+"""
+    }
+
+    private func runPythonBridgeScriptLocked(_ script: String) -> Bool {
+        guard let pyRunSimpleString, let pyGILStateEnsure, let pyGILStateRelease else {
+            cachedStatusHint = "嵌入 CPython 已加载，但缺少运行入口符号。"
+            return false
+        }
+
+        let gilState = pyGILStateEnsure()
+        let rc = script.withCString { pyRunSimpleString($0) }
+        pyGILStateRelease(gilState)
+        return rc == 0
+    }
+
+    private func readInteractiveSnapshot(from url: URL) -> PythonInteractiveSessionSnapshot? {
+        guard let data = try? Data(contentsOf: url),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+
+        let sessionID = (object["session_id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !sessionID.isEmpty else { return nil }
+        let output = object["output"] as? String ?? ""
+        let waiting = object["waiting"] as? Bool ?? false
+        let finished = object["finished"] as? Bool ?? false
+        let exitCode = object["exit_code"] as? Int
+
+        return PythonInteractiveSessionSnapshot(
+            sessionID: sessionID,
+            output: output,
+            isWaitingForInput: waiting,
+            isFinished: finished,
+            exitCode: exitCode
+        )
+    }
+
+    private func interactiveBootstrapScript() -> String {
+        let maxOutput = Self.maxInteractiveOutputLength
+        return """
+import json
+import sys
+import traceback
+import threading
+import types
+
+if "_chatapp_interactive_sessions" not in globals():
+    _chatapp_interactive_sessions = {}
+
+if "_chatapp_make_notification_shim" not in globals():
+    def _chatapp_make_notification_shim():
+        _notification = types.ModuleType("notification")
+        def _notification_schedule(message="", delay=0, sound_name=None, action_url=None, title=""):
+            _msg = str(message or "")
+            _title = str(title or "")
+            _prefix = "[提醒]"
+            if _title:
+                _prefix = _prefix + " " + _title
+            if _msg:
+                _prefix = _prefix + " " + _msg
+            return {"scheduled": True, "message": _msg, "delay": delay}
+        _notification.schedule = _notification_schedule
+        _notification.cancel_all = lambda: None
+        _notification.cancel = lambda *_args, **_kwargs: None
+        _notification.set_badge = lambda *_args, **_kwargs: None
+        _notification.get_scheduled = lambda: []
+        return _notification
+
+if "_ChatAppInteractiveStream" not in globals():
+    class _ChatAppInteractiveStream:
+        def __init__(self, session):
+            self.session = session
+        def write(self, data):
+            text = "" if data is None else str(data)
+            if not text:
+                return 0
+            with self.session["condition"]:
+                self.session["output"] += text
+                if len(self.session["output"]) > \(maxOutput):
+                    self.session["output"] = self.session["output"][-\(maxOutput):]
+                self.session["condition"].notify_all()
+            return len(text)
+        def flush(self):
+            return None
+        def isatty(self):
+            return True
+
+if "_ChatAppInteractiveInput" not in globals():
+    class _ChatAppInteractiveInput:
+        def __init__(self, session):
+            self.session = session
+        def readline(self, *args):
+            with self.session["condition"]:
+                self.session["waiting"] = True
+                self.session["condition"].notify_all()
+                while not self.session["closed"] and not self.session["input_queue"]:
+                    self.session["condition"].wait(0.1)
+                if self.session["closed"]:
+                    self.session["waiting"] = False
+                    self.session["condition"].notify_all()
+                    return ""
+                line = self.session["input_queue"].pop(0)
+                self.session["waiting"] = False
+                self.session["condition"].notify_all()
+                return line
+        def isatty(self):
+            return True
+
+if "_chatapp_snapshot" not in globals():
+    def _chatapp_snapshot(session_id):
+        session = _chatapp_interactive_sessions.get(session_id)
+        if session is None:
+            return {
+                "session_id": session_id,
+                "output": "",
+                "waiting": False,
+                "finished": True,
+                "exit_code": None
+            }
+        with session["condition"]:
+            return {
+                "session_id": session_id,
+                "output": session.get("output", ""),
+                "waiting": bool(session.get("waiting", False)),
+                "finished": bool(session.get("finished", False)),
+                "exit_code": session.get("exit_code")
+            }
+
+if "_chatapp_push_input" not in globals():
+    def _chatapp_push_input(session_id, text):
+        session = _chatapp_interactive_sessions.get(session_id)
+        if session is None:
+            return
+        payload = str(text if text is not None else "")
+        if not payload.endswith("\\n"):
+            payload += "\\n"
+        with session["condition"]:
+            session["input_queue"].append(payload)
+            session["condition"].notify_all()
+
+if "_chatapp_close_session" not in globals():
+    def _chatapp_close_session(session_id):
+        session = _chatapp_interactive_sessions.get(session_id)
+        if session is None:
+            return
+        with session["condition"]:
+            session["closed"] = True
+            session["waiting"] = False
+            session["condition"].notify_all()
+        thread = session.get("thread")
+        thread_id = getattr(thread, "ident", None)
+        if thread_id:
+            try:
+                import ctypes
+                res = ctypes.pythonapi.PyThreadState_SetAsyncExc(
+                    ctypes.c_ulong(thread_id),
+                    ctypes.py_object(SystemExit)
+                )
+                if res > 1:
+                    ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_ulong(thread_id), None)
+            except Exception:
+                pass
+
+if "_chatapp_session_runner" not in globals():
+    def _chatapp_session_runner(session_id, code):
+        session = _chatapp_interactive_sessions.get(session_id)
+        if session is None:
+            return
+        old_out = sys.stdout
+        old_err = sys.stderr
+        old_in = sys.stdin
+        exit_code = 0
+        sys.stdout = _ChatAppInteractiveStream(session)
+        sys.stderr = _ChatAppInteractiveStream(session)
+        sys.stdin = _ChatAppInteractiveInput(session)
+        try:
+            sys.modules.setdefault("notification", _chatapp_make_notification_shim())
+            globals_map = {"__name__": "__main__"}
+            exec(compile(code, "<chatapp-interactive>", "exec"), globals_map, globals_map)
+        except SystemExit as e:
+            try:
+                exit_code = int(getattr(e, "code", 0) or 0)
+            except Exception:
+                exit_code = 1
+        except BaseException:
+            exit_code = 1
+            traceback.print_exc()
+        finally:
+            sys.stdout = old_out
+            sys.stderr = old_err
+            sys.stdin = old_in
+            with session["condition"]:
+                session["finished"] = True
+                session["waiting"] = False
+                session["exit_code"] = exit_code
+                session["condition"].notify_all()
+
+if "_chatapp_start_session" not in globals():
+    def _chatapp_start_session(session_id, code):
+        session = {
+            "condition": threading.Condition(),
+            "input_queue": [],
+            "output": "",
+            "waiting": False,
+            "finished": False,
+            "closed": False,
+            "exit_code": None,
+        }
+        _chatapp_interactive_sessions[session_id] = session
+        thread = threading.Thread(
+            target=_chatapp_session_runner,
+            args=(session_id, code),
+            daemon=True
+        )
+        session["thread"] = thread
+        thread.start()
 """
     }
 

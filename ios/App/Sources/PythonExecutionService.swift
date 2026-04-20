@@ -5,6 +5,14 @@ struct PythonExecutionResult: Equatable {
     let exitCode: Int
 }
 
+struct PythonInteractiveSessionSnapshot: Equatable {
+    let sessionID: String
+    let output: String
+    let isWaitingForInput: Bool
+    let isFinished: Bool
+    let exitCode: Int?
+}
+
 enum PythonExecutionError: LocalizedError, Equatable {
     case emptyCode
     case unsupportedSyntax(String)
@@ -61,6 +69,8 @@ final class PythonExecutionService {
 
     private let embeddedRuntimeStateLock = NSLock()
     private var embeddedRuntimeDisabledUntil: Date?
+    private let interactiveSessionLock = NSLock()
+    private var activeInteractiveSessionID: String?
 
     static func isRunnableSnippet(_ code: String) -> Bool {
         let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -271,6 +281,59 @@ final class PythonExecutionService {
         }
     }
 
+    func startInteractiveSession(code: String) async throws -> PythonInteractiveSessionSnapshot {
+        let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw PythonExecutionError.emptyCode }
+        guard trimmed.count <= maxCodeLength else {
+            throw PythonExecutionError.runtime("代码过长（最多 \(maxCodeLength) 字符）")
+        }
+
+        try await waitForEmbeddedRuntimeRecoveryIfNeeded()
+
+        if let current = currentInteractiveSessionID() {
+            _ = await EmbeddedCPythonRuntime.shared.stopInteractiveSession(sessionID: current)
+            clearActiveInteractiveSessionID(current)
+        }
+
+        guard let snapshot = await EmbeddedCPythonRuntime.shared.startInteractiveSession(code: trimmed) else {
+            let hint = await EmbeddedCPythonRuntime.shared.statusHint()
+            throw PythonExecutionError.runtime(hint)
+        }
+        setActiveInteractiveSessionID(snapshot.sessionID)
+        return snapshot
+    }
+
+    func pollInteractiveSession(sessionID: String) async throws -> PythonInteractiveSessionSnapshot {
+        guard let snapshot = await EmbeddedCPythonRuntime.shared.pollInteractiveSession(sessionID: sessionID) else {
+            let hint = await EmbeddedCPythonRuntime.shared.statusHint()
+            throw PythonExecutionError.runtime(hint)
+        }
+        if snapshot.isFinished {
+            clearActiveInteractiveSessionID(sessionID)
+        }
+        return snapshot
+    }
+
+    func sendInteractiveInput(sessionID: String, input: String) async throws -> PythonInteractiveSessionSnapshot {
+        guard let snapshot = await EmbeddedCPythonRuntime.shared.sendInteractiveInput(
+            sessionID: sessionID,
+            input: input
+        ) else {
+            let hint = await EmbeddedCPythonRuntime.shared.statusHint()
+            throw PythonExecutionError.runtime(hint)
+        }
+        if snapshot.isFinished {
+            clearActiveInteractiveSessionID(sessionID)
+        }
+        return snapshot
+    }
+
+    func stopInteractiveSession(sessionID: String) async -> PythonInteractiveSessionSnapshot? {
+        let snapshot = await EmbeddedCPythonRuntime.shared.stopInteractiveSession(sessionID: sessionID)
+        clearActiveInteractiveSessionID(sessionID)
+        return snapshot
+    }
+
     private func shouldSuggestEmbeddedRuntime(for code: String) -> Bool {
         let lowered = code.lowercased()
         let markers = [
@@ -393,6 +456,26 @@ final class PythonExecutionService {
                 resumeBox.resumeIfNeeded(with: .timedOut)
             }
         }
+    }
+
+    private func currentInteractiveSessionID() -> String? {
+        interactiveSessionLock.lock()
+        defer { interactiveSessionLock.unlock() }
+        return activeInteractiveSessionID
+    }
+
+    private func setActiveInteractiveSessionID(_ value: String?) {
+        interactiveSessionLock.lock()
+        activeInteractiveSessionID = value
+        interactiveSessionLock.unlock()
+    }
+
+    private func clearActiveInteractiveSessionID(_ value: String) {
+        interactiveSessionLock.lock()
+        if activeInteractiveSessionID == value {
+            activeInteractiveSessionID = nil
+        }
+        interactiveSessionLock.unlock()
     }
 }
 

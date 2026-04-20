@@ -27,7 +27,6 @@ struct MessageBubbleView: View {
     @State private var activeImagePreview: ImagePreviewPayload?
     @State private var activeVideoPreview: VideoPreviewPayload?
     @State private var pendingPythonRun: PendingPythonRun?
-    @State private var pythonStdinDraft = ""
     @State private var waitingDotPulse = false
     @State private var frontendProgressPulse = false
     @State private var isGeneratingPPT = false
@@ -1090,7 +1089,9 @@ struct MessageBubbleView: View {
 
     private func requestPythonRun(_ code: String, token: String) {
         if needsInteractiveInput(code) {
-            pythonStdinDraft = ""
+            runningCodeToken = token
+            codeRunErrors[token] = nil
+            codeRunOutputs[token] = nil
             pendingPythonRun = PendingPythonRun(token: token, code: code)
             return
         }
@@ -1149,6 +1150,9 @@ struct MessageBubbleView: View {
     }
 
     private func stopPythonRun(token: String) {
+        if pendingPythonRun?.token == token {
+            pendingPythonRun = nil
+        }
         pythonRunTasks[token]?.cancel()
         pythonRunTasks[token] = nil
         if runningCodeToken == token {
@@ -1172,42 +1176,38 @@ struct MessageBubbleView: View {
     }
 
     private func pythonInputSheet(payload: PendingPythonRun) -> some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("检测到代码包含 input()。每行对应一次输入，按顺序提供给程序。")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-
-                TextEditor(text: $pythonStdinDraft)
-                    .font(.system(.body, design: .monospaced))
-                    .frame(minHeight: 220)
-                    .padding(8)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color(.secondarySystemBackground))
-                    )
-
-                Spacer(minLength: 0)
-            }
-            .padding(16)
-            .navigationTitle("Python 输入")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("取消") {
-                        pendingPythonRun = nil
+        InteractivePythonSessionSheet(
+            payload: payload,
+            onClose: { snapshot, wasStopped in
+                if let snapshot {
+                    let rendered = snapshot.exitCode == 0
+                        ? snapshot.output
+                        : "\(snapshot.output)\n\n[退出码 \(snapshot.exitCode ?? 1)]"
+                    if snapshot.exitCode == 0 {
+                        codeRunOutputs[payload.token] = rendered
+                        codeRunErrors[payload.token] = nil
+                    } else {
+                        codeRunOutputs[payload.token] = nil
+                        codeRunErrors[payload.token] = rendered
                     }
+                    if !wasStopped && snapshot.exitCode == 0 {
+                        feedback(.success, "代码运行完成")
+                    } else {
+                        feedback(.light, wasStopped ? "已结束运行" : "代码运行失败")
+                    }
+                } else if wasStopped {
+                    codeRunErrors[payload.token] = "运行已结束。"
+                    feedback(.light, "已结束运行")
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("运行") {
-                        let input = pythonStdinDraft.replacingOccurrences(of: "\r\n", with: "\n")
-                        let normalizedInput = input.isEmpty ? nil : input
-                        pendingPythonRun = nil
-                        runPythonCode(payload.code, token: payload.token, stdin: normalizedInput)
-                    }
+
+                if pendingPythonRun?.id == payload.id {
+                    pendingPythonRun = nil
+                }
+                if runningCodeToken == payload.token {
+                    runningCodeToken = nil
                 }
             }
-        }
+        )
     }
 
     private var canGenerateFrontendProject: Bool {
@@ -2488,6 +2488,335 @@ private struct PendingPythonRun: Identifiable {
     let id = UUID()
     let token: String
     let code: String
+}
+
+private struct InteractivePythonSessionSheet: View {
+    let payload: PendingPythonRun
+    let onClose: (PythonInteractiveSessionSnapshot?, Bool) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @FocusState private var inputFocused: Bool
+
+    @State private var snapshot: PythonInteractiveSessionSnapshot?
+    @State private var finalSnapshot: PythonInteractiveSessionSnapshot?
+    @State private var inputText = ""
+    @State private var isStarting = true
+    @State private var isSending = false
+    @State private var sessionError: String?
+    @State private var pollTask: Task<Void, Never>?
+    @State private var didReportClose = false
+    @State private var wasStopped = false
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 0) {
+                header
+
+                Divider()
+                    .overlay(Color.white.opacity(0.12))
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        if let sessionError {
+                            Text(sessionError)
+                                .font(.system(size: 15, weight: .medium, design: .monospaced))
+                                .foregroundStyle(Color.red.opacity(0.92))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+
+                        if let outputText = currentOutput, !outputText.isEmpty {
+                            Text(outputText)
+                                .font(.system(size: 16, weight: .medium, design: .monospaced))
+                                .foregroundStyle(Color.white.opacity(0.94))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                        } else if isStarting {
+                            HStack(spacing: 10) {
+                                ProgressView()
+                                    .tint(.white)
+                                Text("正在启动交互式 Python 会话…")
+                                    .font(.system(size: 15, weight: .medium))
+                                    .foregroundStyle(Color.white.opacity(0.72))
+                            }
+                        } else {
+                            Text("等待程序输出…")
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundStyle(Color.white.opacity(0.54))
+                        }
+                    }
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(Color.black.opacity(0.26))
+                )
+                .padding(.horizontal, 16)
+                .padding(.top, 18)
+
+                Spacer(minLength: 0)
+
+                inputPanel
+            }
+            .background(Color(red: 0.16, green: 0.17, blue: 0.20).ignoresSafeArea())
+            .toolbar(.hidden, for: .navigationBar)
+            .interactiveDismissDisabled(true)
+            .task {
+                await startSessionIfNeeded()
+            }
+            .onDisappear {
+                pollTask?.cancel()
+                reportCloseIfNeeded()
+            }
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 10) {
+                    Text("Running Python")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(.white)
+
+                    if isSessionRunning {
+                        ProgressView()
+                            .scaleEffect(0.82)
+                            .tint(Color(red: 0.63, green: 0.78, blue: 1.0))
+                    }
+                }
+
+                Text(statusText)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Color.white.opacity(0.6))
+            }
+
+            Spacer(minLength: 0)
+
+            if isSessionRunning {
+                Button {
+                    Task { await stopSession(shouldDismiss: false) }
+                } label: {
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 34, height: 34)
+                        .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
+
+            Button {
+                Task { await closeSheet() }
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 34, height: 34)
+                    .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 18)
+        .padding(.bottom, 14)
+    }
+
+    private var inputPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(isWaitingForInput ? ">>> Input" : "程序运行中")
+                .font(.system(size: 15, weight: .medium, design: .monospaced))
+                .foregroundStyle(Color.white.opacity(isWaitingForInput ? 0.92 : 0.5))
+
+            HStack(spacing: 10) {
+                TextField(
+                    isWaitingForInput ? "输入后回车发送" : "等待程序请求输入…",
+                    text: $inputText
+                )
+                .textFieldStyle(.plain)
+                .font(.system(size: 18, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white)
+                .submitLabel(.send)
+                .focused($inputFocused)
+                .disabled(!isWaitingForInput || isSending)
+                .onSubmit {
+                    submitInput()
+                }
+
+                Button("发送") {
+                    submitInput()
+                }
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(canSubmitInput ? Color.black : Color.white.opacity(0.42))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(canSubmitInput ? Color.white : Color.white.opacity(0.08))
+                )
+                .disabled(!canSubmitInput)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.black.opacity(0.22))
+            )
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 10)
+        .padding(.bottom, 26)
+        .background(Color(red: 0.16, green: 0.17, blue: 0.20))
+    }
+
+    private var currentOutput: String? {
+        let text = (snapshot?.output ?? finalSnapshot?.output ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
+    }
+
+    private var isSessionRunning: Bool {
+        if isStarting { return true }
+        if let snapshot {
+            return !snapshot.isFinished
+        }
+        return false
+    }
+
+    private var isWaitingForInput: Bool {
+        snapshot?.isWaitingForInput == true && snapshot?.isFinished == false
+    }
+
+    private var canSubmitInput: Bool {
+        isWaitingForInput && !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSending
+    }
+
+    private var statusText: String {
+        if let sessionError {
+            return sessionError
+        }
+        if isStarting {
+            return "初始化运行环境…"
+        }
+        if let snapshot {
+            if snapshot.isFinished {
+                return snapshot.exitCode == 0 ? "运行完成" : "运行结束，退出码 \(snapshot.exitCode ?? 1)"
+            }
+            if snapshot.isWaitingForInput {
+                return "等待输入…"
+            }
+            return "脚本执行中…"
+        }
+        return "准备中…"
+    }
+
+    private func startSessionIfNeeded() async {
+        guard snapshot == nil, finalSnapshot == nil, sessionError == nil else { return }
+        do {
+            let started = try await PythonExecutionService.shared.startInteractiveSession(code: payload.code)
+            await MainActor.run {
+                snapshot = started
+                finalSnapshot = started
+                isStarting = false
+                if started.isWaitingForInput {
+                    inputFocused = true
+                }
+                startPolling(sessionID: started.sessionID)
+            }
+        } catch {
+            await MainActor.run {
+                sessionError = error.localizedDescription
+                isStarting = false
+            }
+        }
+    }
+
+    private func startPolling(sessionID: String) {
+        pollTask?.cancel()
+        pollTask = Task {
+            while !Task.isCancelled {
+                do {
+                    let next = try await PythonExecutionService.shared.pollInteractiveSession(sessionID: sessionID)
+                    await MainActor.run {
+                        snapshot = next
+                        finalSnapshot = next
+                        if next.isWaitingForInput {
+                            inputFocused = true
+                        }
+                    }
+                    if next.isFinished {
+                        break
+                    }
+                } catch {
+                    await MainActor.run {
+                        sessionError = error.localizedDescription
+                    }
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+        }
+    }
+
+    private func submitInput() {
+        guard canSubmitInput, let sessionID = snapshot?.sessionID else { return }
+        let value = inputText
+        inputText = ""
+        isSending = true
+
+        Task {
+            do {
+                let next = try await PythonExecutionService.shared.sendInteractiveInput(
+                    sessionID: sessionID,
+                    input: value
+                )
+                await MainActor.run {
+                    snapshot = next
+                    finalSnapshot = next
+                    isSending = false
+                }
+            } catch {
+                await MainActor.run {
+                    sessionError = error.localizedDescription
+                    isSending = false
+                }
+            }
+        }
+    }
+
+    private func stopSession(shouldDismiss: Bool) async {
+        wasStopped = true
+        pollTask?.cancel()
+        if let sessionID = snapshot?.sessionID {
+            let stopped = await PythonExecutionService.shared.stopInteractiveSession(sessionID: sessionID)
+            await MainActor.run {
+                if let stopped {
+                    snapshot = stopped
+                    finalSnapshot = stopped
+                }
+            }
+        }
+        if shouldDismiss {
+            await MainActor.run {
+                dismiss()
+            }
+        }
+    }
+
+    private func closeSheet() async {
+        if isSessionRunning {
+            await stopSession(shouldDismiss: true)
+            return
+        }
+        await MainActor.run {
+            dismiss()
+        }
+    }
+
+    private func reportCloseIfNeeded() {
+        guard !didReportClose else { return }
+        didReportClose = true
+        onClose(finalSnapshot ?? snapshot, wasStopped)
+    }
 }
 
 private enum AssistantReaction {

@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 @testable import ChatApp
 
@@ -164,5 +165,50 @@ final class PythonExecutionServiceTests: XCTestCase {
         } catch {
             XCTFail("Unexpected error: \(error)")
         }
+    }
+
+    func testInteractiveSessionSupportsRealtimeInput() async throws {
+        let service = PythonExecutionService()
+        let code = """
+        print("ready")
+        name = input("请输入名字：")
+        print("hello " + name)
+        """
+
+        let started = try await service.startInteractiveSession(code: code)
+        XCTAssertFalse(started.sessionID.isEmpty)
+
+        let waiting = try await waitForInteractiveState(service: service, sessionID: started.sessionID) { snapshot in
+            snapshot.isWaitingForInput || snapshot.isFinished
+        }
+        XCTAssertTrue(waiting.output.contains("ready"))
+
+        _ = try await service.sendInteractiveInput(sessionID: started.sessionID, input: "IEXA")
+
+        let finished = try await waitForInteractiveState(service: service, sessionID: started.sessionID) { snapshot in
+            snapshot.isFinished
+        }
+        XCTAssertEqual(finished.exitCode, 0)
+        XCTAssertTrue(finished.output.contains("hello IEXA"))
+    }
+
+    private func waitForInteractiveState(
+        service: PythonExecutionService,
+        sessionID: String,
+        timeoutNanoseconds: UInt64 = 8_000_000_000,
+        predicate: @escaping (PythonInteractiveSessionSnapshot) -> Bool
+    ) async throws -> PythonInteractiveSessionSnapshot {
+        let start = DispatchTime.now().uptimeNanoseconds
+        var latest = try await service.pollInteractiveSession(sessionID: sessionID)
+        while !predicate(latest) {
+            let now = DispatchTime.now().uptimeNanoseconds
+            if now - start > timeoutNanoseconds {
+                XCTFail("Timed out waiting for interactive Python session state")
+                return latest
+            }
+            try await Task.sleep(nanoseconds: 200_000_000)
+            latest = try await service.pollInteractiveSession(sessionID: sessionID)
+        }
+        return latest
     }
 }
