@@ -204,26 +204,33 @@ final class SpeechPlaybackService: NSObject, ObservableObject, @preconcurrency A
     private func preferredVoice(for text: String, preset: ReplySpeechVoicePreset) -> AVSpeechSynthesisVoice? {
         let availableVoices = AVSpeechSynthesisVoice.speechVoices()
         if containsChinese(text) {
+            let preferredLanguages = preferredChineseLanguageOrder(for: preset)
             let preferred = availableVoices
                 .filter { voice in
                     let language = voice.language.lowercased()
                     return language.hasPrefix("zh-cn")
                         || language.contains("hans")
+                        || language.hasPrefix("zh-tw")
+                        || language.hasPrefix("zh-hk")
                         || language.hasPrefix("zh")
                 }
                 .sorted { lhs, rhs in
-                    voiceScore(lhs, prefersChinese: true, preset: preset) > voiceScore(rhs, prefersChinese: true, preset: preset)
+                    voiceScore(lhs, prefersChinese: true, preset: preset, preferredLanguages: preferredLanguages)
+                        > voiceScore(rhs, prefersChinese: true, preset: preset, preferredLanguages: preferredLanguages)
                 }
                 .first
             return preferred
                 ?? AVSpeechSynthesisVoice(language: "zh-CN")
                 ?? AVSpeechSynthesisVoice(language: "zh-Hans")
+                ?? AVSpeechSynthesisVoice(language: "zh-HK")
                 ?? AVSpeechSynthesisVoice(language: "zh-TW")
         }
+        let preferredLanguages = preferredEnglishLanguageOrder(for: preset)
         let preferred = availableVoices
             .filter { $0.language.lowercased().hasPrefix("en") }
             .sorted { lhs, rhs in
-                voiceScore(lhs, prefersChinese: false, preset: preset) > voiceScore(rhs, prefersChinese: false, preset: preset)
+                voiceScore(lhs, prefersChinese: false, preset: preset, preferredLanguages: preferredLanguages)
+                    > voiceScore(rhs, prefersChinese: false, preset: preset, preferredLanguages: preferredLanguages)
             }
             .first
         return preferred
@@ -236,43 +243,56 @@ final class SpeechPlaybackService: NSObject, ObservableObject, @preconcurrency A
         switch preset {
         case .systemNatural:
             return isChinese
-                ? VoiceStyle(rate: 0.47, pitchMultiplier: 1.08, volume: 1.0, preUtteranceDelay: 0, postUtteranceDelay: 0.04)
-                : VoiceStyle(rate: 0.49, pitchMultiplier: 1.03, volume: 1.0, preUtteranceDelay: 0, postUtteranceDelay: 0.03)
+                ? VoiceStyle(rate: 0.45, pitchMultiplier: 1.02, volume: 1.0, preUtteranceDelay: 0, postUtteranceDelay: 0.03)
+                : VoiceStyle(rate: 0.47, pitchMultiplier: 1.0, volume: 1.0, preUtteranceDelay: 0, postUtteranceDelay: 0.03)
         case .livelyFemale:
             return isChinese
-                ? VoiceStyle(rate: 0.49, pitchMultiplier: 1.16, volume: 1.0, preUtteranceDelay: 0, postUtteranceDelay: 0.03)
-                : VoiceStyle(rate: 0.51, pitchMultiplier: 1.12, volume: 1.0, preUtteranceDelay: 0, postUtteranceDelay: 0.02)
+                ? VoiceStyle(rate: 0.56, pitchMultiplier: 1.30, volume: 1.0, preUtteranceDelay: 0, postUtteranceDelay: 0.01)
+                : VoiceStyle(rate: 0.58, pitchMultiplier: 1.22, volume: 1.0, preUtteranceDelay: 0, postUtteranceDelay: 0.01)
         case .warmNarrator:
             return isChinese
-                ? VoiceStyle(rate: 0.43, pitchMultiplier: 0.96, volume: 1.0, preUtteranceDelay: 0, postUtteranceDelay: 0.05)
-                : VoiceStyle(rate: 0.45, pitchMultiplier: 0.95, volume: 1.0, preUtteranceDelay: 0, postUtteranceDelay: 0.04)
+                ? VoiceStyle(rate: 0.37, pitchMultiplier: 0.82, volume: 1.0, preUtteranceDelay: 0.02, postUtteranceDelay: 0.08)
+                : VoiceStyle(rate: 0.39, pitchMultiplier: 0.84, volume: 1.0, preUtteranceDelay: 0.02, postUtteranceDelay: 0.06)
         case .doubaoLike:
             return isChinese
-                ? VoiceStyle(rate: 0.50, pitchMultiplier: 1.14, volume: 1.0, preUtteranceDelay: 0, postUtteranceDelay: 0.02)
-                : VoiceStyle(rate: 0.50, pitchMultiplier: 1.08, volume: 1.0, preUtteranceDelay: 0, postUtteranceDelay: 0.02)
+                ? VoiceStyle(rate: 0.54, pitchMultiplier: 1.24, volume: 1.0, preUtteranceDelay: 0, postUtteranceDelay: 0.01)
+                : VoiceStyle(rate: 0.55, pitchMultiplier: 1.16, volume: 1.0, preUtteranceDelay: 0, postUtteranceDelay: 0.01)
         case .xiaoduLike:
             return isChinese
-                ? VoiceStyle(rate: 0.48, pitchMultiplier: 1.04, volume: 1.0, preUtteranceDelay: 0, postUtteranceDelay: 0.02)
-                : VoiceStyle(rate: 0.48, pitchMultiplier: 1.0, volume: 1.0, preUtteranceDelay: 0, postUtteranceDelay: 0.02)
+                ? VoiceStyle(rate: 0.50, pitchMultiplier: 1.10, volume: 1.0, preUtteranceDelay: 0, postUtteranceDelay: 0.01)
+                : VoiceStyle(rate: 0.51, pitchMultiplier: 1.05, volume: 1.0, preUtteranceDelay: 0, postUtteranceDelay: 0.01)
         }
     }
 
-    private func voiceScore(_ voice: AVSpeechSynthesisVoice, prefersChinese: Bool, preset: ReplySpeechVoicePreset) -> Int {
+    private func voiceScore(
+        _ voice: AVSpeechSynthesisVoice,
+        prefersChinese: Bool,
+        preset: ReplySpeechVoicePreset,
+        preferredLanguages: [String]
+    ) -> Int {
         let language = voice.language.lowercased()
         let name = voice.name.lowercased()
         let identifier = voice.identifier.lowercased()
         var score = 0
 
+        if let languageRank = preferredLanguages.firstIndex(where: { language.hasPrefix($0) || language.contains($0) }) {
+            score += max(0, 150 - languageRank * 24)
+        }
+
         if prefersChinese {
             if language.hasPrefix("zh-cn") { score += 120 }
             if language.contains("hans") { score += 80 }
             if language.hasPrefix("zh") { score += 40 }
-            if name.contains("siri") || identifier.contains("siri") { score += 60 }
+            if preset == .systemNatural || preset == .warmNarrator {
+                if name.contains("siri") || identifier.contains("siri") { score += 60 }
+            }
             if name.contains("tingting") || name.contains("meijia") || name.contains("xiaoxiao") { score += 24 }
         } else {
             if language.hasPrefix("en-us") { score += 120 }
             if language.hasPrefix("en") { score += 40 }
-            if name.contains("siri") || identifier.contains("siri") { score += 60 }
+            if preset == .systemNatural || preset == .warmNarrator {
+                if name.contains("siri") || identifier.contains("siri") { score += 60 }
+            }
             if name.contains("ava") || name.contains("samantha") || name.contains("allison") { score += 24 }
         }
 
@@ -282,20 +302,60 @@ final class SpeechPlaybackService: NSObject, ObservableObject, @preconcurrency A
         switch preset {
         case .systemNatural:
             break
-        case .livelyFemale, .doubaoLike:
-            if name.contains("tingting") || name.contains("siri") || name.contains("xiaoxiao") || name.contains("mei") {
-                score += 36
+        case .livelyFemale, .doubaoLike, .xiaoduLike:
+            if isLikelyChineseFemaleVoice(name: name, identifier: identifier) {
+                score += 260
+            }
+            if name.contains("siri") || identifier.contains("siri") {
+                score -= 120
             }
         case .warmNarrator:
             if name.contains("sin-ji") || name.contains("yating") || name.contains("alex") || name.contains("daniel") {
                 score += 28
             }
-        case .xiaoduLike:
-            if name.contains("tingting") || name.contains("siri") || name.contains("yating") || name.contains("xiaobei") {
-                score += 24
-            }
         }
         return score
+    }
+
+    private func isLikelyChineseFemaleVoice(name: String, identifier: String) -> Bool {
+        let joined = name + " " + identifier
+        let markers = [
+            "tingting", "ting-ting",
+            "meijia", "mei-jia",
+            "xiaoxiao", "xiao-xiao",
+            "xiaoyi", "xiao-yi",
+            "xiaoxuan", "xiao-xuan",
+            "jia", "mei"
+        ]
+        return markers.contains { joined.contains($0) }
+    }
+
+    private func preferredChineseLanguageOrder(for preset: ReplySpeechVoicePreset) -> [String] {
+        switch preset {
+        case .systemNatural:
+            return ["zh-cn", "hans", "zh-hk", "zh-tw", "zh"]
+        case .livelyFemale:
+            return ["zh-cn", "zh-tw", "hans", "zh-hk", "zh"]
+        case .warmNarrator:
+            return ["zh-hk", "zh-tw", "zh-cn", "hans", "zh"]
+        case .doubaoLike:
+            return ["zh-cn", "hans", "zh-tw", "zh-hk", "zh"]
+        case .xiaoduLike:
+            return ["zh-cn", "zh-hk", "hans", "zh-tw", "zh"]
+        }
+    }
+
+    private func preferredEnglishLanguageOrder(for preset: ReplySpeechVoicePreset) -> [String] {
+        switch preset {
+        case .systemNatural:
+            return ["en-us", "en-gb", "en"]
+        case .livelyFemale, .doubaoLike:
+            return ["en-us", "en-au", "en-gb", "en"]
+        case .warmNarrator:
+            return ["en-gb", "en-us", "en"]
+        case .xiaoduLike:
+            return ["en-us", "en-gb", "en"]
+        }
     }
 
     private func containsChinese(_ text: String) -> Bool {
