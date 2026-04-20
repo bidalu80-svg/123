@@ -78,6 +78,9 @@ final class WordGenerationService {
     private init() {}
 
     static func canGenerate(from message: ChatMessage) -> Bool {
+        let source = mergedSourceText(from: message)
+        guard hasWordSignals(in: source) else { return false }
+
         let blocks = extractBlocks(from: message)
         guard !blocks.isEmpty else { return false }
 
@@ -98,11 +101,7 @@ final class WordGenerationService {
             throw WordGenerationError.noContent
         }
 
-        guard let templateURL = Bundle.main.url(
-            forResource: "template",
-            withExtension: "docx",
-            subdirectory: "OfficeTemplates"
-        ) else {
+        guard let templateURL = Self.resolveTemplateURL() else {
             throw WordGenerationError.missingTemplateResource
         }
 
@@ -405,6 +404,54 @@ final class WordGenerationService {
         guard trimmed.count > limit else { return trimmed }
         let index = trimmed.index(trimmed.startIndex, offsetBy: limit)
         return String(trimmed[..<index]).trimmingCharacters(in: .whitespacesAndNewlines) + "…"
+    }
+
+    private static func hasWordSignals(in rawText: String) -> Bool {
+        let text = rawText.replacingOccurrences(of: "\r\n", with: "\n")
+        let lowered = text.lowercased()
+
+        let keywords = [
+            "word", "docx", "文档", "报告", "纪要", "说明书", "简历", "合同", "proposal"
+        ]
+        if keywords.contains(where: { lowered.contains($0) }) {
+            return true
+        }
+
+        if text.range(of: #"(?m)^#{1,6}\s+\S+"#, options: .regularExpression) != nil {
+            return true
+        }
+        if text.range(of: #"(?m)^\s*[-*•·●▪◦]\s+\S+"#, options: .regularExpression) != nil {
+            return true
+        }
+        if text.range(of: #"(?m)^\s*\d+[\.\)、]\s+\S+"#, options: .regularExpression) != nil {
+            return true
+        }
+        return false
+    }
+
+    private static func resolveTemplateURL() -> URL? {
+        let bundle = Bundle.main
+        if let inSubdir = bundle.url(
+            forResource: "template",
+            withExtension: "docx",
+            subdirectory: "OfficeTemplates"
+        ) {
+            return inSubdir
+        }
+        if let inRoot = bundle.url(forResource: "template", withExtension: "docx") {
+            return inRoot
+        }
+
+        if let resourceURL = bundle.resourceURL {
+            let candidates = [
+                resourceURL.appendingPathComponent("OfficeTemplates/template.docx"),
+                resourceURL.appendingPathComponent("template.docx")
+            ]
+            for url in candidates where FileManager.default.fileExists(atPath: url.path) {
+                return url
+            }
+        }
+        return nil
     }
 
     private static let pythonGeneratorScript = #"""

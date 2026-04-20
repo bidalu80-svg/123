@@ -81,9 +81,8 @@ final class PPTGenerationService {
     static func canGenerate(from message: ChatMessage) -> Bool {
         guard let outline = extractOutline(from: message) else { return false }
         let source = mergedOutlineText(from: message)
-        return hasOutlineSignals(in: source)
-            || outline.slides.count >= 2
-            || (outline.slides.first?.bullets.count ?? 0) >= 2
+        guard hasOutlineSignals(in: source) else { return false }
+        return !outline.slides.isEmpty
     }
 
     func generate(from message: ChatMessage) async throws -> PPTGenerationResult {
@@ -91,11 +90,7 @@ final class PPTGenerationService {
             throw PPTGenerationError.noOutlineContent
         }
 
-        guard let templateURL = Bundle.main.url(
-            forResource: "template",
-            withExtension: "pptx",
-            subdirectory: "PPTTemplate"
-        ) else {
+        guard let templateURL = Self.resolveTemplateURL() else {
             throw PPTGenerationError.missingTemplateResource
         }
 
@@ -271,6 +266,31 @@ final class PPTGenerationService {
 
         guard let outputPath, !outputPath.isEmpty else { return nil }
         return PythonBuildAck(outputPath: outputPath, slideCount: max(1, slideCount ?? 1))
+    }
+
+    private static func resolveTemplateURL() -> URL? {
+        let bundle = Bundle.main
+        if let inSubdir = bundle.url(
+            forResource: "template",
+            withExtension: "pptx",
+            subdirectory: "PPTTemplate"
+        ) {
+            return inSubdir
+        }
+        if let inRoot = bundle.url(forResource: "template", withExtension: "pptx") {
+            return inRoot
+        }
+
+        if let resourceURL = bundle.resourceURL {
+            let candidates = [
+                resourceURL.appendingPathComponent("PPTTemplate/template.pptx"),
+                resourceURL.appendingPathComponent("template.pptx")
+            ]
+            for url in candidates where FileManager.default.fileExists(atPath: url.path) {
+                return url
+            }
+        }
+        return nil
     }
 
     private func makeOutputURL(deckTitle: String) throws -> URL {

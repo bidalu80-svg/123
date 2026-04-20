@@ -1181,7 +1181,7 @@ struct MessageBubbleView: View {
     }
 
     private var shouldShowPPTCard: Bool {
-        canGeneratePPT || generatedPPTPayload != nil
+        generatedPPTPayload != nil
     }
 
     private var canGenerateWord: Bool {
@@ -1192,7 +1192,7 @@ struct MessageBubbleView: View {
     }
 
     private var shouldShowWordCard: Bool {
-        canGenerateWord || generatedWordPayload != nil
+        generatedWordPayload != nil
     }
 
     private var canGenerateExcel: Bool {
@@ -1203,7 +1203,7 @@ struct MessageBubbleView: View {
     }
 
     private var shouldShowExcelCard: Bool {
-        canGenerateExcel || generatedExcelPayload != nil
+        generatedExcelPayload != nil
     }
 
     private var pptGenerationCard: some View {

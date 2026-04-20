@@ -85,11 +85,7 @@ final class ExcelGenerationService {
             throw ExcelGenerationError.noTabularContent
         }
 
-        guard let templateURL = Bundle.main.url(
-            forResource: "template",
-            withExtension: "xlsx",
-            subdirectory: "OfficeTemplates"
-        ) else {
+        guard let templateURL = Self.resolveTemplateURL() else {
             throw ExcelGenerationError.missingTemplateResource
         }
 
@@ -241,6 +237,31 @@ final class ExcelGenerationService {
         let stamp = formatter.string(from: Date())
         let suffix = UUID().uuidString.prefix(6)
         return folder.appendingPathComponent("table-\(stamp)-\(suffix).xlsx", isDirectory: false)
+    }
+
+    private static func resolveTemplateURL() -> URL? {
+        let bundle = Bundle.main
+        if let inSubdir = bundle.url(
+            forResource: "template",
+            withExtension: "xlsx",
+            subdirectory: "OfficeTemplates"
+        ) {
+            return inSubdir
+        }
+        if let inRoot = bundle.url(forResource: "template", withExtension: "xlsx") {
+            return inRoot
+        }
+
+        if let resourceURL = bundle.resourceURL {
+            let candidates = [
+                resourceURL.appendingPathComponent("OfficeTemplates/template.xlsx"),
+                resourceURL.appendingPathComponent("template.xlsx")
+            ]
+            for url in candidates where FileManager.default.fileExists(atPath: url.path) {
+                return url
+            }
+        }
+        return nil
     }
 
     private func cleanupOldFiles(in directoryURL: URL) {
