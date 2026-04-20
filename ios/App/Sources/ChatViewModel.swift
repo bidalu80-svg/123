@@ -457,11 +457,13 @@ final class ChatViewModel: ObservableObject {
     }
 
     func clearCurrentSessionMessages() {
+        resetConversationRuntimeState()
         if isPrivateMode {
             privateMessages.removeAll()
             messages = []
             statusMessage = "私密聊天已清空"
             appendLog("私密聊天：已清空当前私密消息。")
+            Task { await prewarmRealtimeContext() }
             return
         }
 
@@ -472,14 +474,17 @@ final class ChatViewModel: ObservableObject {
         persistSessions()
         statusMessage = "当前会话已清空"
         appendLog("UI 测试：当前会话消息已清空。")
+        Task { await prewarmRealtimeContext() }
     }
 
     func clearAllSessions() {
+        resetConversationRuntimeState()
         if isPrivateMode {
             privateMessages.removeAll()
             messages = []
             statusMessage = "私密聊天已清空"
             appendLog("私密聊天：已清空。")
+            Task { await prewarmRealtimeContext() }
             return
         }
 
@@ -491,14 +496,17 @@ final class ChatViewModel: ObservableObject {
         persistSessions()
         statusMessage = "全部会话已清空"
         appendLog("UI 测试：全部会话已清空。")
+        Task { await prewarmRealtimeContext() }
     }
 
     func createNewSession() {
+        resetConversationRuntimeState()
         let session = ChatSession(title: "新会话")
         sessions.insert(session, at: 0)
         currentSessionID = session.id
         messages = []
         persistSessions()
+        Task { await prewarmRealtimeContext() }
     }
 
     func selectSession(_ id: UUID) {
@@ -683,6 +691,23 @@ final class ChatViewModel: ObservableObject {
         let normalized = normalizedConfigForSave(config)
         guard normalized.realtimeContextEnabled else { return }
         await service.prewarmRealtimeContext(config: normalized)
+    }
+
+    private func resetConversationRuntimeState() {
+        flushAndStopActiveStreamingSession(applyRemaining: false)
+        inflightSendTask?.cancel()
+        inflightSendTask = nil
+        inflightTargetContext = nil
+        endBackgroundSendTask()
+        draftMessage = ""
+        draftImageAttachments = []
+        draftFileAttachment = nil
+        errorMessage = ""
+        if isSending {
+            appendLog("会话已重置：已取消上一轮发送并清空流式状态。")
+        }
+        isSending = false
+        chatState = .idle
     }
 
     private func updateCurrentModelAvailability() {
