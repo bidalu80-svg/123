@@ -43,6 +43,7 @@ struct ChatScreen: View {
     @State private var showInitialConfigSheet = false
     @State private var autoFrontendPreview: AutoFrontendPreviewPayload?
     @State private var lastAutoBuiltAssistantMessageID: UUID?
+    @State private var noFileDirectiveAssistantIDs: Set<UUID> = []
     @State private var composerMeasuredHeight: CGFloat = 0
     @State private var headerLeadingWidth: CGFloat = 36
     @State private var headerTrailingWidth: CGFloat = 108
@@ -120,6 +121,7 @@ struct ChatScreen: View {
                 seedAutoFrontendBuildCursor()
             } else {
                 lastAutoBuiltAssistantMessageID = nil
+                noFileDirectiveAssistantIDs.removeAll()
             }
         }
         .onPreferenceChange(ComposerHeightPreferenceKey.self) { newValue in
@@ -708,6 +710,10 @@ struct ChatScreen: View {
         lastAutoBuiltAssistantMessageID = viewModel.messages
             .last(where: { $0.role == .assistant })?
             .id
+        let currentAssistantIDs = Set(viewModel.messages.compactMap { message in
+            message.role == .assistant ? message.id : nil
+        })
+        noFileDirectiveAssistantIDs.formIntersection(currentAssistantIDs)
     }
 
     private func runAutoFrontendBuildIfNeeded(
@@ -726,6 +732,14 @@ struct ChatScreen: View {
         }
 
         lastAutoBuiltAssistantMessageID = latestAssistant.id
+
+        if shouldSkipAutoProjectBuild(for: latestAssistant, in: newMessages) {
+            noFileDirectiveAssistantIDs.insert(latestAssistant.id)
+            autoFrontendPreview = nil
+            viewModel.statusMessage = "已按要求仅展示代码（未生成项目文件）"
+            return
+        }
+        noFileDirectiveAssistantIDs.remove(latestAssistant.id)
 
         guard FrontendProjectBuilder.canGenerateProject(from: latestAssistant) else {
             return
@@ -753,6 +767,63 @@ struct ChatScreen: View {
             let reason = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             viewModel.statusMessage = "项目自动落盘失败：\(reason)"
         }
+    }
+
+    private func shouldSkipAutoProjectBuild(for assistant: ChatMessage, in messages: [ChatMessage]) -> Bool {
+        guard let index = messages.firstIndex(where: { $0.id == assistant.id }), index > 0 else {
+            return false
+        }
+        let prefix = messages[..<index]
+        guard let latestUser = prefix.last(where: { $0.role == .user }) else {
+            return false
+        }
+        return containsNoFileDirective(latestUser.content)
+    }
+
+    private func containsNoFileDirective(_ raw: String) -> Bool {
+        let normalized = raw
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+
+        guard !normalized.isEmpty else { return false }
+
+        let directiveMarkers = [
+            "不做成文件",
+            "不要做成文件",
+            "别做成文件",
+            "不要生成文件",
+            "别生成文件",
+            "不生成文件",
+            "不要落盘",
+            "别落盘",
+            "不落盘",
+            "不要写入文件",
+            "不要写入latest",
+            "只要代码",
+            "仅要代码",
+            "仅展示代码",
+            "只展示代码",
+            "不要项目",
+            "别做项目",
+            "不创建项目",
+            "不用项目结构",
+            "do not create file",
+            "do not create files",
+            "don't create file",
+            "don't create files",
+            "do not write file",
+            "do not write files",
+            "don't write file",
+            "don't write files",
+            "inline code only",
+            "just show code",
+            "code only",
+            "single snippet",
+            "no files"
+        ]
+
+        return directiveMarkers.contains { normalized.contains($0) }
     }
 
 
@@ -1148,6 +1219,7 @@ struct ChatScreen: View {
     private func frontendProgressDisplayMessage(for message: ChatMessage) -> ChatMessage? {
         guard shouldHideFrontendCodeInChat else { return nil }
         guard message.role == .assistant else { return nil }
+        guard !noFileDirectiveAssistantIDs.contains(message.id) else { return nil }
         guard !message.isImageGenerationPlaceholder, !message.isVideoGenerationPlaceholder else { return nil }
         guard let snapshot = FrontendProjectBuilder.chatProgressSnapshot(from: message) else { return nil }
 
@@ -1173,11 +1245,11 @@ struct ChatScreen: View {
     }
 
     private var shouldHideFrontendCodeInChat: Bool {
-        viewModel.config.endpointMode == .responses || viewModel.config.frontendAutoBuildEnabled
+        viewModel.config.frontendAutoBuildEnabled
     }
 
     private var shouldAutoBuildFrontendFromAssistantReply: Bool {
-        viewModel.config.endpointMode == .responses || viewModel.config.frontendAutoBuildEnabled
+        viewModel.config.frontendAutoBuildEnabled
     }
 
     private func renderWeight(for message: ChatMessage) -> Int {
