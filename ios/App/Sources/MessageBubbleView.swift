@@ -79,6 +79,7 @@ struct MessageBubbleView: View {
         }
         .sheet(item: $activePPTPreview) { payload in
             DocumentPreviewSheet(fileURL: payload.fileURL)
+                .presentationDragIndicator(.visible)
         }
         .sheet(item: $activeShareSheet) { payload in
             ShareSheet(activityItems: [payload.fileURL])
@@ -2318,26 +2319,62 @@ private struct DocumentPreviewSheet: View {
     @State private var showsShareSheet = false
 
     var body: some View {
-        NavigationStack {
-            DocumentPreviewController(fileURL: fileURL)
-                .navigationTitle(fileURL.lastPathComponent)
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button("关闭") {
-                            dismiss()
-                        }
+        DocumentPreviewController(fileURL: fileURL)
+            .ignoresSafeArea(edges: .bottom)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                previewToolbar
+            }
+            .background(Color(.systemBackground))
+            .overlay(alignment: .top) {
+                // Fallback close affordance when QuickLook navigation bar is swallowed by the preview controller.
+                HStack {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(10)
+                            .background(Color.black.opacity(0.55), in: Circle())
                     }
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("分享") {
-                            showsShareSheet = true
-                        }
-                    }
+                    .accessibilityLabel("关闭预览")
+                    .padding(.top, 10)
+                    .padding(.leading, 14)
+
+                    Spacer()
                 }
+            }
+            .interactiveDismissDisabled(false)
+            .sheet(isPresented: $showsShareSheet) {
+                ShareSheet(activityItems: [fileURL])
+            }
+    }
+
+    private var previewToolbar: some View {
+        HStack(spacing: 12) {
+            Button("关闭") {
+                dismiss()
+            }
+            .font(.subheadline.weight(.semibold))
+
+            Spacer(minLength: 8)
+
+            Text(fileURL.lastPathComponent)
+                .font(.footnote)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .foregroundStyle(.secondary)
+
+            Spacer(minLength: 8)
+
+            Button("分享") {
+                showsShareSheet = true
+            }
+            .font(.subheadline.weight(.semibold))
         }
-        .sheet(isPresented: $showsShareSheet) {
-            ShareSheet(activityItems: [fileURL])
-        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.thinMaterial)
     }
 }
 
