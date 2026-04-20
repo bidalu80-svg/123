@@ -2,6 +2,7 @@ import SwiftUI
 import UIKit
 import Photos
 import AVKit
+import QuickLook
 
 struct MessageBubbleView: View {
     let message: ChatMessage
@@ -27,6 +28,17 @@ struct MessageBubbleView: View {
     @State private var pythonStdinDraft = ""
     @State private var waitingDotPulse = false
     @State private var frontendProgressPulse = false
+    @State private var isGeneratingPPT = false
+    @State private var generatedPPTPayload: GeneratedPPTPayload?
+    @State private var isGeneratingWord = false
+    @State private var generatedWordPayload: GeneratedWordPayload?
+    @State private var isGeneratingExcel = false
+    @State private var generatedExcelPayload: GeneratedExcelPayload?
+    @State private var activePPTPreview: PPTPreviewPayload?
+    @State private var activeShareSheet: ShareSheetPayload?
+    @State private var pptGenerationTask: Task<Void, Never>?
+    @State private var wordGenerationTask: Task<Void, Never>?
+    @State private var excelGenerationTask: Task<Void, Never>?
     private let chatUIFont = UIFont(name: "PingFangSC-Medium", size: 16) ?? UIFont.systemFont(ofSize: 16, weight: .medium)
 
     var body: some View {
@@ -65,8 +77,20 @@ struct MessageBubbleView: View {
         .sheet(item: $pendingPythonRun) { payload in
             pythonInputSheet(payload: payload)
         }
+        .sheet(item: $activePPTPreview) { payload in
+            DocumentPreviewSheet(fileURL: payload.fileURL)
+        }
+        .sheet(item: $activeShareSheet) { payload in
+            ShareSheet(activityItems: [payload.fileURL])
+        }
         .onDisappear {
             cancelAllPythonRuns()
+            pptGenerationTask?.cancel()
+            pptGenerationTask = nil
+            wordGenerationTask?.cancel()
+            wordGenerationTask = nil
+            excelGenerationTask?.cancel()
+            excelGenerationTask = nil
         }
     }
 
@@ -178,6 +202,13 @@ struct MessageBubbleView: View {
                 .disabled(isBuildingFrontendProject)
             }
 
+            if canGeneratePPT {
+                iconActionButton(systemName: "doc.richtext", accessibilityLabel: "生成PPT") {
+                    generatePPTFile()
+                }
+                .disabled(isGeneratingPPT)
+            }
+
             Menu {
                 Button("复制全部", systemImage: "doc.on.doc") {
                     UIPasteboard.general.string = message.copyableText
@@ -198,6 +229,48 @@ struct MessageBubbleView: View {
                         generateFrontendProject(mode: .overwriteLatestProject)
                     }
                 }
+                if canGeneratePPT {
+                    Divider()
+                    Button("生成 PPT", systemImage: "doc.richtext") {
+                        generatePPTFile()
+                    }
+                    if let generatedPPTPayload {
+                        Button("查看 PPT", systemImage: "doc.text.magnifyingglass") {
+                            previewPPTFile(generatedPPTPayload)
+                        }
+                        Button("分享 PPT", systemImage: "square.and.arrow.up") {
+                            sharePPTFile(generatedPPTPayload)
+                        }
+                    }
+                }
+                if canGenerateWord {
+                    Divider()
+                    Button("生成 Word", systemImage: "doc.text") {
+                        generateWordFile()
+                    }
+                    if let generatedWordPayload {
+                        Button("查看 Word", systemImage: "doc.text.magnifyingglass") {
+                            previewWordFile(generatedWordPayload)
+                        }
+                        Button("分享 Word", systemImage: "square.and.arrow.up") {
+                            shareWordFile(generatedWordPayload)
+                        }
+                    }
+                }
+                if canGenerateExcel {
+                    Divider()
+                    Button("生成 Excel", systemImage: "tablecells") {
+                        generateExcelFile()
+                    }
+                    if let generatedExcelPayload {
+                        Button("查看 Excel", systemImage: "doc.text.magnifyingglass") {
+                            previewExcelFile(generatedExcelPayload)
+                        }
+                        Button("分享 Excel", systemImage: "square.and.arrow.up") {
+                            shareExcelFile(generatedExcelPayload)
+                        }
+                    }
+                }
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 17, weight: .regular))
@@ -206,7 +279,7 @@ struct MessageBubbleView: View {
             }
             .buttonStyle(MiniIconButtonStyle())
             .foregroundStyle(.secondary)
-            .disabled(isBuildingFrontendProject)
+            .disabled(isBuildingFrontendProject || isGeneratingPPT || isGeneratingWord || isGeneratingExcel)
 
             if let actionFeedback {
                 Text(actionFeedback)
@@ -217,6 +290,24 @@ struct MessageBubbleView: View {
 
             if isBuildingFrontendProject {
                 Text("生成中…")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            if isGeneratingPPT {
+                Text("PPT 生成中…")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            if isGeneratingWord {
+                Text("Word 生成中…")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            if isGeneratingExcel {
+                Text("Excel 生成中…")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
             }
@@ -318,16 +409,36 @@ struct MessageBubbleView: View {
             let segments = MessageContentParser.parse(message)
 
             if segments.isEmpty {
-                if let fallback = fallbackPlainText {
-                    selectableTextContent(fallback)
-                } else {
-                    Text("（空响应）")
-                        .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 10) {
+                    if let fallback = fallbackPlainText {
+                        selectableTextContent(fallback)
+                    } else {
+                        Text("（空响应）")
+                            .foregroundStyle(.secondary)
+                    }
+                    if shouldShowPPTCard {
+                        pptGenerationCard
+                    }
+                    if shouldShowWordCard {
+                        wordGenerationCard
+                    }
+                    if shouldShowExcelCard {
+                        excelGenerationCard
+                    }
                 }
             } else {
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
                         segmentView(segment, streamingTextAnimated: false)
+                    }
+                    if shouldShowPPTCard {
+                        pptGenerationCard
+                    }
+                    if shouldShowWordCard {
+                        wordGenerationCard
+                    }
+                    if shouldShowExcelCard {
+                        excelGenerationCard
                     }
                 }
             }
@@ -1062,6 +1173,258 @@ struct MessageBubbleView: View {
         message.role == .assistant && FrontendProjectBuilder.canGenerateProject(from: message)
     }
 
+    private var canGeneratePPT: Bool {
+        guard message.role == .assistant else { return false }
+        guard !message.isStreaming else { return false }
+        guard !message.isImageGenerationPlaceholder, !message.isVideoGenerationPlaceholder else { return false }
+        return PPTGenerationService.canGenerate(from: message)
+    }
+
+    private var shouldShowPPTCard: Bool {
+        canGeneratePPT || generatedPPTPayload != nil
+    }
+
+    private var canGenerateWord: Bool {
+        guard message.role == .assistant else { return false }
+        guard !message.isStreaming else { return false }
+        guard !message.isImageGenerationPlaceholder, !message.isVideoGenerationPlaceholder else { return false }
+        return WordGenerationService.canGenerate(from: message)
+    }
+
+    private var shouldShowWordCard: Bool {
+        canGenerateWord || generatedWordPayload != nil
+    }
+
+    private var canGenerateExcel: Bool {
+        guard message.role == .assistant else { return false }
+        guard !message.isStreaming else { return false }
+        guard !message.isImageGenerationPlaceholder, !message.isVideoGenerationPlaceholder else { return false }
+        return ExcelGenerationService.canGenerate(from: message)
+    }
+
+    private var shouldShowExcelCard: Bool {
+        canGenerateExcel || generatedExcelPayload != nil
+    }
+
+    private var pptGenerationCard: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 8) {
+                Image(systemName: "doc.richtext")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.blue)
+                Text("PPT 文件")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.primary)
+                Spacer(minLength: 0)
+            }
+
+            if let generatedPPTPayload {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(generatedPPTPayload.fileURL.lastPathComponent)
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+
+                    let size = fileSizeText(for: generatedPPTPayload.fileURL)
+                    Text("页数 \(generatedPPTPayload.slideCount) · \(size)")
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack(spacing: 8) {
+                    Button("查看") {
+                        previewPPTFile(generatedPPTPayload)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color(red: 0.08, green: 0.36, blue: 0.86))
+                    .font(.caption2)
+
+                    Button("分享") {
+                        sharePPTFile(generatedPPTPayload)
+                    }
+                    .buttonStyle(.bordered)
+                    .font(.caption2)
+
+                    Button(isGeneratingPPT ? "生成中…" : "重新生成") {
+                        generatePPTFile()
+                    }
+                    .buttonStyle(.bordered)
+                    .font(.caption2)
+                    .disabled(isGeneratingPPT || !canGeneratePPT)
+                }
+            } else {
+                Text("根据当前回复自动生成 .pptx 文件，并支持查看与分享。")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Button(isGeneratingPPT ? "PPT 生成中…" : "生成 PPT") {
+                    generatePPTFile()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Color(red: 0.08, green: 0.36, blue: 0.86))
+                .font(.caption2)
+                .disabled(isGeneratingPPT || !canGeneratePPT)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(.secondarySystemBackground))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.black.opacity(colorScheme == .dark ? 0.22 : 0.08), lineWidth: 0.8)
+        )
+    }
+
+    private var wordGenerationCard: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 8) {
+                Image(systemName: "doc.text")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.green)
+                Text("Word 文档")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.primary)
+                Spacer(minLength: 0)
+            }
+
+            if let generatedWordPayload {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(generatedWordPayload.fileURL.lastPathComponent)
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+
+                    let size = fileSizeText(for: generatedWordPayload.fileURL)
+                    Text("段落 \(generatedWordPayload.blockCount) · \(size)")
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack(spacing: 8) {
+                    Button("查看") {
+                        previewWordFile(generatedWordPayload)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color(red: 0.12, green: 0.52, blue: 0.32))
+                    .font(.caption2)
+
+                    Button("分享") {
+                        shareWordFile(generatedWordPayload)
+                    }
+                    .buttonStyle(.bordered)
+                    .font(.caption2)
+
+                    Button(isGeneratingWord ? "生成中…" : "重新生成") {
+                        generateWordFile()
+                    }
+                    .buttonStyle(.bordered)
+                    .font(.caption2)
+                    .disabled(isGeneratingWord || !canGenerateWord)
+                }
+            } else {
+                Text("根据当前回复自动生成 .docx 文档，并支持查看与分享。")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Button(isGeneratingWord ? "Word 生成中…" : "生成 Word") {
+                    generateWordFile()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Color(red: 0.12, green: 0.52, blue: 0.32))
+                .font(.caption2)
+                .disabled(isGeneratingWord || !canGenerateWord)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(.secondarySystemBackground))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.black.opacity(colorScheme == .dark ? 0.22 : 0.08), lineWidth: 0.8)
+        )
+    }
+
+    private var excelGenerationCard: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 8) {
+                Image(systemName: "tablecells")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.teal)
+                Text("Excel 表格")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.primary)
+                Spacer(minLength: 0)
+            }
+
+            if let generatedExcelPayload {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(generatedExcelPayload.fileURL.lastPathComponent)
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+
+                    let size = fileSizeText(for: generatedExcelPayload.fileURL)
+                    Text("工作表 \(generatedExcelPayload.sheetCount) · 数据行 \(generatedExcelPayload.rowCount) · \(size)")
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack(spacing: 8) {
+                    Button("查看") {
+                        previewExcelFile(generatedExcelPayload)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color(red: 0.08, green: 0.52, blue: 0.58))
+                    .font(.caption2)
+
+                    Button("分享") {
+                        shareExcelFile(generatedExcelPayload)
+                    }
+                    .buttonStyle(.bordered)
+                    .font(.caption2)
+
+                    Button(isGeneratingExcel ? "生成中…" : "重新生成") {
+                        generateExcelFile()
+                    }
+                    .buttonStyle(.bordered)
+                    .font(.caption2)
+                    .disabled(isGeneratingExcel || !canGenerateExcel)
+                }
+            } else {
+                Text("优先提取回复中的表格（Markdown/CSV/TSV）生成 .xlsx，并支持查看与分享。")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Button(isGeneratingExcel ? "Excel 生成中…" : "生成 Excel") {
+                    generateExcelFile()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Color(red: 0.08, green: 0.52, blue: 0.58))
+                .font(.caption2)
+                .disabled(isGeneratingExcel || !canGenerateExcel)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(.secondarySystemBackground))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.black.opacity(colorScheme == .dark ? 0.22 : 0.08), lineWidth: 0.8)
+        )
+    }
+
     private func generateFrontendProject(mode: FrontendProjectBuilder.BuildMode) {
         guard canGenerateFrontendProject else {
             saveFeedback = "当前消息没有可识别的项目代码。"
@@ -1102,6 +1465,204 @@ struct MessageBubbleView: View {
             let text = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             saveFeedback = text
         }
+    }
+
+    private func generatePPTFile() {
+        guard canGeneratePPT else {
+            saveFeedback = "当前消息没有可识别的 PPT 大纲内容。"
+            return
+        }
+        guard !isGeneratingPPT else { return }
+
+        let sourceMessage = message
+        isGeneratingPPT = true
+        pptGenerationTask?.cancel()
+
+        pptGenerationTask = Task {
+            defer {
+                Task { @MainActor in
+                    isGeneratingPPT = false
+                    pptGenerationTask = nil
+                }
+            }
+
+            do {
+                let result = try await PPTGenerationService.shared.generate(from: sourceMessage)
+                try Task.checkCancellation()
+                await MainActor.run {
+                    generatedPPTPayload = GeneratedPPTPayload(
+                        fileURL: result.fileURL,
+                        slideCount: result.slideCount
+                    )
+                    feedback(.success, "已生成 PPT（\(result.slideCount) 页）")
+                }
+            } catch is CancellationError {
+                await MainActor.run {
+                    feedback(.light, "已取消 PPT 生成")
+                }
+            } catch {
+                let messageText = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                await MainActor.run {
+                    saveFeedback = messageText
+                    feedback(.light, "PPT 生成失败")
+                }
+            }
+        }
+    }
+
+    private func generateWordFile() {
+        guard canGenerateWord else {
+            saveFeedback = "当前消息没有可识别的 Word 文档内容。"
+            return
+        }
+        guard !isGeneratingWord else { return }
+
+        let sourceMessage = message
+        isGeneratingWord = true
+        wordGenerationTask?.cancel()
+
+        wordGenerationTask = Task {
+            defer {
+                Task { @MainActor in
+                    isGeneratingWord = false
+                    wordGenerationTask = nil
+                }
+            }
+
+            do {
+                let result = try await WordGenerationService.shared.generate(from: sourceMessage)
+                try Task.checkCancellation()
+                await MainActor.run {
+                    generatedWordPayload = GeneratedWordPayload(
+                        fileURL: result.fileURL,
+                        blockCount: result.blockCount
+                    )
+                    feedback(.success, "已生成 Word（\(result.blockCount) 段）")
+                }
+            } catch is CancellationError {
+                await MainActor.run {
+                    feedback(.light, "已取消 Word 生成")
+                }
+            } catch {
+                let messageText = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                await MainActor.run {
+                    saveFeedback = messageText
+                    feedback(.light, "Word 生成失败")
+                }
+            }
+        }
+    }
+
+    private func generateExcelFile() {
+        guard canGenerateExcel else {
+            saveFeedback = "当前消息没有可识别的表格内容。"
+            return
+        }
+        guard !isGeneratingExcel else { return }
+
+        let sourceMessage = message
+        isGeneratingExcel = true
+        excelGenerationTask?.cancel()
+
+        excelGenerationTask = Task {
+            defer {
+                Task { @MainActor in
+                    isGeneratingExcel = false
+                    excelGenerationTask = nil
+                }
+            }
+
+            do {
+                let result = try await ExcelGenerationService.shared.generate(from: sourceMessage)
+                try Task.checkCancellation()
+                await MainActor.run {
+                    generatedExcelPayload = GeneratedExcelPayload(
+                        fileURL: result.fileURL,
+                        sheetCount: result.sheetCount,
+                        rowCount: result.rowCount
+                    )
+                    feedback(.success, "已生成 Excel（\(result.sheetCount) 表）")
+                }
+            } catch is CancellationError {
+                await MainActor.run {
+                    feedback(.light, "已取消 Excel 生成")
+                }
+            } catch {
+                let messageText = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                await MainActor.run {
+                    saveFeedback = messageText
+                    feedback(.light, "Excel 生成失败")
+                }
+            }
+        }
+    }
+
+    private func previewPPTFile(_ payload: GeneratedPPTPayload) {
+        previewGeneratedDocument(
+            at: payload.fileURL,
+            missingMessage: "PPT 文件不存在，请重新生成。"
+        )
+    }
+
+    private func previewWordFile(_ payload: GeneratedWordPayload) {
+        previewGeneratedDocument(
+            at: payload.fileURL,
+            missingMessage: "Word 文件不存在，请重新生成。"
+        )
+    }
+
+    private func previewExcelFile(_ payload: GeneratedExcelPayload) {
+        previewGeneratedDocument(
+            at: payload.fileURL,
+            missingMessage: "Excel 文件不存在，请重新生成。"
+        )
+    }
+
+    private func sharePPTFile(_ payload: GeneratedPPTPayload) {
+        shareGeneratedDocument(
+            at: payload.fileURL,
+            missingMessage: "PPT 文件不存在，请重新生成。"
+        )
+    }
+
+    private func shareWordFile(_ payload: GeneratedWordPayload) {
+        shareGeneratedDocument(
+            at: payload.fileURL,
+            missingMessage: "Word 文件不存在，请重新生成。"
+        )
+    }
+
+    private func shareExcelFile(_ payload: GeneratedExcelPayload) {
+        shareGeneratedDocument(
+            at: payload.fileURL,
+            missingMessage: "Excel 文件不存在，请重新生成。"
+        )
+    }
+
+    private func previewGeneratedDocument(at fileURL: URL, missingMessage: String) {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            saveFeedback = missingMessage
+            return
+        }
+        activePPTPreview = PPTPreviewPayload(fileURL: fileURL)
+    }
+
+    private func shareGeneratedDocument(at fileURL: URL, missingMessage: String) {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            saveFeedback = missingMessage
+            return
+        }
+        activeShareSheet = ShareSheetPayload(fileURL: fileURL)
+    }
+
+    private func fileSizeText(for url: URL) -> String {
+        let values = try? url.resourceValues(forKeys: [.fileSizeKey])
+        let bytes = values?.fileSize ?? 0
+        guard bytes > 0 else { return "大小未知" }
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useKB, .useMB]
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: Int64(bytes))
     }
 
     private func supportsHTMLPreview(language: String?, title: String, content: String) -> Bool {
@@ -1666,6 +2227,35 @@ private struct VideoPreviewPayload: Identifiable {
     let urlString: String
 }
 
+private struct GeneratedPPTPayload: Identifiable {
+    let id = UUID()
+    let fileURL: URL
+    let slideCount: Int
+}
+
+private struct GeneratedWordPayload: Identifiable {
+    let id = UUID()
+    let fileURL: URL
+    let blockCount: Int
+}
+
+private struct GeneratedExcelPayload: Identifiable {
+    let id = UUID()
+    let fileURL: URL
+    let sheetCount: Int
+    let rowCount: Int
+}
+
+private struct PPTPreviewPayload: Identifiable {
+    let id = UUID()
+    let fileURL: URL
+}
+
+private struct ShareSheetPayload: Identifiable {
+    let id = UUID()
+    let fileURL: URL
+}
+
 private struct PendingPythonRun: Identifiable {
     let id = UUID()
     let token: String
@@ -1720,6 +2310,51 @@ private struct VideoPreviewSheet: View {
                 .navigationBarTitleDisplayMode(.inline)
         }
     }
+}
+
+private struct DocumentPreviewSheet: UIViewControllerRepresentable {
+    let fileURL: URL
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(fileURL: fileURL)
+    }
+
+    func makeUIViewController(context: Context) -> QLPreviewController {
+        let controller = QLPreviewController()
+        controller.dataSource = context.coordinator
+        return controller
+    }
+
+    func updateUIViewController(_ uiViewController: QLPreviewController, context: Context) {
+        context.coordinator.fileURL = fileURL
+        uiViewController.reloadData()
+    }
+
+    final class Coordinator: NSObject, QLPreviewControllerDataSource {
+        var fileURL: URL
+
+        init(fileURL: URL) {
+            self.fileURL = fileURL
+        }
+
+        func numberOfPreviewItems(in controller: QLPreviewController) -> Int {
+            1
+        }
+
+        func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem {
+            fileURL as NSURL
+        }
+    }
+}
+
+private struct ShareSheet: UIViewControllerRepresentable {
+    let activityItems: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
 private struct MiniIconButtonStyle: ButtonStyle {
