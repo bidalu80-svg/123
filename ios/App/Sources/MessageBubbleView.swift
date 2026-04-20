@@ -102,7 +102,7 @@ struct MessageBubbleView: View {
             pythonInputSheet(payload: payload)
         }
         .sheet(item: $activePPTPreview) { payload in
-            DocumentPreviewSheet(fileURL: payload.fileURL)
+            OfficePreviewSheet(payload: payload)
                 .presentationDragIndicator(.visible)
         }
         .sheet(item: $activeShareSheet) { payload in
@@ -1260,39 +1260,16 @@ struct MessageBubbleView: View {
             }
 
             if let generatedPPTPayload {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(generatedPPTPayload.fileURL.lastPathComponent)
-                        .font(.system(size: 12.5, weight: .medium))
-                        .foregroundStyle(.primary)
-                        .lineLimit(2)
-
-                    let size = fileSizeText(for: generatedPPTPayload.fileURL)
-                    Text("页数 \(generatedPPTPayload.slideCount) · \(size)")
-                        .font(.system(size: 11.5, weight: .medium))
-                        .foregroundStyle(.secondary)
-                }
-
-                HStack(spacing: 8) {
-                    Button("查看") {
-                        previewPPTFile(generatedPPTPayload)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color(red: 0.08, green: 0.36, blue: 0.86))
-                    .font(.caption2)
-
-                    Button("分享") {
-                        sharePPTFile(generatedPPTPayload)
-                    }
-                    .buttonStyle(.bordered)
-                    .font(.caption2)
-
-                    Button(isGeneratingPPT ? "生成中…" : "重新生成") {
-                        generatePPTFile()
-                    }
-                    .buttonStyle(.bordered)
-                    .font(.caption2)
-                    .disabled(isGeneratingPPT || !canGeneratePPT)
-                }
+                officeDocumentFileCard(
+                    iconSystemName: "doc.richtext.fill",
+                    accentColor: Color(red: 0.89, green: 0.39, blue: 0.22),
+                    fileURL: generatedPPTPayload.fileURL,
+                    metaText: "生成于 \(generatedTimestampText(generatedPPTPayload.generatedAt)) · \(fileSizeText(for: generatedPPTPayload.fileURL))",
+                    primaryLabel: "查看",
+                    secondaryLabel: "下载",
+                    primaryAction: { previewPPTFile(generatedPPTPayload) },
+                    secondaryAction: { sharePPTFile(generatedPPTPayload) }
+                )
             } else {
                 Text("根据当前回复自动生成 .pptx 文件，并支持查看与分享。")
                     .font(.system(size: 12.5))
@@ -1333,39 +1310,16 @@ struct MessageBubbleView: View {
             }
 
             if let generatedWordPayload {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(generatedWordPayload.fileURL.lastPathComponent)
-                        .font(.system(size: 12.5, weight: .medium))
-                        .foregroundStyle(.primary)
-                        .lineLimit(2)
-
-                    let size = fileSizeText(for: generatedWordPayload.fileURL)
-                    Text("段落 \(generatedWordPayload.blockCount) · \(size)")
-                        .font(.system(size: 11.5, weight: .medium))
-                        .foregroundStyle(.secondary)
-                }
-
-                HStack(spacing: 8) {
-                    Button("查看") {
-                        previewWordFile(generatedWordPayload)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color(red: 0.12, green: 0.52, blue: 0.32))
-                    .font(.caption2)
-
-                    Button("分享") {
-                        shareWordFile(generatedWordPayload)
-                    }
-                    .buttonStyle(.bordered)
-                    .font(.caption2)
-
-                    Button(isGeneratingWord ? "生成中…" : "重新生成") {
-                        generateWordFile()
-                    }
-                    .buttonStyle(.bordered)
-                    .font(.caption2)
-                    .disabled(isGeneratingWord || !canGenerateWord)
-                }
+                officeDocumentFileCard(
+                    iconSystemName: "doc.text.fill",
+                    accentColor: Color(red: 0.15, green: 0.43, blue: 0.90),
+                    fileURL: generatedWordPayload.fileURL,
+                    metaText: "生成于 \(generatedTimestampText(generatedWordPayload.generatedAt)) · \(fileSizeText(for: generatedWordPayload.fileURL))",
+                    primaryLabel: "查看",
+                    secondaryLabel: "下载",
+                    primaryAction: { previewWordFile(generatedWordPayload) },
+                    secondaryAction: { shareWordFile(generatedWordPayload) }
+                )
             } else {
                 Text("根据当前回复自动生成 .docx 文档，并支持查看与分享。")
                     .font(.system(size: 12.5))
@@ -1406,39 +1360,16 @@ struct MessageBubbleView: View {
             }
 
             if let generatedExcelPayload {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(generatedExcelPayload.fileURL.lastPathComponent)
-                        .font(.system(size: 12.5, weight: .medium))
-                        .foregroundStyle(.primary)
-                        .lineLimit(2)
-
-                    let size = fileSizeText(for: generatedExcelPayload.fileURL)
-                    Text("工作表 \(generatedExcelPayload.sheetCount) · 数据行 \(generatedExcelPayload.rowCount) · \(size)")
-                        .font(.system(size: 11.5, weight: .medium))
-                        .foregroundStyle(.secondary)
-                }
-
-                HStack(spacing: 8) {
-                    Button("查看") {
-                        previewExcelFile(generatedExcelPayload)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color(red: 0.08, green: 0.52, blue: 0.58))
-                    .font(.caption2)
-
-                    Button("分享") {
-                        shareExcelFile(generatedExcelPayload)
-                    }
-                    .buttonStyle(.bordered)
-                    .font(.caption2)
-
-                    Button(isGeneratingExcel ? "生成中…" : "重新生成") {
-                        generateExcelFile()
-                    }
-                    .buttonStyle(.bordered)
-                    .font(.caption2)
-                    .disabled(isGeneratingExcel || !canGenerateExcel)
-                }
+                officeDocumentFileCard(
+                    iconSystemName: "tablecells.fill",
+                    accentColor: Color(red: 0.14, green: 0.60, blue: 0.36),
+                    fileURL: generatedExcelPayload.fileURL,
+                    metaText: "生成于 \(generatedTimestampText(generatedExcelPayload.generatedAt)) · \(fileSizeText(for: generatedExcelPayload.fileURL))",
+                    primaryLabel: "查看",
+                    secondaryLabel: "下载",
+                    primaryAction: { previewExcelFile(generatedExcelPayload) },
+                    secondaryAction: { shareExcelFile(generatedExcelPayload) }
+                )
             } else {
                 Text("优先提取回复中的表格（Markdown/CSV/TSV）生成 .xlsx，并支持查看与分享。")
                     .font(.system(size: 12.5))
@@ -1464,6 +1395,82 @@ struct MessageBubbleView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(Color.black.opacity(colorScheme == .dark ? 0.22 : 0.08), lineWidth: 0.8)
         )
+    }
+
+    private func officeDocumentFileCard(
+        iconSystemName: String,
+        accentColor: Color,
+        fileURL: URL,
+        metaText: String,
+        primaryLabel: String,
+        secondaryLabel: String,
+        primaryAction: @escaping () -> Void,
+        secondaryAction: @escaping () -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(accentColor.opacity(0.14))
+                    Image(systemName: iconSystemName)
+                        .font(.system(size: 24, weight: .semibold))
+                        .foregroundStyle(accentColor)
+                }
+                .frame(width: 52, height: 52)
+
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(fileURL.deletingPathExtension().lastPathComponent)
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text(metaText)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+
+                Spacer(minLength: 0)
+            }
+
+            HStack(spacing: 0) {
+                officeFileActionButton(title: primaryLabel, systemImage: "doc.text.magnifyingglass", action: primaryAction)
+                Divider()
+                    .frame(height: 24)
+                officeFileActionButton(title: secondaryLabel, systemImage: "arrow.down.to.line", action: secondaryAction)
+            }
+            .padding(.vertical, 2)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 14)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color(.systemBackground))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.black.opacity(colorScheme == .dark ? 0.18 : 0.08), lineWidth: 1)
+        )
+    }
+
+    private func officeFileActionButton(
+        title: String,
+        systemImage: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Spacer(minLength: 0)
+                Image(systemName: systemImage)
+                    .font(.system(size: 15, weight: .semibold))
+                Text(title)
+                    .font(.system(size: 17, weight: .semibold))
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(.primary)
+            .padding(.vertical, 10)
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity)
     }
 
     private func generateFrontendProject(mode: FrontendProjectBuilder.BuildMode) {
@@ -1531,9 +1538,13 @@ struct MessageBubbleView: View {
                 let result = try await PPTGenerationService.shared.generate(from: sourceMessage)
                 try Task.checkCancellation()
                 await MainActor.run {
+                    let outline = PPTGenerationService.extractOutline(from: sourceMessage)
+                        ?? PPTGenerationService.Outline(title: result.fileName, slides: [])
                     generatedPPTPayload = GeneratedPPTPayload(
                         fileURL: result.fileURL,
-                        slideCount: result.slideCount
+                        slideCount: result.slideCount,
+                        generatedAt: Date(),
+                        outline: outline
                     )
                     feedback(.success, "已生成 PPT（\(result.slideCount) 页）")
                 }
@@ -1574,9 +1585,12 @@ struct MessageBubbleView: View {
                 let result = try await WordGenerationService.shared.generate(from: sourceMessage)
                 try Task.checkCancellation()
                 await MainActor.run {
+                    let blocks = WordGenerationService.extractBlocks(from: sourceMessage)
                     generatedWordPayload = GeneratedWordPayload(
                         fileURL: result.fileURL,
-                        blockCount: result.blockCount
+                        blockCount: result.blockCount,
+                        generatedAt: Date(),
+                        blocks: blocks
                     )
                     feedback(.success, "已生成 Word（\(result.blockCount) 段）")
                 }
@@ -1617,10 +1631,13 @@ struct MessageBubbleView: View {
                 let result = try await ExcelGenerationService.shared.generate(from: sourceMessage)
                 try Task.checkCancellation()
                 await MainActor.run {
+                    let sheets = ExcelGenerationService.extractSheets(from: sourceMessage)
                     generatedExcelPayload = GeneratedExcelPayload(
                         fileURL: result.fileURL,
                         sheetCount: result.sheetCount,
-                        rowCount: result.rowCount
+                        rowCount: result.rowCount,
+                        generatedAt: Date(),
+                        sheets: sheets
                     )
                     feedback(.success, "已生成 Excel（\(result.sheetCount) 表）")
                 }
@@ -1639,23 +1656,52 @@ struct MessageBubbleView: View {
     }
 
     private func previewPPTFile(_ payload: GeneratedPPTPayload) {
-        previewGeneratedDocument(
-            at: payload.fileURL,
-            missingMessage: "PPT 文件不存在，请重新生成。"
+        guard FileManager.default.fileExists(atPath: payload.fileURL.path) else {
+            saveFeedback = "PPT 文件不存在，请重新生成。"
+            return
+        }
+        activePPTPreview = PPTPreviewPayload(
+            fileURL: payload.fileURL,
+            title: payload.fileURL.deletingPathExtension().lastPathComponent,
+            generatedAt: payload.generatedAt,
+            document: .powerPoint(
+                title: payload.outline.title,
+                slides: payload.outline.slides,
+                slideCount: payload.slideCount
+            )
         )
     }
 
     private func previewWordFile(_ payload: GeneratedWordPayload) {
-        previewGeneratedDocument(
-            at: payload.fileURL,
-            missingMessage: "Word 文件不存在，请重新生成。"
+        guard FileManager.default.fileExists(atPath: payload.fileURL.path) else {
+            saveFeedback = "Word 文件不存在，请重新生成。"
+            return
+        }
+        activePPTPreview = PPTPreviewPayload(
+            fileURL: payload.fileURL,
+            title: payload.fileURL.deletingPathExtension().lastPathComponent,
+            generatedAt: payload.generatedAt,
+            document: .word(
+                blocks: payload.blocks,
+                blockCount: payload.blockCount
+            )
         )
     }
 
     private func previewExcelFile(_ payload: GeneratedExcelPayload) {
-        previewGeneratedDocument(
-            at: payload.fileURL,
-            missingMessage: "Excel 文件不存在，请重新生成。"
+        guard FileManager.default.fileExists(atPath: payload.fileURL.path) else {
+            saveFeedback = "Excel 文件不存在，请重新生成。"
+            return
+        }
+        activePPTPreview = PPTPreviewPayload(
+            fileURL: payload.fileURL,
+            title: payload.fileURL.deletingPathExtension().lastPathComponent,
+            generatedAt: payload.generatedAt,
+            document: .excel(
+                sheets: payload.sheets,
+                sheetCount: payload.sheetCount,
+                rowCount: payload.rowCount
+            )
         )
     }
 
@@ -1680,20 +1726,19 @@ struct MessageBubbleView: View {
         )
     }
 
-    private func previewGeneratedDocument(at fileURL: URL, missingMessage: String) {
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            saveFeedback = missingMessage
-            return
-        }
-        activePPTPreview = PPTPreviewPayload(fileURL: fileURL)
-    }
-
     private func shareGeneratedDocument(at fileURL: URL, missingMessage: String) {
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             saveFeedback = missingMessage
             return
         }
         activeShareSheet = ShareSheetPayload(fileURL: fileURL)
+    }
+
+    private func generatedTimestampText(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_Hans_CN")
+        formatter.dateFormat = "MM-dd HH:mm"
+        return formatter.string(from: date)
     }
 
     private func fileSizeText(for url: URL) -> String {
@@ -2399,12 +2444,16 @@ private struct GeneratedPPTPayload: Identifiable {
     let id = UUID()
     let fileURL: URL
     let slideCount: Int
+    let generatedAt: Date
+    let outline: PPTGenerationService.Outline
 }
 
 private struct GeneratedWordPayload: Identifiable {
     let id = UUID()
     let fileURL: URL
     let blockCount: Int
+    let generatedAt: Date
+    let blocks: [WordGenerationService.Block]
 }
 
 private struct GeneratedExcelPayload: Identifiable {
@@ -2412,11 +2461,22 @@ private struct GeneratedExcelPayload: Identifiable {
     let fileURL: URL
     let sheetCount: Int
     let rowCount: Int
+    let generatedAt: Date
+    let sheets: [ExcelGenerationService.Sheet]
 }
 
 private struct PPTPreviewPayload: Identifiable {
     let id = UUID()
     let fileURL: URL
+    let title: String
+    let generatedAt: Date
+    let document: OfficePreviewDocument
+}
+
+private enum OfficePreviewDocument {
+    case powerPoint(title: String, slides: [PPTGenerationService.Outline.Slide], slideCount: Int)
+    case word(blocks: [WordGenerationService.Block], blockCount: Int)
+    case excel(sheets: [ExcelGenerationService.Sheet], sheetCount: Int, rowCount: Int)
 }
 
 private struct ShareSheetPayload: Identifiable {
@@ -2480,103 +2540,298 @@ private struct VideoPreviewSheet: View {
     }
 }
 
-private struct DocumentPreviewSheet: View {
-    let fileURL: URL
+private struct OfficePreviewSheet: View {
+    let payload: PPTPreviewPayload
     @Environment(\.dismiss) private var dismiss
     @State private var showsShareSheet = false
+    @State private var selectedExcelSheetIndex = 0
 
     var body: some View {
-        DocumentPreviewController(fileURL: fileURL)
-            .ignoresSafeArea(edges: .bottom)
-            .safeAreaInset(edge: .top, spacing: 0) {
-                previewToolbar
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    Text(payload.title)
+                        .font(.system(size: 28, weight: .bold))
+                        .foregroundStyle(.primary)
+
+                    Text(metaText)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.secondary)
+
+                    switch payload.document {
+                    case .powerPoint(let title, let slides, let slideCount):
+                        powerPointPreview(title: title, slides: slides, slideCount: slideCount)
+                    case .word(let blocks, let blockCount):
+                        wordPreview(blocks: blocks, blockCount: blockCount)
+                    case .excel(let sheets, _, let rowCount):
+                        excelPreview(sheets: sheets, rowCount: rowCount)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 18)
+                .padding(.bottom, 30)
             }
-            .background(Color(.systemBackground))
-            .overlay(alignment: .top) {
-                // Fallback close affordance when QuickLook navigation bar is swallowed by the preview controller.
-                HStack {
+            .background(Color(.systemGroupedBackground).ignoresSafeArea())
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
                     Button {
                         dismiss()
                     } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .padding(10)
-                            .background(Color.black.opacity(0.55), in: Circle())
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 18, weight: .semibold))
                     }
-                    .accessibilityLabel("关闭预览")
-                    .padding(.top, 10)
-                    .padding(.leading, 14)
-
-                    Spacer()
+                }
+                ToolbarItem(placement: .principal) {
+                    Text("预览")
+                        .font(.system(size: 20, weight: .semibold))
                 }
             }
-            .interactiveDismissDisabled(false)
-            .sheet(isPresented: $showsShareSheet) {
-                ShareSheet(activityItems: [fileURL])
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                bottomActionBar
             }
+            .sheet(isPresented: $showsShareSheet) {
+                ShareSheet(activityItems: [payload.fileURL])
+            }
+        }
     }
 
-    private var previewToolbar: some View {
+    private var metaText: String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_Hans_CN")
+        formatter.dateFormat = "MM-dd HH:mm"
+        let timeText = formatter.string(from: payload.generatedAt)
+        let sizeText = fileSizeText(for: payload.fileURL)
+        return "生成于 \(timeText) · \(sizeText)"
+    }
+
+    private func fileSizeText(for url: URL) -> String {
+        let values = try? url.resourceValues(forKeys: [.fileSizeKey])
+        let bytes = values?.fileSize ?? 0
+        guard bytes > 0 else { return "大小未知" }
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useKB, .useMB]
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: Int64(bytes))
+    }
+
+    private var bottomActionBar: some View {
         HStack(spacing: 12) {
-            Button("关闭") {
-                dismiss()
-            }
-            .font(.subheadline.weight(.semibold))
-
-            Spacer(minLength: 8)
-
-            Text(fileURL.lastPathComponent)
-                .font(.footnote)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .foregroundStyle(.secondary)
-
-            Spacer(minLength: 8)
-
-            Button("分享") {
-                showsShareSheet = true
-            }
-            .font(.subheadline.weight(.semibold))
+            bottomActionButton(title: "分享", systemImage: "square.and.arrow.up")
+            bottomActionButton(title: "下载", systemImage: "arrow.down.to.line")
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 16)
+        .padding(.top, 10)
+        .padding(.bottom, 18)
         .background(.thinMaterial)
     }
-}
 
-private struct DocumentPreviewController: UIViewControllerRepresentable {
-    let fileURL: URL
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(fileURL: fileURL)
+    private func bottomActionButton(title: String, systemImage: String) -> some View {
+        Button {
+            showsShareSheet = true
+        } label: {
+            VStack(spacing: 8) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 21, weight: .semibold))
+                Text(title)
+                    .font(.system(size: 16, weight: .semibold))
+            }
+            .foregroundStyle(.primary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color(.systemBackground))
+            )
+        }
+        .buttonStyle(.plain)
     }
 
-    func makeUIViewController(context: Context) -> QLPreviewController {
-        let controller = QLPreviewController()
-        controller.dataSource = context.coordinator
-        return controller
+    private func powerPointPreview(
+        title: String,
+        slides: [PPTGenerationService.Outline.Slide],
+        slideCount: Int
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(title)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            TabView {
+                ForEach(Array(slides.enumerated()), id: \.offset) { index, slide in
+                    VStack(alignment: .leading, spacing: 18) {
+                        HStack {
+                            Text("第 \(index + 1) 页")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Text("\(slideCount) 张")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Text(slide.title)
+                            .font(.system(size: 28, weight: .bold))
+                            .foregroundStyle(.primary)
+
+                        VStack(alignment: .leading, spacing: 12) {
+                            ForEach(slide.bullets, id: \.self) { bullet in
+                                HStack(alignment: .top, spacing: 10) {
+                                    Circle()
+                                        .fill(Color.blue)
+                                        .frame(width: 8, height: 8)
+                                        .padding(.top, 9)
+                                    Text(bullet)
+                                        .font(.system(size: 19, weight: .medium))
+                                        .foregroundStyle(.primary)
+                                }
+                            }
+                        }
+
+                        Spacer(minLength: 0)
+                    }
+                    .padding(24)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 28, style: .continuous)
+                            .fill(Color(.systemBackground))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 28, style: .continuous)
+                            .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                    )
+                    .padding(.bottom, 22)
+                }
+            }
+            .frame(height: 420)
+            .tabViewStyle(.page(indexDisplayMode: .always))
+        }
     }
 
-    func updateUIViewController(_ uiViewController: QLPreviewController, context: Context) {
-        context.coordinator.fileURL = fileURL
-        uiViewController.reloadData()
+    private func wordPreview(
+        blocks: [WordGenerationService.Block],
+        blockCount: Int
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("文档内容 · \(blockCount) 段")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 14) {
+                ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                    switch block.kind {
+                    case .heading1:
+                        Text(block.text)
+                            .font(.system(size: 30, weight: .bold))
+                    case .heading2:
+                        Text(block.text)
+                            .font(.system(size: 23, weight: .semibold))
+                    case .paragraph:
+                        Text(block.text)
+                            .font(.system(size: 18))
+                            .lineSpacing(6)
+                    case .bullet:
+                        HStack(alignment: .top, spacing: 10) {
+                            Circle()
+                                .fill(Color.blue)
+                                .frame(width: 7, height: 7)
+                                .padding(.top, 9)
+                            Text(block.text)
+                                .font(.system(size: 18))
+                                .lineSpacing(6)
+                        }
+                    }
+                }
+            }
+            .padding(22)
+            .background(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .fill(Color(.systemBackground))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .stroke(Color.black.opacity(0.08), lineWidth: 1)
+            )
+        }
     }
 
-    final class Coordinator: NSObject, QLPreviewControllerDataSource {
-        var fileURL: URL
+    private func excelPreview(
+        sheets: [ExcelGenerationService.Sheet],
+        rowCount: Int
+    ) -> some View {
+        let safeIndex = min(selectedExcelSheetIndex, max(0, sheets.count - 1))
+        let activeSheet = sheets.isEmpty ? nil : sheets[safeIndex]
 
-        init(fileURL: URL) {
-            self.fileURL = fileURL
-        }
+        return VStack(alignment: .leading, spacing: 14) {
+            Text("表格内容 · 共 \(rowCount) 行")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.secondary)
 
-        func numberOfPreviewItems(in controller: QLPreviewController) -> Int {
-            1
-        }
+            if sheets.count > 1 {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(Array(sheets.enumerated()), id: \.offset) { index, sheet in
+                            Button {
+                                selectedExcelSheetIndex = index
+                            } label: {
+                                Text(sheet.name)
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundStyle(index == safeIndex ? Color.green : .primary)
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 10)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                            .fill(index == safeIndex ? Color.green.opacity(0.12) : Color(.systemBackground))
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
 
-        func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem {
-            fileURL as NSURL
+            if let activeSheet {
+                officeExcelGrid(sheet: activeSheet)
+            }
         }
+    }
+
+    private func officeExcelGrid(sheet: ExcelGenerationService.Sheet) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                ForEach(Array(sheet.headers.enumerated()), id: \.offset) { _, header in
+                    Text(header)
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(.primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 16)
+                        .background(Color(.systemBackground))
+                }
+            }
+
+            ForEach(Array(sheet.rows.enumerated()), id: \.offset) { _, row in
+                Divider()
+                HStack(spacing: 0) {
+                    ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
+                        Text(cell)
+                            .font(.system(size: 17, weight: .medium))
+                            .foregroundStyle(.primary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 15)
+                            .background(Color(.systemBackground))
+                    }
+                }
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(Color(.systemBackground))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(Color.black.opacity(0.08), lineWidth: 1)
+        )
     }
 }
 

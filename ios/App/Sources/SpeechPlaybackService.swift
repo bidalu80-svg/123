@@ -4,6 +4,14 @@ import Combine
 
 @MainActor
 final class SpeechPlaybackService: NSObject, ObservableObject, @preconcurrency AVSpeechSynthesizerDelegate {
+    private struct VoiceStyle {
+        let rate: Float
+        let pitchMultiplier: Float
+        let volume: Float
+        let preUtteranceDelay: TimeInterval
+        let postUtteranceDelay: TimeInterval
+    }
+
     static let shared = SpeechPlaybackService()
 
     @Published private(set) var isSpeaking = false
@@ -40,10 +48,13 @@ final class SpeechPlaybackService: NSObject, ObservableObject, @preconcurrency A
 
         configureAudioSession()
 
+        let style = preferredVoiceStyle(for: text)
         let utterance = AVSpeechUtterance(string: text)
-        utterance.rate = 0.50
-        utterance.pitchMultiplier = 1.0
-        utterance.volume = 1.0
+        utterance.rate = style.rate
+        utterance.pitchMultiplier = style.pitchMultiplier
+        utterance.volume = style.volume
+        utterance.preUtteranceDelay = style.preUtteranceDelay
+        utterance.postUtteranceDelay = style.postUtteranceDelay
         utterance.voice = preferredVoice(for: text)
         utteranceGenerations[ObjectIdentifier(utterance)] = generation
         activeMessageID = messageID
@@ -190,13 +201,76 @@ final class SpeechPlaybackService: NSObject, ObservableObject, @preconcurrency A
     }
 
     private func preferredVoice(for text: String) -> AVSpeechSynthesisVoice? {
+        let availableVoices = AVSpeechSynthesisVoice.speechVoices()
         if containsChinese(text) {
-            return AVSpeechSynthesisVoice(language: "zh-CN")
+            let preferred = availableVoices
+                .filter { voice in
+                    let language = voice.language.lowercased()
+                    return language.hasPrefix("zh-cn")
+                        || language.contains("hans")
+                        || language.hasPrefix("zh")
+                }
+                .sorted { lhs, rhs in
+                    voiceScore(lhs, prefersChinese: true) > voiceScore(rhs, prefersChinese: true)
+                }
+                .first
+            return preferred
+                ?? AVSpeechSynthesisVoice(language: "zh-CN")
                 ?? AVSpeechSynthesisVoice(language: "zh-Hans")
                 ?? AVSpeechSynthesisVoice(language: "zh-TW")
         }
-        return AVSpeechSynthesisVoice(language: "en-US")
+        let preferred = availableVoices
+            .filter { $0.language.lowercased().hasPrefix("en") }
+            .sorted { lhs, rhs in
+                voiceScore(lhs, prefersChinese: false) > voiceScore(rhs, prefersChinese: false)
+            }
+            .first
+        return preferred
+            ?? AVSpeechSynthesisVoice(language: "en-US")
             ?? AVSpeechSynthesisVoice(language: Locale.current.identifier)
+    }
+
+    private func preferredVoiceStyle(for text: String) -> VoiceStyle {
+        if containsChinese(text) {
+            return VoiceStyle(
+                rate: 0.47,
+                pitchMultiplier: 1.08,
+                volume: 1.0,
+                preUtteranceDelay: 0,
+                postUtteranceDelay: 0.04
+            )
+        }
+        return VoiceStyle(
+            rate: 0.49,
+            pitchMultiplier: 1.03,
+            volume: 1.0,
+            preUtteranceDelay: 0,
+            postUtteranceDelay: 0.03
+        )
+    }
+
+    private func voiceScore(_ voice: AVSpeechSynthesisVoice, prefersChinese: Bool) -> Int {
+        let language = voice.language.lowercased()
+        let name = voice.name.lowercased()
+        let identifier = voice.identifier.lowercased()
+        var score = 0
+
+        if prefersChinese {
+            if language.hasPrefix("zh-cn") { score += 120 }
+            if language.contains("hans") { score += 80 }
+            if language.hasPrefix("zh") { score += 40 }
+            if name.contains("siri") || identifier.contains("siri") { score += 60 }
+            if name.contains("tingting") || name.contains("meijia") || name.contains("xiaoxiao") { score += 24 }
+        } else {
+            if language.hasPrefix("en-us") { score += 120 }
+            if language.hasPrefix("en") { score += 40 }
+            if name.contains("siri") || identifier.contains("siri") { score += 60 }
+            if name.contains("ava") || name.contains("samantha") || name.contains("allison") { score += 24 }
+        }
+
+        if identifier.contains("premium") { score += 30 }
+        if identifier.contains("enhanced") { score += 20 }
+        return score
     }
 
     private func containsChinese(_ text: String) -> Bool {
