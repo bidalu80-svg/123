@@ -106,7 +106,7 @@ struct ChatRequestBuilder {
             ])
         }
 
-        if frontendAutoBuildEnabled {
+        if shouldInjectFrontendAutoBuildPrompt(enabled: frontendAutoBuildEnabled, message: message) {
             prefix.append([
                 "role": "system",
                 "content": frontendAutoBuildSystemPrompt
@@ -115,6 +115,104 @@ struct ChatRequestBuilder {
 
         let compactHistory = compactHistoryForRequest(history)
         return prefix + compactHistory.map(\.apiPayload) + [message.apiPayload]
+    }
+
+    private static func shouldInjectFrontendAutoBuildPrompt(
+        enabled: Bool,
+        message: ChatMessage
+    ) -> Bool {
+        guard enabled else { return false }
+        guard message.role == .user else { return false }
+
+        let raw = message.copyableText
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard !raw.isEmpty else { return false }
+        if containsNoFileDirective(raw) { return false }
+
+        let directMarkers = [
+            "生成项目",
+            "创建项目",
+            "项目结构",
+            "工程结构",
+            "完整项目",
+            "完整工程",
+            "搭建项目",
+            "生成代码文件",
+            "输出文件结构",
+            "按[[file:",
+            "写入latest",
+            "自动落盘",
+            "project",
+            "codebase",
+            "scaffold",
+            "boilerplate",
+            "starter template",
+            "generate project",
+            "create project",
+            "build project",
+            "multi-file",
+            "repo structure"
+        ]
+        if directMarkers.contains(where: { raw.contains($0) }) {
+            return true
+        }
+
+        if raw.range(
+            of: #"(做|写|搭|建|生成|创建|开发|搞)(一个|个|套)?[^\n]{0,24}(网站|网页|页面|项目|前端|应用|app|demo|登录页|注册页|后台|管理系统|小程序)"#,
+            options: .regularExpression
+        ) != nil {
+            return true
+        }
+
+        if raw.range(
+            of: #"(网站|网页|页面|项目|前端|应用|app|demo|登录页|注册页|后台|管理系统|小程序)[^\n]{0,16}(做|写|搭|建|生成|创建|开发|搞)"#,
+            options: .regularExpression
+        ) != nil {
+            return true
+        }
+
+        return false
+    }
+
+    private static func containsNoFileDirective(_ raw: String) -> Bool {
+        let directiveMarkers = [
+            "不做成文件",
+            "不要做成文件",
+            "别做成文件",
+            "不要生成文件",
+            "别生成文件",
+            "不生成文件",
+            "不要落盘",
+            "别落盘",
+            "不落盘",
+            "不要写入文件",
+            "不要写入latest",
+            "只要代码",
+            "仅要代码",
+            "仅展示代码",
+            "只展示代码",
+            "不要项目",
+            "别做项目",
+            "不创建项目",
+            "不用项目结构",
+            "do not create file",
+            "do not create files",
+            "don't create file",
+            "don't create files",
+            "do not write file",
+            "do not write files",
+            "don't write file",
+            "don't write files",
+            "inline code only",
+            "just show code",
+            "code only",
+            "single snippet",
+            "no files"
+        ]
+
+        return directiveMarkers.contains { raw.contains($0) }
     }
 
     private static func compactHistoryForRequest(_ history: [ChatMessage]) -> [ChatMessage] {

@@ -180,6 +180,29 @@ final class ChatServiceTests: XCTestCase {
         XCTAssertEqual(messages[1]["content"] as? String, "以下是用户跨会话记忆：\n• 我喜欢简洁回答")
     }
 
+    func testBuildRequestInjectsProjectPromptOnlyForProjectIntent() throws {
+        var config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
+        config.frontendAutoBuildEnabled = true
+
+        let normalMessage = ChatMessage(role: .user, content: "设计一款编程游戏，以有趣的方式教授基础知识")
+        let projectMessage = ChatMessage(role: .user, content: "做一个登录网站页面项目")
+
+        let normalRequest = try ChatRequestBuilder.makeRequest(config: config, history: [], message: normalMessage)
+        let normalPayload = try XCTUnwrap(normalRequest.httpBody)
+        let normalJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: normalPayload) as? [String: Any])
+        let normalMessages = try XCTUnwrap(normalJSON["messages"] as? [[String: Any]])
+
+        let projectRequest = try ChatRequestBuilder.makeRequest(config: config, history: [], message: projectMessage)
+        let projectPayload = try XCTUnwrap(projectRequest.httpBody)
+        let projectJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: projectPayload) as? [String: Any])
+        let projectMessages = try XCTUnwrap(projectJSON["messages"] as? [[String: Any]])
+
+        XCTAssertEqual(normalMessages.count, 2)
+        XCTAssertEqual(projectMessages.count, 3)
+        XCTAssertEqual(projectMessages[1]["role"] as? String, "system")
+        XCTAssertTrue((projectMessages[1]["content"] as? String)?.contains("项目自动生成模式") == true)
+    }
+
     func testBuildImagesGenerationRequestUsesConfiguredEndpoint() throws {
         var config = ChatConfig(apiURL: "https://example.com", apiKey: "token-123", model: "gpt-image", timeout: 30, streamEnabled: false)
         config.imagesGenerationsPath = "/v1/images/generations"

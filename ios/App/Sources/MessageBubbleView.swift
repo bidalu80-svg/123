@@ -526,10 +526,10 @@ struct MessageBubbleView: View {
 
     private var streamingWaitingDot: some View {
         Circle()
-            .fill(colorScheme == .dark ? Color.white.opacity(0.92) : Color.black.opacity(0.88))
-            .frame(width: 7, height: 7)
+            .fill(colorScheme == .dark ? Color.white : Color.black)
+            .frame(width: 9, height: 9)
             .scaleEffect(waitingDotPulse ? 1.0 : 0.68)
-            .opacity(waitingDotPulse ? 0.95 : (colorScheme == .dark ? 0.42 : 0.3))
+            .opacity(waitingDotPulse ? 1.0 : 0.45)
             .animation(.easeInOut(duration: 0.62).repeatForever(autoreverses: true), value: waitingDotPulse)
             .onAppear {
                 waitingDotPulse = true
