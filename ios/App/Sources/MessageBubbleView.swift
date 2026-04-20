@@ -2312,7 +2312,36 @@ private struct VideoPreviewSheet: View {
     }
 }
 
-private struct DocumentPreviewSheet: UIViewControllerRepresentable {
+private struct DocumentPreviewSheet: View {
+    let fileURL: URL
+    @Environment(\.dismiss) private var dismiss
+    @State private var showsShareSheet = false
+
+    var body: some View {
+        NavigationStack {
+            DocumentPreviewController(fileURL: fileURL)
+                .navigationTitle(fileURL.lastPathComponent)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("关闭") {
+                            dismiss()
+                        }
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("分享") {
+                            showsShareSheet = true
+                        }
+                    }
+                }
+        }
+        .sheet(isPresented: $showsShareSheet) {
+            ShareSheet(activityItems: [fileURL])
+        }
+    }
+}
+
+private struct DocumentPreviewController: UIViewControllerRepresentable {
     let fileURL: URL
 
     func makeCoordinator() -> Coordinator {
