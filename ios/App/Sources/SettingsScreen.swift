@@ -208,16 +208,14 @@ struct SettingsScreen: View {
                     title: "项目根目录",
                     path: FrontendProjectBuilder.projectsRootPathDisplay()
                 ) {
-                    UIPasteboard.general.string = FrontendProjectBuilder.projectsRootPathDisplay()
-                    projectActionFeedback = "已复制项目根目录。"
+                    openProjectsRootBrowser()
                 }
 
                 projectPathCard(
                     title: "latest 目录",
                     path: FrontendProjectBuilder.latestProjectPathDisplay()
                 ) {
-                    UIPasteboard.general.string = FrontendProjectBuilder.latestProjectPathDisplay()
-                    projectActionFeedback = "已复制 latest 路径。"
+                    openLatestProjectBrowser()
                 }
 
                 LazyVGrid(
@@ -428,7 +426,7 @@ struct SettingsScreen: View {
     private func projectPathCard(
         title: String,
         path: String,
-        onCopy: @escaping () -> Void
+        onOpen: @escaping () -> Void
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .center, spacing: 8) {
@@ -436,8 +434,8 @@ struct SettingsScreen: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button(action: onCopy) {
-                    Label("复制", systemImage: "doc.on.doc")
+                Button(action: onOpen) {
+                    Label("打开", systemImage: "arrow.right.circle")
                         .font(.system(size: 12, weight: .semibold))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 5)
