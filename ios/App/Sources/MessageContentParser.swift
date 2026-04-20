@@ -30,6 +30,23 @@ enum MessageContentParser {
     private static var parseCacheOrder: [String] = []
     private static var streamingSnapshots: [UUID: StreamingParseSnapshot] = [:]
 
+    private enum StructuredTokenKind {
+        case fencedCode
+        case taggedFile
+    }
+
+    private struct StructuredToken {
+        let kind: StructuredTokenKind
+        let range: Range<String.Index>
+    }
+
+    private struct ParsedTaggedFileSegment {
+        let name: String
+        let language: String?
+        let content: String
+        let nextCursor: String.Index
+    }
+
     static func parse(_ message: ChatMessage) -> [MessageSegment] {
         if message.isStreaming,
            let snapshot = streamingSnapshots[message.id],
@@ -109,7 +126,7 @@ enum MessageContentParser {
         var segments: [MessageSegment] = []
         var cursor = raw.startIndex
         while cursor < raw.endIndex {
-            guard let fenceStart = raw[cursor...].range(of: "```") else {
+            guard let token = nextStructuredToken(in: raw, from: cursor) else {
                 let trailingText = String(raw[cursor...])
                 if !trailingText.isEmpty {
                     segments.append(contentsOf: parseTablesAndInlineImages(in: trailingText))
@@ -117,34 +134,126 @@ enum MessageContentParser {
                 break
             }
 
-            if fenceStart.lowerBound > cursor {
-                let leadingText = String(raw[cursor..<fenceStart.lowerBound])
+            if token.range.lowerBound > cursor {
+                let leadingText = String(raw[cursor..<token.range.lowerBound])
                 segments.append(contentsOf: parseTablesAndInlineImages(in: leadingText))
             }
 
-            let codeStart = fenceStart.upperBound
-            if let fenceEnd = raw[codeStart...].range(of: "```") {
-                let block = String(raw[codeStart..<fenceEnd.lowerBound])
-                let parsed = parseCodeBlock(block)
-                if let table = parseDelimitedTableFromCode(language: parsed.0, content: parsed.1) {
-                    segments.append(.table(headers: table.headers, rows: table.rows))
-                } else if !parsed.1.isEmpty {
-                    segments.append(.code(language: inferCodeLanguage(language: parsed.0, content: parsed.1), content: parsed.1))
+            switch token.kind {
+            case .fencedCode:
+                let codeStart = token.range.upperBound
+                if let fenceEnd = raw[codeStart...].range(of: "```") {
+                    let block = String(raw[codeStart..<fenceEnd.lowerBound])
+                    let parsed = parseCodeBlock(block)
+                    if let table = parseDelimitedTableFromCode(language: parsed.0, content: parsed.1) {
+                        segments.append(.table(headers: table.headers, rows: table.rows))
+                    } else if !parsed.1.isEmpty {
+                        segments.append(.code(language: inferCodeLanguage(language: parsed.0, content: parsed.1), content: parsed.1))
+                    }
+                    cursor = fenceEnd.upperBound
+                } else {
+                    // Streaming unfinished fence: enter code module immediately.
+                    let block = String(raw[codeStart...])
+                    let parsed = parseCodeBlock(block)
+                    if let table = parseDelimitedTableFromCode(language: parsed.0, content: parsed.1) {
+                        segments.append(.table(headers: table.headers, rows: table.rows))
+                    } else if !parsed.1.isEmpty {
+                        segments.append(.code(language: inferCodeLanguage(language: parsed.0, content: parsed.1), content: parsed.1))
+                    }
+                    cursor = raw.endIndex
                 }
-                cursor = fenceEnd.upperBound
-            } else {
-                // Streaming unfinished fence: enter code module immediately.
-                let block = String(raw[codeStart...])
-                let parsed = parseCodeBlock(block)
-                if let table = parseDelimitedTableFromCode(language: parsed.0, content: parsed.1) {
-                    segments.append(.table(headers: table.headers, rows: table.rows))
-                } else if !parsed.1.isEmpty {
-                    segments.append(.code(language: inferCodeLanguage(language: parsed.0, content: parsed.1), content: parsed.1))
+            case .taggedFile:
+                guard let parsed = parseTaggedFileSegment(in: raw, from: token.range.lowerBound) else {
+                    let trailingText = String(raw[token.range.lowerBound...])
+                    if !trailingText.isEmpty {
+                        segments.append(contentsOf: parseTablesAndInlineImages(in: trailingText))
+                    }
+                    cursor = raw.endIndex
+                    continue
                 }
-                break
+                segments.append(.file(name: parsed.name, language: parsed.language, content: parsed.content))
+                cursor = parsed.nextCursor
             }
         }
         return segments
+    }
+
+    private static func nextStructuredToken(in raw: String, from start: String.Index) -> StructuredToken? {
+        let fenceStart = raw[start...].range(of: "```")
+        let taggedFileStart = raw[start...].range(of: "[[file:", options: [.caseInsensitive])
+
+        switch (fenceStart, taggedFileStart) {
+        case let (.some(fence), .some(tagged)):
+            if tagged.lowerBound <= fence.lowerBound {
+                return StructuredToken(kind: .taggedFile, range: tagged)
+            }
+            return StructuredToken(kind: .fencedCode, range: fence)
+        case let (.some(fence), .none):
+            return StructuredToken(kind: .fencedCode, range: fence)
+        case let (.none, .some(tagged)):
+            return StructuredToken(kind: .taggedFile, range: tagged)
+        case (.none, .none):
+            return nil
+        }
+    }
+
+    private static func parseTaggedFileSegment(
+        in raw: String,
+        from start: String.Index
+    ) -> ParsedTaggedFileSegment? {
+        let tagOpener = "[[file:"
+        guard raw[start...].range(of: tagOpener, options: [.anchored, .caseInsensitive]) != nil else {
+            return nil
+        }
+
+        let headerStart = raw.index(start, offsetBy: tagOpener.count)
+        guard let headerEnd = raw[headerStart...].range(of: "]]") else {
+            return nil
+        }
+
+        let name = normalizeTaggedFileName(String(raw[headerStart..<headerEnd.lowerBound]))
+        guard !name.isEmpty else { return nil }
+
+        var contentStart = headerEnd.upperBound
+        if raw[contentStart...].hasPrefix("\r\n") {
+            contentStart = raw.index(contentStart, offsetBy: 2)
+        } else if contentStart < raw.endIndex, raw[contentStart] == "\n" {
+            contentStart = raw.index(after: contentStart)
+        }
+
+        let endTagRange = raw[contentStart...].range(of: "[[endfile]]", options: [.caseInsensitive])
+        let contentEnd = endTagRange?.lowerBound ?? raw.endIndex
+        let rawContent = String(raw[contentStart..<contentEnd])
+        let content = rawContent
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if content.isEmpty && endTagRange == nil {
+            return nil
+        }
+
+        let language = inferTaggedFileLanguage(fileName: name, content: content)
+        return ParsedTaggedFileSegment(
+            name: name,
+            language: language,
+            content: content,
+            nextCursor: endTagRange?.upperBound ?? raw.endIndex
+        )
+    }
+
+    private static func normalizeTaggedFileName(_ rawName: String) -> String {
+        rawName
+            .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "`'\"")))
+            .replacingOccurrences(of: "\\", with: "/")
+    }
+
+    private static func inferTaggedFileLanguage(fileName: String, content: String) -> String? {
+        let attachment = ChatFileAttachment(
+            fileName: fileName,
+            mimeType: "text/plain",
+            textContent: content
+        )
+        return attachment.codeLanguageHint ?? inferCodeLanguage(language: nil, content: content)
     }
 
     private struct ParsedMarkdownTable {

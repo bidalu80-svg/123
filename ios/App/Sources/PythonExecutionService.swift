@@ -57,10 +57,10 @@ final class PythonExecutionService {
     private let maxOutputLength: Int
     private let maxLoopSteps: Int
     private let embeddedRuntimeTimeoutNanoseconds: UInt64
+    private let embeddedRuntimeCooldownSeconds: TimeInterval
 
     private let embeddedRuntimeStateLock = NSLock()
     private var embeddedRuntimeDisabledUntil: Date?
-    private let embeddedRuntimeCooldownSeconds: TimeInterval = 12
 
     static func isRunnableSnippet(_ code: String) -> Bool {
         let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -140,12 +140,14 @@ final class PythonExecutionService {
         maxCodeLength: Int = 12_000,
         maxOutputLength: Int = 20_000,
         maxLoopSteps: Int = 50_000,
-        embeddedRuntimeTimeoutSeconds: TimeInterval = 20
+        embeddedRuntimeTimeoutSeconds: TimeInterval = 20,
+        embeddedRuntimeCooldownSeconds: TimeInterval = 12
     ) {
         self.maxCodeLength = maxCodeLength
         self.maxOutputLength = maxOutputLength
         self.maxLoopSteps = maxLoopSteps
         self.embeddedRuntimeTimeoutNanoseconds = UInt64(max(3, embeddedRuntimeTimeoutSeconds) * 1_000_000_000)
+        self.embeddedRuntimeCooldownSeconds = max(1, embeddedRuntimeCooldownSeconds)
     }
 
     func disableEmbeddedRuntimeForCurrentLaunch() {
@@ -154,12 +156,18 @@ final class PythonExecutionService {
         embeddedRuntimeStateLock.unlock()
     }
 
-    func runPython(code: String, stdin: String? = nil) async throws -> PythonExecutionResult {
+    func runPython(
+        code: String,
+        stdin: String? = nil,
+        waitForEmbeddedRuntimeRecovery: Bool = false
+    ) async throws -> PythonExecutionResult {
         let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw PythonExecutionError.emptyCode }
         guard trimmed.count <= maxCodeLength else {
             return PythonExecutionResult(output: "代码过长（最多 \(maxCodeLength) 字符）", exitCode: 1)
         }
+
+        let needsEmbedded = requiresEmbeddedRuntime(for: trimmed)
 
         if isLikelyInteractiveLoopScript(trimmed) {
             let hasRequests = trimmed.lowercased().contains("import requests")
@@ -176,6 +184,10 @@ final class PythonExecutionService {
                 """,
                 exitCode: 1
             )
+        }
+
+        if waitForEmbeddedRuntimeRecovery && needsEmbedded {
+            try await waitForEmbeddedRuntimeRecoveryIfNeeded()
         }
 
         var embeddedTimedOut = false
@@ -206,7 +218,6 @@ final class PythonExecutionService {
             )
         }
 
-        let needsEmbedded = requiresEmbeddedRuntime(for: trimmed)
         let runtimeHint: String
         if isEmbeddedRuntimeEnabledForCurrentLaunch {
             runtimeHint = await EmbeddedCPythonRuntime.shared.statusHint()
@@ -335,6 +346,31 @@ final class PythonExecutionService {
             }
         }
         return "嵌入 CPython 暂时不可用，当前使用兼容运行器。"
+    }
+
+    private func waitForEmbeddedRuntimeRecoveryIfNeeded() async throws {
+        guard let remaining = remainingEmbeddedRuntimeCooldown() else { return }
+        let waitSeconds = max(0, remaining)
+        guard waitSeconds > 0.05 else { return }
+        let nanoseconds = UInt64((waitSeconds * 1_000_000_000).rounded())
+        try await Task.sleep(nanoseconds: nanoseconds)
+    }
+
+    private func remainingEmbeddedRuntimeCooldown() -> TimeInterval? {
+        embeddedRuntimeStateLock.lock()
+        defer { embeddedRuntimeStateLock.unlock() }
+
+        guard let disabledUntil = embeddedRuntimeDisabledUntil else {
+            return nil
+        }
+
+        let remaining = disabledUntil.timeIntervalSinceNow
+        if remaining > 0 {
+            return remaining
+        }
+
+        embeddedRuntimeDisabledUntil = nil
+        return nil
     }
 
     private func runEmbeddedRuntimeWithTimeout(code: String, stdin: String?) async -> EmbeddedRuntimeAttempt {

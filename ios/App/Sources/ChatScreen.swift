@@ -756,13 +756,13 @@ struct ChatScreen: View {
             autoBuildEligibleAssistantIDs.remove(latestAssistant.id)
             return
         }
-        autoBuildEligibleAssistantIDs.insert(latestAssistant.id)
 
         do {
             let result = try FrontendProjectBuilder.buildProject(
                 from: latestAssistant,
                 mode: .overwriteLatestProject
             )
+            autoBuildEligibleAssistantIDs.insert(latestAssistant.id)
             if result.shouldAutoOpenPreview {
                 autoFrontendPreview = AutoFrontendPreviewPayload(
                     title: "自动预览 · \(result.entryFileURL.lastPathComponent)",
@@ -777,6 +777,7 @@ struct ChatScreen: View {
             }
         } catch {
             // Auto mode should stay non-blocking; report status but avoid interrupting chat.
+            autoBuildEligibleAssistantIDs.remove(latestAssistant.id)
             let reason = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             viewModel.statusMessage = "项目自动落盘失败：\(reason)"
         }
@@ -794,6 +795,10 @@ struct ChatScreen: View {
     }
 
     private func shouldAttemptAutoProjectBuild(for assistant: ChatMessage, in messages: [ChatMessage]) -> Bool {
+        if assistantContainsExplicitProjectPayload(assistant) {
+            return true
+        }
+
         guard let index = messages.firstIndex(where: { $0.id == assistant.id }), index > 0 else {
             return false
         }
@@ -802,6 +807,22 @@ struct ChatScreen: View {
             return false
         }
         return containsProjectBuildIntent(latestUser.content)
+    }
+
+    private func assistantContainsExplicitProjectPayload(_ assistant: ChatMessage) -> Bool {
+        let normalized = assistant.content.replacingOccurrences(of: "\r\n", with: "\n")
+        if normalized.range(
+            of: #"\[\[file:(.+?)\]\]"#,
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil {
+            return true
+        }
+
+        return assistant.fileAttachments.contains { attachment in
+            attachment.binaryBase64 == nil
+                && !attachment.fileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && !attachment.textContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
     }
 
     private func containsProjectBuildIntent(_ raw: String) -> Bool {

@@ -110,7 +110,8 @@ final class PPTGenerationService {
 
         let result = try await PythonExecutionService.shared.runPython(
             code: Self.pythonGeneratorScript,
-            stdin: stdin
+            stdin: stdin,
+            waitForEmbeddedRuntimeRecovery: true
         )
 
         guard result.exitCode == 0 else {
