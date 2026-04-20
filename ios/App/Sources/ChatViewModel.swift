@@ -89,6 +89,7 @@ final class ChatViewModel: ObservableObject {
 
     @Published var config: ChatConfig {
         didSet {
+            SpeechPlaybackService.shared.voicePreset = config.replySpeechVoicePreset
             updateCurrentModelAvailability()
             guard autoSaveEnabled else { return }
             ChatConfigStore.save(config)
@@ -153,6 +154,7 @@ final class ChatViewModel: ObservableObject {
 
         syncMessagesFromCurrentSession()
         selectedModelFromList = config.model
+        SpeechPlaybackService.shared.voicePreset = config.replySpeechVoicePreset
         updateCurrentModelAvailability()
         autoSaveEnabled = true
         startNetworkMonitor()
@@ -1236,7 +1238,8 @@ final class ChatViewModel: ObservableObject {
             hotNewsCount: min(max(input.hotNewsCount, 1), 12),
             memoryModeEnabled: input.memoryModeEnabled,
             soundEffectsEnabled: input.soundEffectsEnabled,
-            replySpeechPlaybackEnabled: input.replySpeechPlaybackEnabled
+            replySpeechPlaybackEnabled: input.replySpeechPlaybackEnabled,
+            replySpeechVoicePreset: input.replySpeechVoicePreset
         )
     }
 

@@ -12,6 +12,29 @@ enum CodeThemeMode: String, Codable, CaseIterable {
     case githubLight
 }
 
+enum ReplySpeechVoicePreset: String, Codable, CaseIterable {
+    case systemNatural
+    case livelyFemale
+    case warmNarrator
+    case doubaoLike
+    case xiaoduLike
+
+    var title: String {
+        switch self {
+        case .systemNatural:
+            return "系统自然"
+        case .livelyFemale:
+            return "活泼女声"
+        case .warmNarrator:
+            return "温和旁白"
+        case .doubaoLike:
+            return "豆包风（近似）"
+        case .xiaoduLike:
+            return "小度风（近似）"
+        }
+    }
+}
+
 enum APIEndpointMode: String, Codable, CaseIterable {
     case chatCompletions
     case responses
@@ -105,6 +128,7 @@ struct ChatConfig: Codable, Equatable {
     var memoryModeEnabled: Bool
     var soundEffectsEnabled: Bool
     var replySpeechPlaybackEnabled: Bool
+    var replySpeechVoicePreset: ReplySpeechVoicePreset
 
     static let `default` = ChatConfig(
         apiURL: "https://xxx.com",
@@ -133,7 +157,8 @@ struct ChatConfig: Codable, Equatable {
         hotNewsCount: 6,
         memoryModeEnabled: false,
         soundEffectsEnabled: true,
-        replySpeechPlaybackEnabled: false
+        replySpeechPlaybackEnabled: false,
+        replySpeechVoicePreset: .systemNatural
     )
 
     init(
@@ -163,7 +188,8 @@ struct ChatConfig: Codable, Equatable {
         hotNewsCount: Int = 6,
         memoryModeEnabled: Bool = false,
         soundEffectsEnabled: Bool = true,
-        replySpeechPlaybackEnabled: Bool = false
+        replySpeechPlaybackEnabled: Bool = false,
+        replySpeechVoicePreset: ReplySpeechVoicePreset = .systemNatural
     ) {
         self.apiURL = apiURL
         self.apiKey = apiKey
@@ -192,6 +218,7 @@ struct ChatConfig: Codable, Equatable {
         self.memoryModeEnabled = memoryModeEnabled
         self.soundEffectsEnabled = soundEffectsEnabled
         self.replySpeechPlaybackEnabled = replySpeechPlaybackEnabled
+        self.replySpeechVoicePreset = replySpeechVoicePreset
     }
 
     init(from decoder: Decoder) throws {
@@ -223,6 +250,7 @@ struct ChatConfig: Codable, Equatable {
         memoryModeEnabled = try c.decodeIfPresent(Bool.self, forKey: .memoryModeEnabled) ?? false
         soundEffectsEnabled = try c.decodeIfPresent(Bool.self, forKey: .soundEffectsEnabled) ?? true
         replySpeechPlaybackEnabled = try c.decodeIfPresent(Bool.self, forKey: .replySpeechPlaybackEnabled) ?? false
+        replySpeechVoicePreset = try c.decodeIfPresent(ReplySpeechVoicePreset.self, forKey: .replySpeechVoicePreset) ?? .systemNatural
     }
 
     var normalizedBaseURL: String {
@@ -330,7 +358,8 @@ enum ChatConfigStore {
             hotNewsCount: ChatConfig.default.hotNewsCount,
             memoryModeEnabled: ChatConfig.default.memoryModeEnabled,
             soundEffectsEnabled: ChatConfig.default.soundEffectsEnabled,
-            replySpeechPlaybackEnabled: ChatConfig.default.replySpeechPlaybackEnabled
+            replySpeechPlaybackEnabled: ChatConfig.default.replySpeechPlaybackEnabled,
+            replySpeechVoicePreset: ChatConfig.default.replySpeechVoicePreset
         )
     }
 
@@ -451,7 +480,8 @@ enum ChatConfigStore {
             hotNewsCount: min(max(config.hotNewsCount, 1), 12),
             memoryModeEnabled: config.memoryModeEnabled,
             soundEffectsEnabled: config.soundEffectsEnabled,
-            replySpeechPlaybackEnabled: config.replySpeechPlaybackEnabled
+            replySpeechPlaybackEnabled: config.replySpeechPlaybackEnabled,
+            replySpeechVoicePreset: config.replySpeechVoicePreset
         )
     }
 
