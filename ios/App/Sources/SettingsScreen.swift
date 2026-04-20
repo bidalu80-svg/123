@@ -4,6 +4,7 @@ import UIKit
 struct SettingsScreen: View {
     @EnvironmentObject private var viewModel: ChatViewModel
     @EnvironmentObject private var authViewModel: AuthViewModel
+    @Environment(\.colorScheme) private var colorScheme
     @State private var projectActionFeedback: String?
     @State private var latestPreviewPayload: LatestFrontendPreviewPayload?
     @State private var projectBrowserPayload: FrontendProjectBrowserPayload?
@@ -209,6 +210,7 @@ struct SettingsScreen: View {
                     Text("VS Dark").tag(CodeThemeMode.vscodeDark)
                     Text("GitHub Light").tag(CodeThemeMode.githubLight)
                 }
+                .tint(colorScheme == .dark ? .white : .primary)
             }
 
             Section("项目文件") {
@@ -446,16 +448,17 @@ struct SettingsScreen: View {
             HStack(alignment: .center, spacing: 8) {
                 Label(title, systemImage: "folder")
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.86) : .secondary)
                 Spacer()
                 Button(action: onOpen) {
                     Label("打开", systemImage: "arrow.right.circle")
                         .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.92) : Color.primary)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 5)
                         .background(
                             Capsule(style: .continuous)
-                                .fill(Color(.tertiarySystemBackground))
+                                .fill(colorScheme == .dark ? Color.white.opacity(0.12) : Color(.tertiarySystemBackground))
                         )
                 }
                 .buttonStyle(.plain)
@@ -472,6 +475,10 @@ struct SettingsScreen: View {
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(Color(.secondarySystemBackground))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(colorScheme == .dark ? Color.white.opacity(0.10) : Color.black.opacity(0.05), lineWidth: 1)
         )
     }
 
@@ -508,6 +515,7 @@ private enum FrontendProjectActionProminence {
 }
 
 private struct FrontendProjectActionButton: View {
+    @Environment(\.colorScheme) private var colorScheme
     let title: String
     let subtitle: String
     let systemImage: String
@@ -566,9 +574,9 @@ private struct FrontendProjectActionButton: View {
         case .primary:
             return .white
         case .secondary:
-            return tint
+            return colorScheme == .dark ? Color.white.opacity(0.96) : tint
         case .danger:
-            return tint
+            return colorScheme == .dark ? Color.white.opacity(0.96) : tint
         }
     }
 
@@ -577,9 +585,9 @@ private struct FrontendProjectActionButton: View {
         case .primary:
             return Color.white.opacity(0.9)
         case .secondary:
-            return tint.opacity(0.9)
+            return colorScheme == .dark ? Color.white.opacity(0.76) : tint.opacity(0.9)
         case .danger:
-            return tint.opacity(0.9)
+            return colorScheme == .dark ? Color.white.opacity(0.76) : tint.opacity(0.9)
         }
     }
 
@@ -588,9 +596,9 @@ private struct FrontendProjectActionButton: View {
         case .primary:
             return tint.opacity(0.95)
         case .secondary:
-            return tint.opacity(0.28)
+            return colorScheme == .dark ? Color.white.opacity(0.12) : tint.opacity(0.28)
         case .danger:
-            return tint.opacity(0.35)
+            return colorScheme == .dark ? Color.white.opacity(0.12) : tint.opacity(0.35)
         }
     }
 }

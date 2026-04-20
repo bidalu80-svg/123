@@ -151,12 +151,12 @@ struct SelectableCodeTextView: UIViewRepresentable {
 
         if useDarkPalette {
             return SyntaxPalette(
-                keyword: UIColor(red: 0.77, green: 0.53, blue: 0.75, alpha: 1),
-                string: UIColor(red: 0.81, green: 0.57, blue: 0.47, alpha: 1),
-                number: UIColor(red: 0.71, green: 0.81, blue: 0.66, alpha: 1),
-                comment: UIColor(red: 0.42, green: 0.60, blue: 0.33, alpha: 1),
-                function: UIColor(red: 0.86, green: 0.86, blue: 0.48, alpha: 1),
-                type: UIColor(red: 0.31, green: 0.79, blue: 0.69, alpha: 1)
+                keyword: UIColor(red: 0.84, green: 0.64, blue: 0.90, alpha: 1),
+                string: UIColor(red: 0.93, green: 0.73, blue: 0.58, alpha: 1),
+                number: UIColor(red: 0.80, green: 0.90, blue: 0.72, alpha: 1),
+                comment: UIColor(red: 0.56, green: 0.74, blue: 0.46, alpha: 1),
+                function: UIColor(red: 0.97, green: 0.90, blue: 0.58, alpha: 1),
+                type: UIColor(red: 0.49, green: 0.87, blue: 0.80, alpha: 1)
             )
         }
 
