@@ -223,7 +223,7 @@ struct ChatFileAttachment: Identifiable, Codable, Equatable {
     }
 
     var previewText: String {
-        textContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        unwrapSingleFencedCodeBlockIfNeeded(textContent)
     }
 
     var promptBlock: String {
@@ -249,6 +249,35 @@ struct ChatFileAttachment: Identifiable, Codable, Equatable {
         case mimeType
         case textContent
         case binaryBase64
+    }
+
+    private func unwrapSingleFencedCodeBlockIfNeeded(_ raw: String) -> String {
+        let normalized = raw
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalized.hasPrefix("```"), normalized.hasSuffix("```") else {
+            return normalized
+        }
+
+        var inner = String(normalized.dropFirst(3))
+        guard inner.count >= 3 else { return normalized }
+        inner.removeLast(3)
+
+        let trimmedInner = inner.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let newlineIndex = trimmedInner.firstIndex(of: "\n") else {
+            return trimmedInner
+        }
+
+        let header = trimmedInner[..<newlineIndex].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let bodyStart = trimmedInner.index(after: newlineIndex)
+        let body = trimmedInner[bodyStart...].trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let expectedLanguage = (codeLanguageHint ?? "").lowercased()
+        if !header.isEmpty && !body.isEmpty && (header == expectedLanguage || header.range(of: #"^[a-z0-9.+#_-]+$"#, options: .regularExpression) != nil) {
+            return String(body)
+        }
+
+        return trimmedInner
     }
 }
 

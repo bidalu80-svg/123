@@ -363,7 +363,9 @@ enum FrontendProjectBuilder {
         for attachment in message.fileAttachments {
             guard attachment.binaryBase64 == nil else { continue }
             guard let path = sanitizeRelativePath(attachment.fileName) else { continue }
-            let content = normalizeFileContent(attachment.textContent)
+            let content = normalizeFileContent(
+                unwrapSingleFencedTaggedFileContent(attachment.textContent)
+            )
             guard !content.isEmpty else { continue }
             files.append(ParsedWebFile(path: path, content: content))
         }

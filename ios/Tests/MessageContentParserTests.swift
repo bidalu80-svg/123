@@ -91,4 +91,37 @@ final class MessageContentParserTests: XCTestCase {
         XCTAssertFalse(content.contains("```"))
         XCTAssertTrue(content.contains("<body>Hello</body>"))
     }
+
+    func testParseUnwrapsSingleFencedCodeInsideFileAttachment() {
+        let message = ChatMessage(
+            role: .assistant,
+            content: "",
+            fileAttachments: [
+                ChatFileAttachment(
+                    fileName: "index.html",
+                    mimeType: "text/html",
+                    textContent: """
+                    ```html
+                    <!doctype html>
+                    <html><body>Hello</body></html>
+                    ```
+                    """
+                )
+            ]
+        )
+
+        let segments = MessageContentParser.parse(message)
+        guard case let .file(name, language, content)? = segments.first(where: {
+            if case .file = $0 { return true }
+            return false
+        }) else {
+            return XCTFail("Expected file attachment to render as file segment")
+        }
+
+        XCTAssertEqual(name, "index.html")
+        XCTAssertEqual(language, "html")
+        XCTAssertFalse(content.contains("```html"))
+        XCTAssertFalse(content.contains("```"))
+        XCTAssertTrue(content.contains("<body>Hello</body>"))
+    }
 }

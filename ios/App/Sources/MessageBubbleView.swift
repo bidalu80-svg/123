@@ -979,13 +979,6 @@ struct MessageBubbleView: View {
                     .buttonStyle(.borderedProminent)
                     .tint(Color(red: 0.06, green: 0.36, blue: 0.86))
                     .foregroundStyle(.white)
-
-                    Button("写入 latest") {
-                        generateFrontendProject(mode: .overwriteLatestProject)
-                    }
-                    .font(.caption2)
-                    .buttonStyle(.bordered)
-                    .disabled(isBuildingFrontendProject)
                 }
                 Button(isCopied ? "已复制" : "复制代码") {
                     UIPasteboard.general.string = actionContent

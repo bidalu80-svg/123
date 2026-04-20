@@ -258,4 +258,31 @@ final class FrontendProjectBuilderTests: XCTestCase {
         let contents = try FileManager.default.contentsOfDirectory(atPath: latest.path)
         XCTAssertTrue(contents.isEmpty)
     }
+
+    func testBuildProjectUnwrapsFencedFileAttachmentContent() throws {
+        let message = ChatMessage(
+            role: .assistant,
+            content: "",
+            fileAttachments: [
+                ChatFileAttachment(
+                    fileName: "index.html",
+                    mimeType: "text/html",
+                    textContent: """
+                    ```html
+                    <!doctype html>
+                    <html><body>Hello</body></html>
+                    ```
+                    """
+                )
+            ]
+        )
+
+        let result = try FrontendProjectBuilder.buildProject(from: message, mode: .overwriteLatestProject)
+        let entryText = try String(contentsOf: result.entryFileURL, encoding: .utf8)
+
+        XCTAssertEqual(result.entryFileURL.lastPathComponent.lowercased(), "index.html")
+        XCTAssertFalse(entryText.contains("```html"))
+        XCTAssertFalse(entryText.contains("```"))
+        XCTAssertTrue(entryText.contains("<body>Hello</body>"))
+    }
 }

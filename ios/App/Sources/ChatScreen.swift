@@ -860,7 +860,25 @@ struct ChatScreen: View {
             "repo structure"
         ]
 
-        return intentMarkers.contains { normalized.contains($0) }
+        if intentMarkers.contains(where: { normalized.contains($0) }) {
+            return true
+        }
+
+        if normalized.range(
+            of: #"(做|写|搭|建|生成|创建|开发|搞)(一个|个|套)?[^\n]{0,24}(网站|网页|页面|项目|前端|应用|app|demo|登录页|注册页|后台)"#,
+            options: .regularExpression
+        ) != nil {
+            return true
+        }
+
+        if normalized.range(
+            of: #"(网站|网页|页面|项目|前端|应用|app|demo|登录页|注册页|后台)[^\n]{0,16}(做|写|搭|建|生成|创建|开发|搞)"#,
+            options: .regularExpression
+        ) != nil {
+            return true
+        }
+
+        return false
     }
 
     private func containsNoFileDirective(_ raw: String) -> Bool {
