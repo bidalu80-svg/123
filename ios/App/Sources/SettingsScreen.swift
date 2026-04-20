@@ -133,10 +133,10 @@ struct SettingsScreen: View {
 
             Section("请求选项") {
                 Toggle("启用流式输出", isOn: $viewModel.config.streamEnabled)
-                Toggle("前端自动生成模式", isOn: $viewModel.config.frontendAutoBuildEnabled)
+                Toggle("项目自动生成模式（多语言）", isOn: $viewModel.config.frontendAutoBuildEnabled)
                 Text(viewModel.config.frontendAutoBuildEnabled
-                    ? "开启后会注入前端生成提示词，并在助手回复完成后自动落盘到 latest 并弹出预览。"
-                    : "关闭后仅保留普通聊天，不自动生成本地前端项目。")
+                    ? "开启后会注入项目生成提示词，并在助手回复完成后自动落盘到 latest。网页类项目会自动预览。"
+                    : "关闭后仅保留普通聊天，不自动生成本地项目文件。")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 Toggle("启用消息音效（发送/回复完成）", isOn: $viewModel.config.soundEffectsEnabled)
@@ -203,7 +203,7 @@ struct SettingsScreen: View {
                 }
             }
 
-            Section("前端项目") {
+            Section("项目文件") {
                 projectPathCard(
                     title: "项目根目录",
                     path: FrontendProjectBuilder.projectsRootPathDisplay()
@@ -306,7 +306,7 @@ struct SettingsScreen: View {
                 statusRow("当前接口", value: viewModel.config.endpointMode.title)
                 statusRow("当前模型", value: viewModel.config.model)
                 statusRow("流式模式", value: viewModel.config.streamEnabled ? "开启" : "关闭")
-                statusRow("前端自动生成", value: viewModel.config.frontendAutoBuildEnabled ? "开启" : "关闭")
+                statusRow("项目自动生成", value: viewModel.config.frontendAutoBuildEnabled ? "开启" : "关闭")
                 statusRow("记忆模式", value: viewModel.config.memoryModeEnabled ? "开启" : "关闭")
             }
         }
@@ -377,7 +377,7 @@ struct SettingsScreen: View {
 
     private func openLatestProjectPreview() {
         guard let entryFileURL = FrontendProjectBuilder.latestEntryFileURL() else {
-            projectActionFeedback = "latest 目录里还没有可预览的 HTML 文件。"
+            projectActionFeedback = "latest 目录里还没有可预览的入口文件。"
             return
         }
 
@@ -420,7 +420,7 @@ struct SettingsScreen: View {
             return
         }
         projectBrowserPayload = FrontendProjectBrowserPayload(
-            title: "前端项目文件",
+            title: "项目文件",
             rootURL: root
         )
     }

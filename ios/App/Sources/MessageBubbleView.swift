@@ -399,7 +399,7 @@ struct MessageBubbleView: View {
                 Image(systemName: payload.isStreaming ? "hammer.fill" : "checkmark.seal.fill")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(payload.isStreaming ? Color.cyan : Color.green)
-                Text(payload.isStreaming ? "正在生成网站项目" : "网站项目已生成完成")
+                Text(payload.isStreaming ? "正在生成项目文件" : "项目文件已生成完成")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.primary)
                 Spacer(minLength: 0)
@@ -428,7 +428,7 @@ struct MessageBubbleView: View {
                 Button {
                     openLatestProjectPreviewFromProgress()
                 } label: {
-                    Label("预览整站", systemImage: "globe")
+                    Label("预览入口页", systemImage: "globe")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 12)
@@ -514,11 +514,11 @@ struct MessageBubbleView: View {
             }
             return [
                 FrontendProgressStep(
-                    title: "解析页面结构",
+                    title: "解析文件结构",
                     state: stage >= 2 ? .completed : .running
                 ),
                 FrontendProgressStep(
-                    title: "生成 HTML / CSS / JS",
+                    title: "生成项目代码",
                     state: stage >= 3 ? .completed : (stage == 2 ? .running : .pending)
                 ),
                 FrontendProgressStep(
@@ -526,18 +526,18 @@ struct MessageBubbleView: View {
                     state: stage == 3 ? .running : .pending
                 ),
                 FrontendProgressStep(
-                    title: "准备整站预览",
+                    title: payload.hasEntry ? "准备入口预览" : "整理项目索引",
                     state: .pending
                 )
             ]
         }
 
         return [
-            FrontendProgressStep(title: "解析页面结构", state: .completed),
-            FrontendProgressStep(title: "生成 HTML / CSS / JS", state: .completed),
+            FrontendProgressStep(title: "解析文件结构", state: .completed),
+            FrontendProgressStep(title: "生成项目代码", state: .completed),
             FrontendProgressStep(title: "写入 latest 项目目录", state: .completed),
             FrontendProgressStep(
-                title: payload.hasEntry ? "准备整站预览" : "自动选择入口页并预览",
+                title: payload.hasEntry ? "准备入口预览" : "整理项目索引",
                 state: .completed
             )
         ]
@@ -1064,7 +1064,7 @@ struct MessageBubbleView: View {
 
     private func generateFrontendProject(mode: FrontendProjectBuilder.BuildMode) {
         guard canGenerateFrontendProject else {
-            saveFeedback = "当前消息没有可识别的前端代码。"
+            saveFeedback = "当前消息没有可识别的项目代码。"
             return
         }
         guard !isBuildingFrontendProject else { return }
@@ -1074,19 +1074,29 @@ struct MessageBubbleView: View {
         do {
             let result = try FrontendProjectBuilder.buildProject(from: message, mode: mode)
             let fileCount = result.writtenRelativePaths.count
-            let title = "网页预览 · \(result.entryFileURL.lastPathComponent)"
-            activeHTMLPreview = HTMLPreviewPayload(
-                title: title,
-                html: result.entryHTML,
-                baseURL: result.projectDirectoryURL,
-                entryFileURL: result.entryFileURL
-            )
+            if result.shouldAutoOpenPreview {
+                let title = "网页预览 · \(result.entryFileURL.lastPathComponent)"
+                activeHTMLPreview = HTMLPreviewPayload(
+                    title: title,
+                    html: result.entryHTML,
+                    baseURL: result.projectDirectoryURL,
+                    entryFileURL: result.entryFileURL
+                )
+            }
 
             switch mode {
             case .createNewProject:
-                feedback(.success, "已生成项目（\(fileCount) 文件）")
+                if result.shouldAutoOpenPreview {
+                    feedback(.success, "已生成项目并预览（\(fileCount) 文件）")
+                } else {
+                    feedback(.success, "已生成项目（\(fileCount) 文件）")
+                }
             case .overwriteLatestProject:
-                feedback(.success, "已覆盖更新（\(fileCount) 文件）")
+                if result.shouldAutoOpenPreview {
+                    feedback(.success, "已覆盖更新并预览（\(fileCount) 文件）")
+                } else {
+                    feedback(.success, "已覆盖更新（\(fileCount) 文件）")
+                }
             }
         } catch {
             let text = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
@@ -1361,7 +1371,7 @@ struct MessageBubbleView: View {
 
     private func openLatestProjectPreviewFromProgress() {
         guard let entryFileURL = FrontendProjectBuilder.latestEntryFileURL() else {
-            saveFeedback = "latest 目录里还没有可预览的 HTML 文件。"
+            saveFeedback = "latest 目录里还没有可预览的入口文件。"
             return
         }
 
@@ -1392,7 +1402,7 @@ private struct FrontendProgressPayload {
         let normalized = raw.replacingOccurrences(of: "\r\n", with: "\n")
         let lines = normalized.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         guard let first = lines.first?.trimmingCharacters(in: .whitespacesAndNewlines),
-              first == "[IEXA_FRONTEND_PROGRESS]" else {
+              first == "[IEXA_PROJECT_PROGRESS]" || first == "[IEXA_FRONTEND_PROGRESS]" else {
             return nil
         }
 

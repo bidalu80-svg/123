@@ -17,14 +17,17 @@ struct ChatRequestBuilder {
     - 用户明确要求特定格式时，严格遵循用户要求。
     """
     private static let frontendAutoBuildSystemPrompt = """
-    你当前处于“前端自动生成模式”。当用户让你做网页、前端页面、Landing Page、H5、小程序界面原型或静态网站时，遵循以下规则：
-    1) 默认输出“可直接运行”的单文件 `index.html`，并内嵌全部 CSS/JS（除非用户明确要求 React/Vue/多文件）。
-    2) 代码必须完整可运行，不允许省略关键结构，不要使用伪代码或“略”。
-    3) 若用户明确要求多文件，请按代码块分别给出完整文件内容，并在每个代码块前写清文件名。
-    4) 回答结构优先为：先 1-2 句说明效果，再给完整代码。
-    5) 不要输出后端服务、数据库或部署脚本，除非用户明确提出需要。
-    6) 若用户明确要求 `HTML + CSS + JavaScript` 三模块，必须输出并命名为 `index.html`、`styles.css`、`script.js`，并确保 `index.html` 正确引用另外两个文件。
-    7) 若用户明确要求 PHP 全栈预览，请按多文件输出 `index.php` 与相关 `*.php` 文件，数据库默认使用 SQLite（PDO），并优先使用相对路径（如 `data/app.db`）。
+    你当前处于“项目自动生成模式（多语言）”。当用户让你创建项目、脚手架、代码仓库或多文件示例时，遵循以下规则：
+    1) 优先输出完整可运行的项目文件，不要只给片段，不要写“省略”。
+    2) 多文件输出时，默认使用如下格式（非常重要）：
+       [[file:relative/path.ext]]
+       <完整文件内容>
+       [[endfile]]
+    3) `relative/path.ext` 必须是相对路径，不要使用绝对路径，不要包含 `..`。
+    4) 语言不限：可生成 Python、Java、Go、Rust、Node.js/TypeScript、Swift、C/C++、PHP、Shell、SQL、配置文件等。
+    5) 若用户未指定技术栈，先做合理技术决策，给出最小可运行结构（含必要入口文件和配置）。
+    6) 若用户明确要求网页/前端项目，继续按网页最佳实践输出（例如 `index.html`、`styles.css`、`script.js` 或框架结构）。
+    7) 除非用户明确要求解释，尽量以“简短说明 + 完整文件输出”为主。
     """
     private static let maxHistoryMessages = 22
     private static let maxHistoryCharacters = 42_000

@@ -12,6 +12,8 @@ enum FrontendProjectBuilder {
         let entryHTML: String
         let writtenRelativePaths: [String]
         let createdNewProject: Bool
+        let shouldAutoOpenPreview: Bool
+        let hadNaturalPreviewEntry: Bool
     }
 
     struct ChatProgressSnapshot {
@@ -27,7 +29,7 @@ enum FrontendProjectBuilder {
         var errorDescription: String? {
             switch self {
             case .noFrontendContent:
-                return "没有识别到可落盘的前端代码。请让模型按 [[file:...]] 或代码块输出。"
+                return "没有识别到可落盘的项目代码。请让模型按 [[file:...]] 或代码块输出。"
             case .invalidProjectDirectory:
                 return "无法创建本地项目目录。"
             case .missingEntryFile:
@@ -46,24 +48,56 @@ enum FrontendProjectBuilder {
         "css", "scss", "sass", "less",
         "php", "phtml",
         "javascript", "js", "typescript", "ts", "json", "vue", "jsx", "tsx",
-        "xml", "yaml", "yml", "markdown", "md",
-        "python", "py", "swift", "bash",
-        "text", "plaintext", "plain", "code"
+        "xml", "yaml", "yml", "toml", "ini", "properties",
+        "markdown", "md", "text", "plaintext", "plain", "code", "txt",
+        "python", "py", "python3", "swift", "bash", "sh", "zsh", "shell", "powershell", "ps1",
+        "go", "rust", "rs", "java", "kotlin", "kt", "kts",
+        "c", "h", "cpp", "c++", "cc", "cxx", "hpp", "hxx",
+        "csharp", "cs", "fsharp", "fs", "ruby", "rb", "lua", "r", "scala",
+        "objective-c", "objc", "objectivec", "m", "objective-c++", "objc++", "mm",
+        "dart", "sql", "dockerfile", "makefile", "cmake", "gradle", "groovy"
+    ]
+    private static let commonProjectExtensions: Set<String> = [
+        "html", "htm", "xhtml", "css", "scss", "sass", "less",
+        "js", "mjs", "cjs", "ts", "tsx", "jsx", "vue", "svelte",
+        "php", "phtml",
+        "py", "swift", "go", "rs", "java", "kt", "kts",
+        "c", "h", "cc", "cpp", "cxx", "hpp", "hxx",
+        "cs", "fs", "rb", "lua", "r", "scala", "dart",
+        "json", "xml", "yaml", "yml", "toml", "ini", "cfg", "conf", "env",
+        "md", "txt", "sql", "sh", "zsh", "bash", "ps1",
+        "dockerfile", "gradle", "properties", "lock"
+    ]
+    private static let wellKnownProjectFileNames: Set<String> = [
+        "dockerfile", "makefile", "cmakelists.txt", "readme", "readme.md", "license", "license.md",
+        "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock",
+        "tsconfig.json", "jsconfig.json", "vite.config.ts", "vite.config.js", "webpack.config.js", "webpack.config.ts",
+        "next.config.js", "next.config.mjs", "nuxt.config.ts",
+        "composer.json", "composer.lock",
+        "requirements.txt", "pyproject.toml", "poetry.lock", "pipfile", "pipfile.lock", "setup.py",
+        "go.mod", "go.sum", "cargo.toml", "cargo.lock",
+        "pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "gradle.properties",
+        "gemfile", "gemfile.lock", "rakefile",
+        "mix.exs", "mix.lock", "pubspec.yaml", "pubspec.lock",
+        "docker-compose.yml", "docker-compose.yaml",
+        ".gitignore", ".gitattributes", ".editorconfig", ".env", ".env.example"
     ]
     private static let latestEntryPointerFileName = ".iexa-latest-entry"
 
     static func canGenerateProject(from message: ChatMessage) -> Bool {
         if message.fileAttachments.contains(where: {
-            $0.binaryBase64 == nil && isLikelyFrontendPath($0.fileName)
+            $0.binaryBase64 == nil
+                && sanitizeRelativePath($0.fileName) != nil
+                && !$0.textContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }) {
             return true
         }
 
         let text = message.content.replacingOccurrences(of: "\r\n", with: "\n")
-        if containsWebTaggedFile(in: text) {
+        if containsTaggedFile(in: text) {
             return true
         }
-        if containsLikelyWebFencedBlock(in: text) {
+        if containsLikelyProjectFencedBlock(in: text) {
             return true
         }
         return looksLikeHTML(text) || looksLikePHP(text)
@@ -71,7 +105,7 @@ enum FrontendProjectBuilder {
 
     static func chatProgressSnapshot(from message: ChatMessage) -> ChatProgressSnapshot? {
         let text = message.content.replacingOccurrences(of: "\r\n", with: "\n")
-        let parsed = extractWebFiles(from: message)
+        let parsed = extractProjectFiles(from: message)
         let normalizedPaths = parsed.map { $0.path.lowercased() }
         let uniquePaths = Array(Set(normalizedPaths))
 
@@ -79,19 +113,22 @@ enum FrontendProjectBuilder {
         let hasPHPPath = uniquePaths.contains(where: { isPHPPath($0) })
         let hasHTMLLikeFile = parsed.contains(where: { looksLikeHTML($0.content) })
         let hasPHPLikeFile = parsed.contains(where: { looksLikePHP($0.content) })
-        let hasTaggedFile = containsWebTaggedFile(in: text)
+        let hasTaggedFile = containsTaggedFile(in: text)
+        let hasFencedProjectBlock = containsLikelyProjectFencedBlock(in: text)
         let hasHTMLText = looksLikeHTML(text)
         let hasPHPText = looksLikePHP(text)
-        let hasFrontendAttachment = message.fileAttachments.contains(where: {
-            $0.binaryBase64 == nil && isLikelyFrontendPath($0.fileName)
+        let hasProjectAttachment = message.fileAttachments.contains(where: {
+            $0.binaryBase64 == nil
+                && sanitizeRelativePath($0.fileName) != nil
+                && !$0.textContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         })
 
-        let shouldRenderProgress = hasHTMLPath
-            || hasPHPPath
+        let shouldRenderProgress = !uniquePaths.isEmpty
             || hasTaggedFile
+            || hasFencedProjectBlock
             || hasHTMLText
             || hasPHPText
-            || hasFrontendAttachment
+            || hasProjectAttachment
         guard shouldRenderProgress else { return nil }
 
         return ChatProgressSnapshot(
@@ -215,7 +252,7 @@ enum FrontendProjectBuilder {
     }
 
     static func buildProject(from message: ChatMessage, mode: BuildMode) throws -> BuildResult {
-        var parsedFiles = extractWebFiles(from: message)
+        var parsedFiles = extractProjectFiles(from: message)
         if parsedFiles.isEmpty {
             if let fallbackHTML = fallbackHTML(in: message.content) {
                 parsedFiles = [ParsedWebFile(path: "index.html", content: fallbackHTML)]
@@ -246,10 +283,16 @@ enum FrontendProjectBuilder {
 
         promoteHTMLLikeFilePathsIfNeeded(merged: &merged, orderedPaths: &orderedPaths)
 
-        if !orderedPaths.contains(where: { isPreviewEntryPath($0) }) {
-            let stylePaths = orderedPaths.filter { isStylePath($0) }
-            let scriptPaths = orderedPaths.filter { isScriptPath($0) }
-            let synthesized = synthesizedIndexHTML(stylePaths: stylePaths, scriptPaths: scriptPaths)
+        let hadNaturalPreviewEntry = orderedPaths.contains(where: { isPreviewEntryPath($0) })
+        let stylePaths = orderedPaths.filter { isStylePath($0) }
+        let scriptPaths = orderedPaths.filter { isScriptPath($0) }
+
+        if !hadNaturalPreviewEntry {
+            let synthesized = synthesizedIndexHTML(
+                stylePaths: stylePaths,
+                scriptPaths: scriptPaths,
+                projectPaths: orderedPaths
+            )
             if merged["index.html"] == nil {
                 orderedPaths.insert("index.html", at: 0)
             }
@@ -296,7 +339,9 @@ enum FrontendProjectBuilder {
             entryFileURL: projectDirectoryURL.appendingPathComponent(entryRelativePath, isDirectory: false),
             entryHTML: finalizedEntryHTML,
             writtenRelativePaths: orderedPaths,
-            createdNewProject: mode == .createNewProject
+            createdNewProject: mode == .createNewProject,
+            shouldAutoOpenPreview: hadNaturalPreviewEntry || !stylePaths.isEmpty || !scriptPaths.isEmpty,
+            hadNaturalPreviewEntry: hadNaturalPreviewEntry
         )
     }
 
@@ -312,7 +357,7 @@ enum FrontendProjectBuilder {
         try? "\(normalized)\n".write(to: pointerURL, atomically: true, encoding: .utf8)
     }
 
-    private static func extractWebFiles(from message: ChatMessage) -> [ParsedWebFile] {
+    private static func extractProjectFiles(from message: ChatMessage) -> [ParsedWebFile] {
         var files: [ParsedWebFile] = []
 
         for attachment in message.fileAttachments {
@@ -403,17 +448,17 @@ enum FrontendProjectBuilder {
             return explicit
         }
 
-        let loweredDescriptor = descriptor.lowercased()
-        if let pathLike = pathLikeDescriptorPath(loweredDescriptor),
+        let trimmedDescriptor = descriptor.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let pathLike = pathLikeDescriptorPath(trimmedDescriptor),
            let normalized = sanitizeRelativePath(pathLike) {
             return normalized
         }
 
-        if let mapped = mappedPathFromLanguage(loweredDescriptor) {
+        if let mapped = mappedPathFromLanguage(trimmedDescriptor) {
             return mapped
         }
 
-        if shouldTryPrefixHints(for: loweredDescriptor) {
+        if shouldTryPrefixHints(for: trimmedDescriptor) {
             if let hinted = sanitizeRelativePath(extractPathHintFromPrefix(prefixText)) {
                 return hinted
             }
@@ -422,23 +467,21 @@ enum FrontendProjectBuilder {
             }
         }
 
-        if loweredDescriptor.isEmpty, looksLikeHTML(codeContent) {
+        if trimmedDescriptor.isEmpty, looksLikeHTML(codeContent) {
             return "index.html"
         }
-        if loweredDescriptor.isEmpty, looksLikePHP(codeContent) {
+        if trimmedDescriptor.isEmpty, looksLikePHP(codeContent) {
             return "index.php"
         }
 
         return nil
     }
 
-    private static func shouldTryPrefixHints(for descriptor: String) -> Bool {
-        let trimmed = descriptor.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return true }
-        return !knownLanguageDescriptors.contains(trimmed)
+    private static func shouldTryPrefixHints(for _: String) -> Bool {
+        return true
     }
 
-    private static func containsWebTaggedFile(in text: String) -> Bool {
+    private static func containsTaggedFile(in text: String) -> Bool {
         let pattern = #"\[\[file:(.+?)\]\]"#
         guard let regex = try? NSRegularExpression(
             pattern: pattern,
@@ -452,15 +495,14 @@ enum FrontendProjectBuilder {
         for match in matches {
             guard let range = Range(match.range(at: 1), in: text) else { continue }
             let rawPath = String(text[range])
-            guard let normalized = sanitizeRelativePath(rawPath) else { continue }
-            if isLikelyFrontendPath(normalized) {
+            if sanitizeRelativePath(rawPath) != nil {
                 return true
             }
         }
         return false
     }
 
-    private static func containsLikelyWebFencedBlock(in text: String) -> Bool {
+    private static func containsLikelyProjectFencedBlock(in text: String) -> Bool {
         let pattern = #"(?s)```([^\n`]*)\n(.*?)```"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else {
             return false
@@ -477,14 +519,17 @@ enum FrontendProjectBuilder {
                 continue
             }
 
-            let descriptor = String(text[descriptorRange]).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let descriptor = String(text[descriptorRange]).trimmingCharacters(in: .whitespacesAndNewlines)
             let content = String(text[contentRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let prefixStart = max(0, match.range.location - 260)
+            let prefixLength = max(0, match.range.location - prefixStart)
+            let prefix = nsText.substring(with: NSRange(location: prefixStart, length: prefixLength))
 
-            if mappedPathFromLanguage(descriptor) != nil {
-                return true
-            }
-
-            if let pathLike = pathLikeDescriptorPath(descriptor), isLikelyFrontendPath(pathLike) {
+            if resolvePathForFencedBlock(
+                descriptor: descriptor,
+                codeContent: content,
+                prefixText: prefix
+            ) != nil {
                 return true
             }
 
@@ -561,39 +606,72 @@ enum FrontendProjectBuilder {
             return false
         }
 
-        let lowered = line.lowercased()
-        let webSuffixes = [
-            ".html", ".htm", ".css", ".scss", ".sass", ".less",
-            ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue",
-            ".php", ".phtml"
-        ]
-        guard webSuffixes.contains(where: { lowered.hasSuffix($0) }) else {
+        let normalized = line.replacingOccurrences(of: "\\", with: "/")
+        let lowered = normalized.lowercased()
+        if wellKnownProjectFileNames.contains(lowered) {
+            return true
+        }
+
+        guard normalized.range(of: #"^[A-Za-z0-9_./\\@+\-]+$"#, options: .regularExpression) != nil else {
             return false
         }
 
-        return line.range(of: #"^[A-Za-z0-9_./\\-]+$"#, options: .regularExpression) != nil
+        let fileName = (normalized as NSString).lastPathComponent.lowercased()
+        if wellKnownProjectFileNames.contains(fileName) {
+            return true
+        }
+
+        if fileName.hasPrefix("."),
+           fileName.count > 1,
+           fileName.dropFirst().contains(where: { $0.isLetter }) {
+            return true
+        }
+
+        if let ext = fileName.split(separator: ".").last, ext.count <= 12 {
+            let extLower = ext.lowercased()
+            if commonProjectExtensions.contains(extLower) {
+                return true
+            }
+        }
+
+        return false
     }
 
     private static func pathLikeDescriptorPath(_ descriptor: String) -> String? {
         let trimmed = descriptor.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
-        if trimmed.contains(" ") {
-            return nil
+        let loweredTrimmed = trimmed.lowercased()
+        if !trimmed.contains(" ") {
+            if knownLanguageDescriptors.contains(loweredTrimmed) {
+                return nil
+            }
+            if isLikelyProjectPath(trimmed) {
+                return trimmed
+            }
         }
 
-        if knownLanguageDescriptors.contains(trimmed) {
-            return nil
+        let tokens = trimmed
+            .split(whereSeparator: { $0.isWhitespace })
+            .map(String.init)
+        guard !tokens.isEmpty else { return nil }
+
+        let firstTokenIsLanguage = knownLanguageDescriptors.contains(tokens[0].lowercased())
+        let candidateTokens = firstTokenIsLanguage ? Array(tokens.dropFirst()) : tokens
+
+        for token in candidateTokens {
+            let candidate = token.trimmingCharacters(in: CharacterSet(charactersIn: "`'\"(),:"))
+            guard !candidate.isEmpty else { continue }
+            if isLikelyProjectPath(candidate) {
+                return candidate
+            }
         }
 
-        if trimmed.contains("/") || trimmed.contains("\\") || trimmed.contains(".") {
-            return trimmed
-        }
         return nil
     }
 
     private static func mappedPathFromLanguage(_ language: String) -> String? {
-        switch language {
+        switch normalizeLanguageDescriptor(language) {
         case "html", "htm", "xhtml", "text/html":
             return "index.html"
         case "php", "phtml", "text/php", "application/php":
@@ -602,11 +680,88 @@ enum FrontendProjectBuilder {
             return "styles.css"
         case "javascript", "js":
             return "script.js"
-        case "typescript", "ts", "jsx", "tsx", "vue":
+        case "typescript", "ts":
             return "app.js"
+        case "jsx":
+            return "src/App.jsx"
+        case "tsx":
+            return "src/App.tsx"
+        case "vue":
+            return "App.vue"
+        case "python", "py", "python3":
+            return "main.py"
+        case "swift":
+            return "main.swift"
+        case "go":
+            return "main.go"
+        case "rust", "rs":
+            return "src/main.rs"
+        case "java":
+            return "Main.java"
+        case "kotlin", "kt":
+            return "Main.kt"
+        case "kts":
+            return "build.gradle.kts"
+        case "c":
+            return "main.c"
+        case "cpp", "c++", "cc", "cxx":
+            return "main.cpp"
+        case "csharp", "cs":
+            return "Program.cs"
+        case "ruby", "rb":
+            return "main.rb"
+        case "lua":
+            return "main.lua"
+        case "r":
+            return "main.R"
+        case "scala":
+            return "Main.scala"
+        case "dart":
+            return "lib/main.dart"
+        case "bash", "sh", "zsh", "shell":
+            return "main.sh"
+        case "powershell", "ps1":
+            return "main.ps1"
+        case "json":
+            return "data.json"
+        case "yaml", "yml":
+            return "config.yaml"
+        case "toml":
+            return "config.toml"
+        case "xml":
+            return "config.xml"
+        case "ini", "properties":
+            return "config.ini"
+        case "markdown", "md":
+            return "README.md"
+        case "sql":
+            return "schema.sql"
+        case "dockerfile":
+            return "Dockerfile"
+        case "makefile":
+            return "Makefile"
         default:
             return nil
         }
+    }
+
+    private static func normalizeLanguageDescriptor(_ descriptor: String) -> String {
+        let trimmed = descriptor.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmed.isEmpty else { return "" }
+        if knownLanguageDescriptors.contains(trimmed) {
+            return trimmed
+        }
+
+        let token = trimmed
+            .split(whereSeparator: { $0.isWhitespace || $0 == "," || $0 == ";" })
+            .first
+            .map(String.init)?
+            .trimmingCharacters(in: CharacterSet(charactersIn: "`'\"()[]{}")) ?? trimmed
+
+        if knownLanguageDescriptors.contains(token) {
+            return token
+        }
+        return token
     }
 
     private static func mergeParsedFiles(_ files: [ParsedWebFile]) -> [ParsedWebFile] {
@@ -862,26 +1017,36 @@ enum FrontendProjectBuilder {
             || lowered.contains("<?=")
     }
 
-    private static func isLikelyFrontendPath(_ rawPath: String) -> Bool {
-        let path = rawPath.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+    private static func isLikelyProjectPath(_ rawPath: String) -> Bool {
+        let path = rawPath
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\\", with: "/")
+            .lowercased()
         guard !path.isEmpty else { return false }
 
-        if path.hasSuffix("index.html") || path.hasSuffix("index.htm") {
+        if wellKnownProjectFileNames.contains(path) {
             return true
         }
 
-        let webSuffixes = [
-            ".html", ".htm", ".css", ".scss", ".sass", ".less",
-            ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue",
-            ".php", ".phtml"
-        ]
-        if webSuffixes.contains(where: { path.hasSuffix($0) }) {
+        let fileName = (path as NSString).lastPathComponent
+        if wellKnownProjectFileNames.contains(fileName) {
             return true
         }
 
-        if path.hasSuffix("package.json")
-            || path.hasSuffix("vite.config.js")
-            || path.hasSuffix("vite.config.ts") {
+        if fileName.hasPrefix("."),
+           fileName.count > 1,
+           fileName.dropFirst().contains(where: { $0.isLetter }) {
+            return true
+        }
+
+        if let ext = fileName.split(separator: ".").last,
+           commonProjectExtensions.contains(String(ext)) {
+            return true
+        }
+
+        if let ext = fileName.split(separator: ".").last,
+           ext.count <= 12,
+           ext.contains(where: { $0.isLetter }) {
             return true
         }
 
@@ -918,7 +1083,8 @@ enum FrontendProjectBuilder {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed != ".", trimmed != ".." else { return nil }
 
-        let allowedExtraScalars = CharacterSet(charactersIn: "._- ")
+        let preserveLeadingDot = trimmed.hasPrefix(".")
+        let allowedExtraScalars = CharacterSet(charactersIn: "._- @+")
         var buffer = ""
         for scalar in trimmed.unicodeScalars {
             if CharacterSet.alphanumerics.contains(scalar)
@@ -928,9 +1094,16 @@ enum FrontendProjectBuilder {
                 buffer.append("-")
             }
         }
-        let normalized = buffer
+        var normalized = buffer
             .replacingOccurrences(of: " ", with: "-")
-            .trimmingCharacters(in: CharacterSet(charactersIn: ".-"))
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if preserveLeadingDot {
+            normalized = normalized.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+            guard !normalized.isEmpty else { return nil }
+            return ".\(normalized)"
+        }
+        normalized = normalized.trimmingCharacters(in: CharacterSet(charactersIn: "."))
         return normalized.isEmpty ? nil : normalized
     }
 
@@ -1068,11 +1241,31 @@ enum FrontendProjectBuilder {
             || lowered.hasSuffix(".ts")
     }
 
-    private static func synthesizedIndexHTML(stylePaths: [String], scriptPaths: [String]) -> String {
+    private static func synthesizedIndexHTML(
+        stylePaths: [String],
+        scriptPaths: [String],
+        projectPaths: [String]
+    ) -> String {
         let styleLinks = stylePaths.map { "    <link rel=\"stylesheet\" href=\"\($0)\">" }
         let scripts = scriptPaths.map { "    <script src=\"\($0)\"></script>" }
         let styleBlock = styleLinks.isEmpty ? "" : (styleLinks.joined(separator: "\n") + "\n")
         let scriptBlock = scripts.isEmpty ? "" : ("\n" + scripts.joined(separator: "\n"))
+        let renderedList = projectPaths
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .prefix(48)
+            .map { "            <li><code>\(htmlEscaped($0))</code></li>" }
+            .joined(separator: "\n")
+        let fileListBlock = renderedList.isEmpty ? "" : """
+                <section class=\"files\">
+                    <h2>已写入文件</h2>
+                    <ul>
+        \(renderedList)
+                    </ul>
+                </section>
+        """
+        let nonWebNotice = (stylePaths.isEmpty && scriptPaths.isEmpty) ? """
+                <p class=\"notice\">当前项目以源码文件为主（非网页入口），请在 latest 目录查看完整代码结构。</p>
+        """ : ""
 
         return """
         <!doctype html>
@@ -1080,12 +1273,81 @@ enum FrontendProjectBuilder {
         <head>
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>IEXA Frontend</title>
+            <title>IEXA Project</title>
+            <style>
+                :root {
+                    color-scheme: light dark;
+                }
+                body {
+                    margin: 0;
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+                    line-height: 1.55;
+                    background: radial-gradient(circle at top, rgba(43, 104, 255, 0.14), transparent 58%);
+                    padding: 24px;
+                }
+                .card {
+                    max-width: 860px;
+                    margin: 0 auto;
+                    border: 1px solid rgba(128, 128, 128, 0.26);
+                    border-radius: 16px;
+                    background: rgba(255, 255, 255, 0.78);
+                    backdrop-filter: blur(8px);
+                    padding: 18px 18px 8px 18px;
+                }
+                h1 {
+                    margin: 0 0 8px 0;
+                    font-size: 20px;
+                }
+                .desc {
+                    margin: 0 0 10px 0;
+                    color: rgba(80, 80, 80, 0.92);
+                }
+                .notice {
+                    margin: 10px 0 4px 0;
+                    font-size: 14px;
+                    color: rgba(100, 84, 0, 0.98);
+                    background: rgba(255, 214, 10, 0.14);
+                    border: 1px solid rgba(255, 214, 10, 0.35);
+                    border-radius: 10px;
+                    padding: 8px 10px;
+                }
+                .files h2 {
+                    margin: 14px 0 8px 0;
+                    font-size: 14px;
+                    opacity: 0.86;
+                    letter-spacing: 0.02em;
+                }
+                ul {
+                    margin: 0;
+                    padding-left: 20px;
+                }
+                li {
+                    margin: 4px 0;
+                }
+                code {
+                    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+                }
+            </style>
         \(styleBlock)</head>
         <body>
-            <div id="app"></div>\(scriptBlock)
+            <main class="card">
+                <h1>IEXA 已生成本地项目</h1>
+                <p class="desc">可在应用设置中的 latest 目录查看和管理全部文件。</p>
+        \(nonWebNotice)
+        \(fileListBlock)
+                <div id="app"></div>
+            </main>\(scriptBlock)
         </body>
         </html>
         """
+    }
+
+    private static func htmlEscaped(_ raw: String) -> String {
+        raw
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&#39;")
     }
 }

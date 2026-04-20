@@ -154,4 +154,62 @@ final class FrontendProjectBuilderTests: XCTestCase {
         let selected = try XCTUnwrap(FrontendProjectBuilder.latestEntryFileURL())
         XCTAssertEqual(selected.lastPathComponent.lowercased(), "index.php")
     }
+
+    func testBuildProjectFromPythonBlockWritesMainPyAndDisablesAutoPreview() throws {
+        let message = ChatMessage(
+            role: .assistant,
+            content: """
+            ```python
+            print("hello from python")
+            ```
+            """
+        )
+
+        let result = try FrontendProjectBuilder.buildProject(from: message, mode: .createNewProject)
+        XCTAssertTrue(result.writtenRelativePaths.contains("main.py"))
+        XCTAssertTrue(result.writtenRelativePaths.contains("index.html"))
+        XCTAssertFalse(result.hadNaturalPreviewEntry)
+        XCTAssertFalse(result.shouldAutoOpenPreview)
+
+        let mainPy = result.projectDirectoryURL.appendingPathComponent("main.py")
+        let code = try String(contentsOf: mainPy, encoding: .utf8)
+        XCTAssertTrue(code.contains("hello from python"))
+    }
+
+    func testBuildProjectUsesDescriptorPathTokenForNonWebLanguage() throws {
+        let message = ChatMessage(
+            role: .assistant,
+            content: """
+            ```go cmd/server/main.go
+            package main
+            import "fmt"
+
+            func main() {
+                fmt.Println("ok")
+            }
+            ```
+            """
+        )
+
+        let result = try FrontendProjectBuilder.buildProject(from: message, mode: .createNewProject)
+        XCTAssertTrue(result.writtenRelativePaths.contains("cmd/server/main.go"))
+        XCTAssertFalse(result.shouldAutoOpenPreview)
+    }
+
+    func testCanGenerateProjectFromTaggedNonWebFileOutput() throws {
+        let message = ChatMessage(
+            role: .assistant,
+            content: """
+            [[file:pyproject.toml]]
+            [project]
+            name = "demo"
+            version = "0.1.0"
+            [[endfile]]
+            """
+        )
+
+        XCTAssertTrue(FrontendProjectBuilder.canGenerateProject(from: message))
+        let result = try FrontendProjectBuilder.buildProject(from: message, mode: .createNewProject)
+        XCTAssertTrue(result.writtenRelativePaths.contains("pyproject.toml"))
+    }
 }

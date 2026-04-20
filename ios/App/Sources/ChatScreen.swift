@@ -736,17 +736,22 @@ struct ChatScreen: View {
                 from: latestAssistant,
                 mode: .overwriteLatestProject
             )
-            autoFrontendPreview = AutoFrontendPreviewPayload(
-                title: "自动预览 · \(result.entryFileURL.lastPathComponent)",
-                html: result.entryHTML,
-                baseURL: result.projectDirectoryURL,
-                entryFileURL: result.entryFileURL
-            )
-            viewModel.statusMessage = "前端项目已自动更新（\(result.writtenRelativePaths.count) 文件）"
+            if result.shouldAutoOpenPreview {
+                autoFrontendPreview = AutoFrontendPreviewPayload(
+                    title: "自动预览 · \(result.entryFileURL.lastPathComponent)",
+                    html: result.entryHTML,
+                    baseURL: result.projectDirectoryURL,
+                    entryFileURL: result.entryFileURL
+                )
+                viewModel.statusMessage = "项目已自动更新并预览（\(result.writtenRelativePaths.count) 文件）"
+            } else {
+                autoFrontendPreview = nil
+                viewModel.statusMessage = "项目文件已自动落盘（\(result.writtenRelativePaths.count) 文件）"
+            }
         } catch {
             // Auto mode should stay non-blocking; report status but avoid interrupting chat.
             let reason = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            viewModel.statusMessage = "前端自动落盘失败：\(reason)"
+            viewModel.statusMessage = "项目自动落盘失败：\(reason)"
         }
     }
 
@@ -1160,7 +1165,7 @@ struct ChatScreen: View {
         let files = max(0, snapshot.detectedFileCount)
         let entry = snapshot.hasEntryHTML ? 1 : 0
         return """
-        [IEXA_FRONTEND_PROGRESS]
+        [IEXA_PROJECT_PROGRESS]
         state=\(state)
         files=\(files)
         entry=\(entry)
