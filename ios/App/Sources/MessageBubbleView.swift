@@ -6,6 +6,7 @@ import QuickLook
 
 struct MessageBubbleView: View {
     let message: ChatMessage
+    let sourceMessage: ChatMessage? = nil
     let codeThemeMode: CodeThemeMode
     let apiKey: String
     let apiBaseURL: String
@@ -41,6 +42,10 @@ struct MessageBubbleView: View {
     @State private var wordGenerationTask: Task<Void, Never>?
     @State private var excelGenerationTask: Task<Void, Never>?
     private let chatUIFont = UIFont(name: "PingFangSC-Medium", size: 16) ?? UIFont.systemFont(ofSize: 16, weight: .medium)
+
+    private var actionMessage: ChatMessage {
+        sourceMessage ?? message
+    }
 
     var body: some View {
         Group {
@@ -148,7 +153,7 @@ struct MessageBubbleView: View {
     private var assistantActionBar: some View {
         HStack(spacing: 8) {
             iconActionButton(systemName: "doc.on.doc", accessibilityLabel: "复制") {
-                UIPasteboard.general.string = message.copyableText
+                UIPasteboard.general.string = actionMessage.copyableText
                 feedback(.success, "已复制")
             }
 
@@ -223,7 +228,7 @@ struct MessageBubbleView: View {
 
             Menu {
                 Button("复制全部", systemImage: "doc.on.doc") {
-                    UIPasteboard.general.string = message.copyableText
+                    UIPasteboard.general.string = actionMessage.copyableText
                     feedback(.success, "已复制")
                 }
                 if canPlayAssistantReply {
@@ -915,12 +920,17 @@ struct MessageBubbleView: View {
     }
 
     private func codeBlock(title: String, content: String, language: String? = nil) -> some View {
-        let copyToken = "\(title)|\(language ?? "")|\(content)"
+        let actionContent = resolvedCodeActionContent(
+            title: title,
+            language: language,
+            displayContent: content
+        )
+        let copyToken = "\(title)|\(language ?? "")|\(actionContent)"
         let isCopied = copiedCodeToken == copyToken
         let isRunning = runningCodeToken == copyToken
         let canRunPython = supportsPythonRun(language: language, title: title)
-            && PythonExecutionService.isRunnableSnippet(content)
-        let canRunHTML = supportsHTMLPreview(language: language, title: title, content: content)
+            && PythonExecutionService.isRunnableSnippet(actionContent)
+        let canRunHTML = supportsHTMLPreview(language: language, title: title, content: actionContent)
         let runOutput = codeRunOutputs[copyToken]
         let runError = codeRunErrors[copyToken]
 
@@ -935,7 +945,7 @@ struct MessageBubbleView: View {
                         if isRunning {
                             stopPythonRun(token: copyToken)
                         } else {
-                            requestPythonRun(content, token: copyToken)
+                            requestPythonRun(actionContent, token: copyToken)
                         }
                     }
                     .font(.caption2)
@@ -945,22 +955,22 @@ struct MessageBubbleView: View {
                 }
                 if canRunHTML {
                     Button("运行网页") {
-                        openHTMLPreview(title: title, content: content)
+                        openHTMLPreview(title: title, content: actionContent)
                     }
                     .font(.caption2)
                     .buttonStyle(.borderedProminent)
                     .tint(Color(red: 0.06, green: 0.36, blue: 0.86))
                     .foregroundStyle(.white)
 
-                    Button("生成项目") {
-                        generateFrontendProject(mode: .createNewProject)
+                    Button("写入 latest") {
+                        generateFrontendProject(mode: .overwriteLatestProject)
                     }
                     .font(.caption2)
                     .buttonStyle(.bordered)
                     .disabled(isBuildingFrontendProject)
                 }
                 Button(isCopied ? "已复制" : "复制代码") {
-                    UIPasteboard.general.string = content
+                    UIPasteboard.general.string = actionContent
                     UINotificationFeedbackGenerator().notificationOccurred(.success)
                     withAnimation(.easeInOut(duration: 0.16)) {
                         copiedCodeToken = copyToken
@@ -1190,14 +1200,14 @@ struct MessageBubbleView: View {
     }
 
     private var canGenerateFrontendProject: Bool {
-        message.role == .assistant && FrontendProjectBuilder.canGenerateProject(from: message)
+        actionMessage.role == .assistant && FrontendProjectBuilder.canGenerateProject(from: actionMessage)
     }
 
     private var canGeneratePPT: Bool {
-        guard message.role == .assistant else { return false }
-        guard !message.isStreaming else { return false }
-        guard !message.isImageGenerationPlaceholder, !message.isVideoGenerationPlaceholder else { return false }
-        return PPTGenerationService.canGenerate(from: message)
+        guard actionMessage.role == .assistant else { return false }
+        guard !actionMessage.isStreaming else { return false }
+        guard !actionMessage.isImageGenerationPlaceholder, !actionMessage.isVideoGenerationPlaceholder else { return false }
+        return PPTGenerationService.canGenerate(from: actionMessage)
     }
 
     private var shouldShowPPTCard: Bool {
@@ -1205,10 +1215,10 @@ struct MessageBubbleView: View {
     }
 
     private var canGenerateWord: Bool {
-        guard message.role == .assistant else { return false }
-        guard !message.isStreaming else { return false }
-        guard !message.isImageGenerationPlaceholder, !message.isVideoGenerationPlaceholder else { return false }
-        return WordGenerationService.canGenerate(from: message)
+        guard actionMessage.role == .assistant else { return false }
+        guard !actionMessage.isStreaming else { return false }
+        guard !actionMessage.isImageGenerationPlaceholder, !actionMessage.isVideoGenerationPlaceholder else { return false }
+        return WordGenerationService.canGenerate(from: actionMessage)
     }
 
     private var shouldShowWordCard: Bool {
@@ -1216,10 +1226,10 @@ struct MessageBubbleView: View {
     }
 
     private var canGenerateExcel: Bool {
-        guard message.role == .assistant else { return false }
-        guard !message.isStreaming else { return false }
-        guard !message.isImageGenerationPlaceholder, !message.isVideoGenerationPlaceholder else { return false }
-        return ExcelGenerationService.canGenerate(from: message)
+        guard actionMessage.role == .assistant else { return false }
+        guard !actionMessage.isStreaming else { return false }
+        guard !actionMessage.isImageGenerationPlaceholder, !actionMessage.isVideoGenerationPlaceholder else { return false }
+        return ExcelGenerationService.canGenerate(from: actionMessage)
     }
 
     private var shouldShowExcelCard: Bool {
@@ -1455,7 +1465,7 @@ struct MessageBubbleView: View {
         defer { isBuildingFrontendProject = false }
 
         do {
-            let result = try FrontendProjectBuilder.buildProject(from: message, mode: mode)
+            let result = try FrontendProjectBuilder.buildProject(from: actionMessage, mode: mode)
             let fileCount = result.writtenRelativePaths.count
             if result.shouldAutoOpenPreview {
                 let title = "网页预览 · \(result.entryFileURL.lastPathComponent)"
@@ -1494,7 +1504,7 @@ struct MessageBubbleView: View {
         }
         guard !isGeneratingPPT else { return }
 
-        let sourceMessage = message
+        let sourceMessage = actionMessage
         isGeneratingPPT = true
         pptGenerationTask?.cancel()
 
@@ -1537,7 +1547,7 @@ struct MessageBubbleView: View {
         }
         guard !isGeneratingWord else { return }
 
-        let sourceMessage = message
+        let sourceMessage = actionMessage
         isGeneratingWord = true
         wordGenerationTask?.cancel()
 
@@ -1580,7 +1590,7 @@ struct MessageBubbleView: View {
         }
         guard !isGeneratingExcel else { return }
 
-        let sourceMessage = message
+        let sourceMessage = actionMessage
         isGeneratingExcel = true
         excelGenerationTask?.cancel()
 
@@ -1686,34 +1696,130 @@ struct MessageBubbleView: View {
     }
 
     private var canPlayAssistantReply: Bool {
-        guard message.role == .assistant else { return false }
-        guard !message.isStreaming else { return false }
-        guard !message.isImageGenerationPlaceholder, !message.isVideoGenerationPlaceholder else { return false }
+        guard actionMessage.role == .assistant else { return false }
+        guard !actionMessage.isStreaming else { return false }
+        guard !actionMessage.isImageGenerationPlaceholder, !actionMessage.isVideoGenerationPlaceholder else { return false }
 
-        let hasText = !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let hasTextFiles = message.fileAttachments.contains { attachment in
+        let hasText = !actionMessage.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasTextFiles = actionMessage.fileAttachments.contains { attachment in
             attachment.binaryBase64 == nil
                 && !attachment.textContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
-        return hasText || hasTextFiles || !message.imageAttachments.isEmpty || !message.videoAttachments.isEmpty
+        return hasText || hasTextFiles || !actionMessage.imageAttachments.isEmpty || !actionMessage.videoAttachments.isEmpty
     }
 
     private var isPlayingAssistantReply: Bool {
-        speechPlayback.isPlaying(messageID: message.id)
+        speechPlayback.isPlaying(messageID: actionMessage.id)
     }
 
     private func toggleAssistantSpeechPlayback() {
         if isPlayingAssistantReply {
-            speechPlayback.stop(messageID: message.id)
+            speechPlayback.stop(messageID: actionMessage.id)
             feedback(.light, "已停止朗读")
             return
         }
 
-        if speechPlayback.speak(message: message) {
+        if speechPlayback.speak(message: actionMessage) {
             feedback(.light, "正在朗读…")
         } else {
             feedback(.light, "当前消息没有可朗读内容")
         }
+    }
+
+    private func resolvedCodeActionContent(
+        title: String,
+        language: String?,
+        displayContent: String
+    ) -> String {
+        let cleanedDisplay = removingPreviewTruncationMarkers(from: displayContent)
+        guard sourceMessage != nil else { return cleanedDisplay }
+
+        if let fileName = fileName(fromCodeTitle: title) {
+            if let attachment = actionMessage.fileAttachments.first(where: {
+                $0.binaryBase64 == nil && $0.fileName.caseInsensitiveCompare(fileName) == .orderedSame
+            }) {
+                let normalized = removingPreviewTruncationMarkers(from: attachment.textContent)
+                if !normalized.isEmpty {
+                    return normalized
+                }
+            }
+
+            if let matched = actionMessageStructuredSegments().first(where: {
+                if case let .file(name, _, _) = $0 {
+                    return name.caseInsensitiveCompare(fileName) == .orderedSame
+                }
+                return false
+            }), case let .file(_, _, content) = matched {
+                let normalized = removingPreviewTruncationMarkers(from: content)
+                if !normalized.isEmpty {
+                    return normalized
+                }
+            }
+        }
+
+        let prefix = String(cleanedDisplay.prefix(120))
+        for segment in actionMessageStructuredSegments() {
+            switch segment {
+            case .code(let candidateLanguage, let candidateContent):
+                if matchesActionCodeCandidate(
+                    language: language,
+                    expectedPrefix: prefix,
+                    candidateLanguage: candidateLanguage,
+                    candidateContent: candidateContent
+                ) {
+                    return removingPreviewTruncationMarkers(from: candidateContent)
+                }
+            case .file(_, let candidateLanguage, let candidateContent):
+                if matchesActionCodeCandidate(
+                    language: language,
+                    expectedPrefix: prefix,
+                    candidateLanguage: candidateLanguage,
+                    candidateContent: candidateContent
+                ) {
+                    return removingPreviewTruncationMarkers(from: candidateContent)
+                }
+            default:
+                continue
+            }
+        }
+
+        return cleanedDisplay
+    }
+
+    private func actionMessageStructuredSegments() -> [MessageSegment] {
+        MessageContentParser.parse(actionMessage)
+    }
+
+    private func matchesActionCodeCandidate(
+        language: String?,
+        expectedPrefix: String,
+        candidateLanguage: String?,
+        candidateContent: String
+    ) -> Bool {
+        let normalizedCandidate = removingPreviewTruncationMarkers(from: candidateContent)
+        guard !normalizedCandidate.isEmpty else { return false }
+
+        if !expectedPrefix.isEmpty && normalizedCandidate.hasPrefix(expectedPrefix) {
+            return true
+        }
+
+        let normalizedLanguage = (language ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedCandidateLanguage = (candidateLanguage ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return !normalizedLanguage.isEmpty && normalizedLanguage == normalizedCandidateLanguage
+    }
+
+    private func fileName(fromCodeTitle title: String) -> String? {
+        let prefix = "FILE · "
+        guard title.hasPrefix(prefix) else { return nil }
+        let fileName = String(title.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        return fileName.isEmpty ? nil : fileName
+    }
+
+    private func removingPreviewTruncationMarkers(from text: String) -> String {
+        text
+            .replacingOccurrences(of: "\n\n[附件预览过长，已截断显示。]", with: "")
+            .replacingOccurrences(of: "\n\n[该消息过长，已在聊天页截断显示。]", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func supportsHTMLPreview(language: String?, title: String, content: String) -> Bool {

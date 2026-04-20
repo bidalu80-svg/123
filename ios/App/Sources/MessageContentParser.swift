@@ -224,9 +224,10 @@ enum MessageContentParser {
         let endTagRange = raw[contentStart...].range(of: "[[endfile]]", options: [.caseInsensitive])
         let contentEnd = endTagRange?.lowerBound ?? raw.endIndex
         let rawContent = String(raw[contentStart..<contentEnd])
-        let content = rawContent
+        let normalizedRawContent = rawContent
             .replacingOccurrences(of: "\r\n", with: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        let content = unwrapSingleFencedTaggedFileContent(normalizedRawContent)
 
         if content.isEmpty && endTagRange == nil {
             return nil
@@ -254,6 +255,20 @@ enum MessageContentParser {
             textContent: content
         )
         return attachment.codeLanguageHint ?? inferCodeLanguage(language: nil, content: content)
+    }
+
+    private static func unwrapSingleFencedTaggedFileContent(_ raw: String) -> String {
+        let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalized.hasPrefix("```"), normalized.hasSuffix("```") else {
+            return normalized
+        }
+
+        var inner = String(normalized.dropFirst(3))
+        guard inner.count >= 3 else { return normalized }
+        inner.removeLast(3)
+        let parsed = parseCodeBlock(inner)
+        let content = parsed.1.trimmingCharacters(in: .whitespacesAndNewlines)
+        return content.isEmpty ? normalized : content
     }
 
     private struct ParsedMarkdownTable {

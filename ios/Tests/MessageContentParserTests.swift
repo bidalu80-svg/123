@@ -63,4 +63,32 @@ final class MessageContentParserTests: XCTestCase {
             return false
         }))
     }
+
+    func testParseUnwrapsSingleFencedCodeInsideTaggedFile() {
+        let message = ChatMessage(
+            role: .assistant,
+            content: """
+            [[file:index.html]]
+            ```html
+            <!doctype html>
+            <html><body>Hello</body></html>
+            ```
+            [[endfile]]
+            """
+        )
+
+        let segments = MessageContentParser.parse(message)
+        guard case let .file(name, language, content)? = segments.first(where: {
+            if case .file = $0 { return true }
+            return false
+        }) else {
+            return XCTFail("Expected tagged file block to render as file segment")
+        }
+
+        XCTAssertEqual(name, "index.html")
+        XCTAssertEqual(language, "html")
+        XCTAssertFalse(content.contains("```html"))
+        XCTAssertFalse(content.contains("```"))
+        XCTAssertTrue(content.contains("<body>Hello</body>"))
+    }
 }

@@ -65,20 +65,23 @@ final class SpeechToTextService: ObservableObject {
         guard recognizer.isAvailable else {
             throw SpeechToTextError.recognizerNotReady
         }
-        guard audioEngine.inputNode.inputFormat(forBus: 0).sampleRate > 0 else {
-            throw SpeechToTextError.audioEngineUnavailable
-        }
 
         transcript = ""
         try configureAudioSession()
+
+        let inputNode = audioEngine.inputNode
+        let inputFormat = inputNode.inputFormat(forBus: 0)
+        let outputFormat = inputNode.outputFormat(forBus: 0)
+        let format = outputFormat.sampleRate > 0 ? outputFormat : inputFormat
+        guard format.sampleRate > 0 else {
+            throw SpeechToTextError.audioEngineUnavailable
+        }
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
         request.requiresOnDeviceRecognition = false
         recognitionRequest = request
 
-        let inputNode = audioEngine.inputNode
-        let format = inputNode.outputFormat(forBus: 0)
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
             request.append(buffer)
@@ -120,6 +123,7 @@ final class SpeechToTextService: ObservableObject {
             audioEngine.stop()
         }
         audioEngine.inputNode.removeTap(onBus: 0)
+        audioEngine.reset()
 
         recognitionRequest?.endAudio()
         if cancelTask {

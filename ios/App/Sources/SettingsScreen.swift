@@ -397,6 +397,8 @@ struct SettingsScreen: View {
     private func clearLatestProject() {
         do {
             try FrontendProjectBuilder.clearLatestProject()
+            latestPreviewPayload = nil
+            projectBrowserPayload = nil
             projectActionFeedback = "latest 目录已清空。"
         } catch {
             projectActionFeedback = "清空 latest 失败：\(error.localizedDescription)"

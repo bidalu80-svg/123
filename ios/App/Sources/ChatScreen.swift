@@ -540,6 +540,7 @@ struct ChatScreen: View {
                 let displayMessage = makeDisplaySafeMessage(message)
                 MessageBubbleView(
                     message: displayMessage,
+                    sourceMessage: message,
                     codeThemeMode: viewModel.config.codeThemeMode,
                     apiKey: viewModel.config.apiKey,
                     apiBaseURL: viewModel.config.normalizedBaseURL,

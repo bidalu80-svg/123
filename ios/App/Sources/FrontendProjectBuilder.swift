@@ -395,7 +395,8 @@ enum FrontendProjectBuilder {
             }
             let rawPath = String(text[pathRange])
             guard let normalizedPath = sanitizeRelativePath(rawPath) else { return nil }
-            let content = normalizeFileContent(String(text[contentRange]))
+            let rawContent = String(text[contentRange])
+            let content = normalizeFileContent(unwrapSingleFencedTaggedFileContent(rawContent))
             guard !content.isEmpty else { return nil }
             return ParsedWebFile(path: normalizedPath, content: content)
         }
@@ -1111,6 +1112,21 @@ enum FrontendProjectBuilder {
         raw
             .replacingOccurrences(of: "\r\n", with: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func unwrapSingleFencedTaggedFileContent(_ raw: String) -> String {
+        let normalized = normalizeFileContent(raw)
+        guard normalized.hasPrefix("```"), normalized.hasSuffix("```") else {
+            return normalized
+        }
+
+        var inner = String(normalized.dropFirst(3))
+        guard inner.count >= 3 else { return normalized }
+        inner.removeLast(3)
+
+        let parsed = parseCodeBlock(inner)
+        let content = normalizeFileContent(parsed.1)
+        return content.isEmpty ? normalized : content
     }
 
     private static func prepareProjectDirectory(mode: BuildMode) throws -> URL {

@@ -212,4 +212,50 @@ final class FrontendProjectBuilderTests: XCTestCase {
         let result = try FrontendProjectBuilder.buildProject(from: message, mode: .createNewProject)
         XCTAssertTrue(result.writtenRelativePaths.contains("pyproject.toml"))
     }
+
+    func testBuildProjectUnwrapsFencedTaggedHtmlFile() throws {
+        let message = ChatMessage(
+            role: .assistant,
+            content: """
+            [[file:index.html]]
+            ```html
+            <!doctype html>
+            <html>
+            <body>Hello</body>
+            </html>
+            ```
+            [[endfile]]
+            """
+        )
+
+        let result = try FrontendProjectBuilder.buildProject(from: message, mode: .overwriteLatestProject)
+        let entryText = try String(contentsOf: result.entryFileURL, encoding: .utf8)
+
+        XCTAssertEqual(result.entryFileURL.lastPathComponent.lowercased(), "index.html")
+        XCTAssertFalse(entryText.contains("```html"))
+        XCTAssertFalse(entryText.contains("```"))
+        XCTAssertTrue(entryText.contains("<body>Hello</body>"))
+    }
+
+    func testClearLatestProjectRemovesPersistedEntryPointerAndFiles() throws {
+        let message = ChatMessage(
+            role: .assistant,
+            content: """
+            [[file:web/index.html]]
+            <!doctype html>
+            <html><body>OK</body></html>
+            [[endfile]]
+            """
+        )
+
+        _ = try FrontendProjectBuilder.buildProject(from: message, mode: .overwriteLatestProject)
+        XCTAssertNotNil(FrontendProjectBuilder.latestEntryFileURL())
+
+        try FrontendProjectBuilder.clearLatestProject()
+
+        XCTAssertNil(FrontendProjectBuilder.latestEntryFileURL())
+        let latest = try XCTUnwrap(FrontendProjectBuilder.latestProjectURL())
+        let contents = try FileManager.default.contentsOfDirectory(atPath: latest.path)
+        XCTAssertTrue(contents.isEmpty)
+    }
 }
