@@ -200,9 +200,14 @@ struct SelectableLinkTextView: UIViewRepresentable {
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
         guard let width = proposal.width, width > 1 else { return nil }
+        if let cached = context.coordinator.cachedSizeIfAvailable(forWidth: width, textCount: text.count) {
+            return cached
+        }
         let target = CGSize(width: width, height: .greatestFiniteMagnitude)
         let size = uiView.sizeThatFits(target)
-        return CGSize(width: width, height: ceil(size.height))
+        let fitted = CGSize(width: width, height: ceil(size.height))
+        context.coordinator.recordMeasuredSize(fitted, width: width, textCount: text.count)
+        return fitted
     }
 
     static func dismantleUIView(_ uiView: UITextView, coordinator: Coordinator) {
@@ -230,6 +235,10 @@ struct SelectableLinkTextView: UIViewRepresentable {
         private var streamAnimationEnabled = false
         private var streamPrimaryColor: UIColor = .label
         private var lastStreamingTailRange: NSRange?
+        private var streamCharacterBudget: Double = 0
+        private var lastMeasuredWidth: CGFloat = 0
+        private var lastMeasuredHeight: CGFloat = 0
+        private var lastMeasuredTextCount: Int = 0
 
         deinit {
             stopStreamingAnimation(clearPending: true)
@@ -273,6 +282,7 @@ struct SelectableLinkTextView: UIViewRepresentable {
             streamTimer?.invalidate()
             streamTimer = nil
             streamLastTimestamp = 0
+            streamCharacterBudget = 0
             if clearPending {
                 pendingStreamingSuffix.removeAll(keepingCapacity: false)
             }
@@ -306,13 +316,15 @@ struct SelectableLinkTextView: UIViewRepresentable {
                 return
             }
 
-            // Keep updates close to display refresh cadence for smoother streaming.
-            if streamLastTimestamp > 0, timer.timestamp - streamLastTimestamp < (1.0 / 55.0) {
-                return
-            }
+            let elapsed = streamLastTimestamp > 0
+                ? max(0, timer.timestamp - streamLastTimestamp)
+                : (1.0 / 60.0)
             streamLastTimestamp = timer.timestamp
 
-            let step = streamingStepSize(for: pendingStreamingSuffix.count)
+            streamCharacterBudget += elapsed * streamingCharactersPerSecond(for: pendingStreamingSuffix.count)
+            let budgetStep = Int(streamCharacterBudget.rounded(.down))
+            let step = max(1, min(12, budgetStep))
+            streamCharacterBudget = max(0, streamCharacterBudget - Double(step))
             let chunk = consumeStreamingPrefix(maxCharacters: step)
             guard !chunk.isEmpty else { return }
 
@@ -339,14 +351,22 @@ struct SelectableLinkTextView: UIViewRepresentable {
             return prefix
         }
 
-        private func streamingStepSize(for pendingCharacters: Int) -> Int {
+        private func streamingCharactersPerSecond(for pendingCharacters: Int) -> Double {
             switch pendingCharacters {
+            case 6_000...:
+                return 520
             case 3_000...:
-                return 3
-            case 1_200...:
-                return 2
+                return 380
+            case 1_600...:
+                return 280
+            case 800...:
+                return 210
+            case 320...:
+                return 150
+            case 120...:
+                return 110
             default:
-                return 1
+                return 72
             }
         }
 
@@ -362,17 +382,27 @@ struct SelectableLinkTextView: UIViewRepresentable {
                 return
             }
 
-            let tailSize = min(max(8, appendedLength * 4), 22)
+            let tailSize = min(max(10, appendedLength * 5), 30)
             let start = max(0, storage.length - tailSize)
             let tailRange = NSRange(location: start, length: storage.length - start)
-            let tailColor = streamPrimaryColor.withAlphaComponent(0.46)
-            storage.addAttribute(.foregroundColor, value: tailColor, range: tailRange)
+            if tailRange.length > 0 {
+                for offset in 0..<tailRange.length {
+                    let unit = tailRange.length <= 1 ? 1.0 : (Double(offset) / Double(tailRange.length - 1))
+                    let alpha = CGFloat(1.0 - (0.58 * unit))
+                    let color = streamPrimaryColor.withAlphaComponent(alpha)
+                    storage.addAttribute(
+                        .foregroundColor,
+                        value: color,
+                        range: NSRange(location: tailRange.location + offset, length: 1)
+                    )
+                }
 
-            let latestCount = min(2, tailRange.length)
-            if latestCount > 0 {
-                let latestRange = NSRange(location: storage.length - latestCount, length: latestCount)
-                let latestColor = streamPrimaryColor.withAlphaComponent(0.24)
-                storage.addAttribute(.foregroundColor, value: latestColor, range: latestRange)
+                let latestCount = min(1, tailRange.length)
+                if latestCount > 0 {
+                    let latestRange = NSRange(location: storage.length - latestCount, length: latestCount)
+                    let latestColor = streamPrimaryColor.withAlphaComponent(0.28)
+                    storage.addAttribute(.foregroundColor, value: latestColor, range: latestRange)
+                }
             }
 
             lastStreamingTailRange = tailRange
@@ -394,6 +424,25 @@ struct SelectableLinkTextView: UIViewRepresentable {
             textView.textStorage.addAttribute(.foregroundColor, value: streamPrimaryColor, range: tailRange)
             textView.textStorage.endEditing()
             lastStreamingTailRange = nil
+        }
+
+        func cachedSizeIfAvailable(forWidth width: CGFloat, textCount: Int) -> CGSize? {
+            guard lastStreamingAnimated else { return nil }
+            guard lastMeasuredHeight > 0 else { return nil }
+            guard abs(width - lastMeasuredWidth) < 0.5 else { return nil }
+            guard textCount >= lastMeasuredTextCount else { return nil }
+
+            let delta = textCount - lastMeasuredTextCount
+            if delta < 20 {
+                return CGSize(width: width, height: lastMeasuredHeight)
+            }
+            return nil
+        }
+
+        func recordMeasuredSize(_ size: CGSize, width: CGFloat, textCount: Int) {
+            lastMeasuredWidth = width
+            lastMeasuredHeight = size.height
+            lastMeasuredTextCount = textCount
         }
     }
 

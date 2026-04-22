@@ -16,6 +16,15 @@ struct ChatScreen: View {
     private let maxRenderedCharacters = 260_000
     private let maxSingleRenderedMessageChars = 80_000
     private let maxRenderedFilePreviewChars = 18_000
+
+    private struct OutgoingEcho {
+        let id: UUID
+        let content: String
+        let imageAttachments: [ChatImageAttachment]
+        let fileAttachment: ChatFileAttachment?
+        let createdAt: Date
+    }
+
     private let starterPrompts: [(title: String, subtitle: String)] = [
         ("写一个 Swift 网络请求封装", "支持 async/await 和错误重试"),
         ("帮我排查 iOS 卡顿", "给出 Instruments 的定位步骤"),
@@ -62,6 +71,7 @@ struct ChatScreen: View {
     @State private var transcriptCommand: ChatTranscriptCommand?
     @State private var pendingMessageDeletionIDs: Set<UUID> = []
     @State private var pendingMessageDeletionTasks: [UUID: Task<Void, Never>] = [:]
+    @State private var pendingOutgoingEcho: OutgoingEcho?
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -117,13 +127,16 @@ struct ChatScreen: View {
         }
         .onChange(of: viewModel.messages) { oldMessages, newMessages in
             runAutoFrontendBuildIfNeeded(previousMessages: oldMessages, newMessages: newMessages)
+            reconcilePendingOutgoingEcho(with: newMessages)
         }
         .onChange(of: viewModel.currentSessionID) { _, _ in
+            pendingOutgoingEcho = nil
             DispatchQueue.main.async {
                 seedAutoFrontendBuildCursor()
             }
         }
         .onChange(of: viewModel.isPrivateMode) { _, _ in
+            pendingOutgoingEcho = nil
             DispatchQueue.main.async {
                 seedAutoFrontendBuildCursor()
             }
@@ -511,8 +524,8 @@ struct ChatScreen: View {
             NativeTranscriptScrollView(
                 historyContent: AnyView(transcriptHistoryContent()),
                 historyVersion: transcriptHistoryVersion,
-                streamingLeadContent: activeStreamingLeadContent,
-                streamingLeadSignature: activeStreamingLeadSignature,
+                streamingLeadContent: effectiveStreamingLeadContent,
+                streamingLeadSignature: effectiveStreamingLeadSignature,
                 streamingMessage: activeStreamingRenderedMessage,
                 codeThemeSignature: codeThemeRenderSignature,
                 codeThemeMode: viewModel.config.codeThemeMode,
@@ -1283,6 +1296,30 @@ struct ChatScreen: View {
         }
     }
 
+    private var pendingOutgoingEchoMessage: ChatMessage? {
+        guard let echo = pendingOutgoingEcho else { return nil }
+        guard !hasMatchingUserMessage(for: echo, in: viewModel.messages) else { return nil }
+        let fileAttachments = echo.fileAttachment.map { [$0] } ?? []
+        return ChatMessage(
+            id: echo.id,
+            role: .user,
+            content: echo.content,
+            createdAt: echo.createdAt,
+            imageAttachments: echo.imageAttachments,
+            fileAttachments: fileAttachments
+        )
+    }
+
+    private var pendingOutgoingLeadSignature: String? {
+        pendingOutgoingEchoMessage.map {
+            "\($0.id.uuidString)|\($0.content.count)|\($0.imageAttachments.count)|\($0.videoAttachments.count)|\($0.fileAttachments.count)|echo|\(codeThemeRenderSignature)"
+        }
+    }
+
+    private var effectiveStreamingLeadSignature: String? {
+        activeStreamingLeadSignature ?? pendingOutgoingLeadSignature
+    }
+
     private var separateStreamingLeadUserMessage: ChatMessage? {
         guard let lead = activeStreamingLeadUserMessage else { return nil }
         if frozenRenderedMessages.contains(where: { $0.id == lead.id }) {
@@ -1326,6 +1363,26 @@ struct ChatScreen: View {
             )
             .padding(.horizontal, 18)
         )
+    }
+
+    private var pendingOutgoingLeadContent: AnyView? {
+        guard let echoMessage = pendingOutgoingEchoMessage else { return nil }
+        guard viewModel.isSending || activeStreamingRenderedMessage != nil else { return nil }
+        return AnyView(
+            MessageBubbleView(
+                message: echoMessage,
+                codeThemeMode: viewModel.config.codeThemeMode,
+                apiKey: viewModel.config.apiKey,
+                apiBaseURL: viewModel.config.normalizedBaseURL,
+                showsAssistantActionBar: false,
+                onRegenerate: nil
+            )
+            .padding(.horizontal, 18)
+        )
+    }
+
+    private var effectiveStreamingLeadContent: AnyView? {
+        activeStreamingLeadContent ?? pendingOutgoingLeadContent
     }
 
     private var frozenRenderedMessages: [ChatMessage] {
@@ -1891,11 +1948,57 @@ struct ChatScreen: View {
 
     private func sendCurrentComposerMessage() {
         guard viewModel.canSend else { return }
+        stagePendingOutgoingEchoIfNeeded()
         isPinnedToBottom = true
         issueTranscriptCommand(.scrollToBottom(animated: false))
         Task { @MainActor in
             await viewModel.sendCurrentMessage()
+            reconcilePendingOutgoingEcho(with: viewModel.messages, forceClearWhenIdle: true)
             issueTranscriptCommand(.scrollToBottom(animated: false))
+        }
+    }
+
+    private func stagePendingOutgoingEchoIfNeeded() {
+        let trimmed = viewModel.draftMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        let images = viewModel.draftImageAttachments
+        let file = viewModel.draftFileAttachment
+        guard !trimmed.isEmpty || !images.isEmpty || file != nil else { return }
+
+        pendingOutgoingEcho = OutgoingEcho(
+            id: UUID(),
+            content: trimmed,
+            imageAttachments: images,
+            fileAttachment: file,
+            createdAt: Date()
+        )
+    }
+
+    private func reconcilePendingOutgoingEcho(
+        with messages: [ChatMessage],
+        forceClearWhenIdle: Bool = false
+    ) {
+        guard let echo = pendingOutgoingEcho else { return }
+        if hasMatchingUserMessage(for: echo, in: messages) {
+            pendingOutgoingEcho = nil
+            return
+        }
+        if forceClearWhenIdle && !viewModel.isSending {
+            pendingOutgoingEcho = nil
+        }
+    }
+
+    private func hasMatchingUserMessage(for echo: OutgoingEcho, in messages: [ChatMessage]) -> Bool {
+        let expectedText = echo.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        let expectedImageCount = echo.imageAttachments.count
+        let expectedFileName = echo.fileAttachment?.fileName
+
+        return messages.suffix(12).contains { message in
+            guard message.role == .user else { return false }
+            guard abs(message.createdAt.timeIntervalSince(echo.createdAt)) < 12 else { return false }
+            guard message.content.trimmingCharacters(in: .whitespacesAndNewlines) == expectedText else { return false }
+            guard message.imageAttachments.count == expectedImageCount else { return false }
+            let fileName = message.fileAttachments.first?.fileName
+            return fileName == expectedFileName
         }
     }
 

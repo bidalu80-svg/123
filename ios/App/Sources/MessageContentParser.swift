@@ -27,9 +27,9 @@ enum MessageContentParser {
     private static let streamingParseDebounce: TimeInterval = 0.022
     private static let longStreamingParseDebounce: TimeInterval = 0.05
     private static let longStreamingContentThreshold = 16_000
-    private static let maxCacheEntries = 360
-    private static let maxStreamingSnapshots = 32
-    private static let streamingSnapshotTTL: TimeInterval = 18
+    private static let maxCacheEntries = 220
+    private static let maxStreamingSnapshots = 16
+    private static let streamingSnapshotTTL: TimeInterval = 8
     private static var parseCache: [String: [MessageSegment]] = [:]
     private static var parseCacheOrder: [String] = []
     private static var streamingSnapshots: [UUID: StreamingParseSnapshot] = [:]

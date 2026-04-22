@@ -780,12 +780,15 @@ struct MessageBubbleView: View {
             return false
         }
 
-        // Keep heavy structured parsing only when needed. Plain text can stream directly.
-        let normalized = text.lowercased()
-        if normalized.contains("```") { return false }
-        if normalized.contains("[[file:") { return false }
-        if normalized.contains("|---") || normalized.contains("\n|") { return false }
-        if normalized.contains("![](") || normalized.contains("data:image/") { return false }
+        // Route markdown-like content through parser immediately to hide control symbols sooner.
+        if text.contains("```") || text.contains("[[file:") { return false }
+        if text.contains("|---") || text.contains("\n|") { return false }
+        if text.contains("![](") || text.contains("data:image/") { return false }
+        if text.contains("**") || text.contains("__") || text.contains("`") { return false }
+        if text.hasPrefix("#") || text.contains("\n#") { return false }
+        if text.hasPrefix("- ") || text.contains("\n- ") { return false }
+        if text.hasPrefix("* ") || text.contains("\n* ") { return false }
+        if text.hasPrefix("> ") || text.contains("\n> ") { return false }
         return true
     }
 
@@ -1053,7 +1056,7 @@ struct MessageBubbleView: View {
     }
 
     private func selectableTextContent(_ text: String, streamingTextAnimated: Bool = false) -> some View {
-        let displayText = decoratedAssistantListText(text)
+        let displayText = streamingTextAnimated ? text : decoratedAssistantListText(text)
         return SelectableLinkTextView(
             text: displayText,
             textColor: UIColor.label,
