@@ -1036,8 +1036,9 @@ struct MessageBubbleView: View {
     }
 
     private func selectableTextContent(_ text: String, streamingTextAnimated: Bool = false) -> some View {
+        let displayText = decoratedAssistantListText(text)
         SelectableLinkTextView(
-            text: text,
+            text: displayText,
             textColor: UIColor.label,
             linkColor: UIColor.secondaryLabel,
             font: chatUIFont,
@@ -1045,6 +1046,76 @@ struct MessageBubbleView: View {
             streamingAnimated: streamingTextAnimated
         )
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func decoratedAssistantListText(_ text: String) -> String {
+        guard message.role == .assistant, !text.isEmpty else { return text }
+
+        let lines = text.components(separatedBy: "\n")
+        guard !lines.isEmpty else { return text }
+
+        var output: [String] = []
+        output.reserveCapacity(lines.count)
+
+        for (lineIndex, line) in lines.enumerated() {
+            if line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                output.append(line)
+                continue
+            }
+
+            let leading = String(line.prefix { $0 == " " || $0 == "\t" })
+            let trimmedStart = String(line.dropFirst(leading.count))
+
+            if let markerRange = trimmedStart.range(
+                of: #"^\d+\s*[)\.、:：]\s+"#,
+                options: .regularExpression
+            ) {
+                let marker = String(trimmedStart[markerRange])
+                let number = Int(marker.prefix { $0.isNumber }) ?? 0
+                let icon = numberedListIcon(number: number, lineIndex: lineIndex)
+                let remainder = trimmedStart[markerRange.upperBound...]
+                output.append("\(leading)\(icon) \(remainder)")
+                continue
+            }
+
+            if let markerRange = trimmedStart.range(
+                of: #"^[•●▪︎◦\-*]\s+"#,
+                options: .regularExpression
+            ) {
+                let icon = bulletListIcon(lineIndex: lineIndex)
+                let remainder = trimmedStart[markerRange.upperBound...]
+                output.append("\(leading)\(icon) \(remainder)")
+                continue
+            }
+
+            output.append(line)
+        }
+
+        return output.joined(separator: "\n")
+    }
+
+    private func numberedListIcon(number: Int, lineIndex: Int) -> String {
+        let keycapIcons: [String] = ["0️⃣", "1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+        if (0...10).contains(number) {
+            return keycapIcons[number]
+        }
+
+        let fallbackIcons = ["✨", "📌", "💡", "🧩", "🎯", "🚀", "✅", "🔹"]
+        let seed = stableListIconSeed(offset: number * 17 + lineIndex * 31)
+        return fallbackIcons[seed % fallbackIcons.count]
+    }
+
+    private func bulletListIcon(lineIndex: Int) -> String {
+        let icons = ["🔹", "•", "✦", "▸", "▫️"]
+        let seed = stableListIconSeed(offset: lineIndex * 13)
+        return icons[seed % icons.count]
+    }
+
+    private func stableListIconSeed(offset: Int) -> Int {
+        let base = message.id.uuidString.unicodeScalars.reduce(0) { partial, scalar in
+            partial &+ Int(scalar.value)
+        }
+        return abs(base &+ offset)
     }
 
     private func codeBlock(

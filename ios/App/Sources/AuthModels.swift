@@ -59,6 +59,15 @@ enum AuthSessionStore {
 
     static func loadBaseURL(defaults: UserDefaults = .standard) -> String {
         if let saved = defaults.string(forKey: endpointKey), !saved.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let normalizedSaved = normalizedBaseURL(saved)
+            if normalizedSaved.contains("chatapp-auth-worker-v2.bidalu9.workers.dev"),
+               let bundled = (Bundle.main.object(forInfoDictionaryKey: "AUTH_API_URL") as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               !bundled.isEmpty {
+                let migrated = normalizedBaseURL(bundled)
+                defaults.set(migrated, forKey: endpointKey)
+                return migrated
+            }
             return saved
         }
         return (Bundle.main.object(forInfoDictionaryKey: "AUTH_API_URL") as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

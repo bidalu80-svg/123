@@ -27,7 +27,7 @@
     <key>GOOGLE_CLIENT_ID</key>
     <string>$(GOOGLE_CLIENT_ID)</string>
     <key>AUTH_API_URL</key>
-    <string>https://chatapp-auth-worker-v2.bidalu9.workers.dev</string>
+    <string>http://8.218.177.114</string>
     <key>CFBundleURLTypes</key>
     <array>
         <dict>
