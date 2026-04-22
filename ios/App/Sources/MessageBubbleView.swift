@@ -12,6 +12,7 @@ struct MessageBubbleView: View {
     let apiBaseURL: String
     let showsAssistantActionBar: Bool
     let onRegenerate: (() -> Void)?
+    let onDelete: (() -> Void)?
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject private var speechPlayback = SpeechPlaybackService.shared
     @State private var saveFeedback: String?
@@ -49,7 +50,8 @@ struct MessageBubbleView: View {
         apiKey: String,
         apiBaseURL: String,
         showsAssistantActionBar: Bool,
-        onRegenerate: (() -> Void)?
+        onRegenerate: (() -> Void)?,
+        onDelete: (() -> Void)? = nil
     ) {
         self.message = message
         self.sourceMessage = sourceMessage
@@ -58,6 +60,7 @@ struct MessageBubbleView: View {
         self.apiBaseURL = apiBaseURL
         self.showsAssistantActionBar = showsAssistantActionBar
         self.onRegenerate = onRegenerate
+        self.onDelete = onDelete
     }
 
     private var actionMessage: ChatMessage {
@@ -217,6 +220,17 @@ struct MessageBubbleView: View {
                 }
             }
 
+            if let onDelete {
+                iconActionButton(
+                    systemName: "trash",
+                    foregroundColor: .secondary,
+                    accessibilityLabel: "删除这条回复"
+                ) {
+                    onDelete()
+                    feedback(.light, "删除中…")
+                }
+            }
+
             if canGenerateFrontendProject {
                 Menu {
                     Button("生成到新项目", systemImage: "folder.badge.plus") {
@@ -260,6 +274,15 @@ struct MessageBubbleView: View {
                     Button("重试", systemImage: "arrow.clockwise") {
                         onRegenerate()
                         feedback(.light, "正在重试…")
+                    }
+                }
+                if let onDelete {
+                    Divider()
+                    Button(role: .destructive) {
+                        onDelete()
+                        feedback(.light, "删除中…")
+                    } label: {
+                        Label("删除这条回复", systemImage: "trash")
                     }
                 }
                 if canGenerateFrontendProject {
@@ -1000,6 +1023,9 @@ struct MessageBubbleView: View {
             language: language,
             displayContent: content
         )
+        let codeViewportHeight: CGFloat = 286
+        let codeViewportInnerMaxHeight = codeViewportHeight - 20
+        let shouldShowScrollHint = estimatedCodeLineCount(content) >= 14 || content.count >= 520
         let copyToken = "\(title)|\(language ?? "")|\(actionContent)"
         let isCopied = copiedCodeToken == copyToken
         let isRunning = runningCodeToken == copyToken
@@ -1056,16 +1082,48 @@ struct MessageBubbleView: View {
                 .animation(.easeInOut(duration: 0.16), value: isCopied)
             }
 
-            SelectableCodeTextView(
-                text: content,
-                textColor: UIColor.label,
-                font: .monospacedSystemFont(ofSize: 15.5, weight: .medium),
-                lineSpacing: 3.5,
-                language: language,
-                codeThemeMode: codeThemeMode,
-                isDarkMode: colorScheme == .dark
+            ZStack(alignment: .bottomTrailing) {
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(colorScheme == .dark ? Color.black.opacity(0.18) : Color.black.opacity(0.03))
+
+                SelectableCodeTextView(
+                    text: content,
+                    textColor: UIColor.label,
+                    font: .monospacedSystemFont(ofSize: 15.5, weight: .medium),
+                    lineSpacing: 3.5,
+                    language: language,
+                    codeThemeMode: codeThemeMode,
+                    isDarkMode: colorScheme == .dark,
+                    isScrollEnabled: true,
+                    maximumHeight: codeViewportInnerMaxHeight
+                )
+                .frame(maxWidth: .infinity, maxHeight: codeViewportInnerMaxHeight, alignment: .topLeading)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 10)
+
+                if shouldShowScrollHint {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.up.and.down")
+                            .font(.system(size: 9, weight: .semibold))
+                        Text("上下拖动")
+                            .font(.system(size: 10, weight: .semibold))
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(Color(.secondarySystemBackground).opacity(colorScheme == .dark ? 0.72 : 0.9))
+                    )
+                    .padding(.trailing, 8)
+                    .padding(.bottom, 8)
+                }
+            }
+            .overlay(
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .stroke(Color.black.opacity(colorScheme == .dark ? 0.24 : 0.10), lineWidth: 0.8)
             )
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, maxHeight: codeViewportHeight, alignment: .topLeading)
 
             if isRunning {
                 HStack(spacing: 8) {
@@ -1133,6 +1191,17 @@ struct MessageBubbleView: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(codeCardBorderColor, lineWidth: 1)
         )
+    }
+
+    private func estimatedCodeLineCount(_ text: String) -> Int {
+        if text.isEmpty {
+            return 0
+        }
+        return text.reduce(into: 1) { count, character in
+            if character == "\n" {
+                count += 1
+            }
+        }
     }
 
     private func supportsPythonRun(language: String?, title: String) -> Bool {
