@@ -531,6 +531,30 @@ final class ChatViewModel: ObservableObject {
         persistSessions()
     }
 
+    func deleteMessage(id: UUID) {
+        if isPrivateMode {
+            let beforeCount = privateMessages.count
+            privateMessages.removeAll { $0.id == id }
+            guard privateMessages.count != beforeCount else { return }
+            messages = privateMessages
+            statusMessage = "已删除 1 条回复"
+            appendLog("私密聊天：已删除 1 条回复。")
+            return
+        }
+
+        guard let index = currentSessionIndex else { return }
+        let beforeCount = sessions[index].messages.count
+        sessions[index].messages.removeAll { $0.id == id }
+        guard sessions[index].messages.count != beforeCount else { return }
+
+        sessions[index].updatedAt = Date()
+        sessions[index].title = buildSessionTitle(from: sessions[index])
+        messages = sessions[index].messages
+        persistSessions()
+        statusMessage = "已删除 1 条回复"
+        appendLog("聊天：已删除 1 条回复。")
+    }
+
     func loadDemoContent() {
         if config.apiURL.isEmpty {
             config.apiURL = ChatConfig.default.apiURL
