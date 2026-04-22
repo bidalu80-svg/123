@@ -837,19 +837,22 @@ final class ChatService {
             var videoURLStrings = Set<String>()
             var citationURLs = Set<String>()
             var pendingDeltaParts: [String] = []
+            var pendingDeltaCharacters = 0
             var pendingImageURLs = Set<String>()
             var thinkTagFilter = ThinkTagStreamFilter()
             var accumulatedResponseText = ""
             var lastEmitAt = Date.distantPast
             let streamEmitInterval: TimeInterval = 0.012
+            let streamForceEmitCharacterThreshold = 28
 
             func emitPending(force: Bool = false) {
-                let pendingDeltaText = pendingDeltaParts.joined()
-                guard !pendingDeltaText.isEmpty || !pendingImageURLs.isEmpty else { return }
+                guard pendingDeltaCharacters > 0 || !pendingImageURLs.isEmpty else { return }
                 let now = Date()
-                if !force && now.timeIntervalSince(lastEmitAt) < streamEmitInterval {
+                let shouldForceBySize = pendingDeltaCharacters >= streamForceEmitCharacterThreshold
+                if !force && !shouldForceBySize && now.timeIntervalSince(lastEmitAt) < streamEmitInterval {
                     return
                 }
+                let pendingDeltaText = pendingDeltaParts.joined()
                 onEvent(
                     StreamChunk(
                         rawLine: "",
@@ -859,6 +862,7 @@ final class ChatService {
                     )
                 )
                 pendingDeltaParts.removeAll(keepingCapacity: true)
+                pendingDeltaCharacters = 0
                 pendingImageURLs.removeAll()
                 lastEmitAt = now
             }
@@ -884,6 +888,7 @@ final class ChatService {
                             accumulatedResponseText += incremental
                             fullReplyParts.append(incremental)
                             pendingDeltaParts.append(incremental)
+                            pendingDeltaCharacters += incremental.count
                         }
                     }
                 }
@@ -913,6 +918,7 @@ final class ChatService {
                     accumulatedResponseText += incremental
                     fullReplyParts.append(incremental)
                     pendingDeltaParts.append(incremental)
+                    pendingDeltaCharacters += incremental.count
                 }
             }
             emitPending(force: true)
@@ -1113,19 +1119,22 @@ final class ChatService {
                 var imageURLs = Set<String>()
                 var citationURLs = Set<String>()
                 var pendingDeltaParts: [String] = []
+                var pendingDeltaCharacters = 0
                 var pendingImageURLs = Set<String>()
                 var thinkTagFilter = ThinkTagStreamFilter()
                 var lastEmitAt = Date.distantPast
                 // Emit smaller, more frequent deltas to keep the UI feed visually continuous.
                 let streamEmitInterval: TimeInterval = 0.012
+                let streamForceEmitCharacterThreshold = 28
 
                 func emitPending(force: Bool = false) {
-                    let pendingDeltaText = pendingDeltaParts.joined()
-                    guard !pendingDeltaText.isEmpty || !pendingImageURLs.isEmpty else { return }
+                    guard pendingDeltaCharacters > 0 || !pendingImageURLs.isEmpty else { return }
                     let now = Date()
-                    if !force && now.timeIntervalSince(lastEmitAt) < streamEmitInterval {
+                    let shouldForceBySize = pendingDeltaCharacters >= streamForceEmitCharacterThreshold
+                    if !force && !shouldForceBySize && now.timeIntervalSince(lastEmitAt) < streamEmitInterval {
                         return
                     }
+                    let pendingDeltaText = pendingDeltaParts.joined()
                     onEvent(
                         StreamChunk(
                             rawLine: "",
@@ -1135,6 +1144,7 @@ final class ChatService {
                         )
                     )
                     pendingDeltaParts.removeAll(keepingCapacity: true)
+                    pendingDeltaCharacters = 0
                     pendingImageURLs.removeAll()
                     lastEmitAt = now
                 }
@@ -1154,6 +1164,7 @@ final class ChatService {
                         if !filtered.isEmpty {
                             fullReplyParts.append(filtered)
                             pendingDeltaParts.append(filtered)
+                            pendingDeltaCharacters += filtered.count
                         }
                     }
                     if !chunk.imageURLs.isEmpty {
@@ -1168,6 +1179,7 @@ final class ChatService {
                 if !trailingFiltered.isEmpty {
                     fullReplyParts.append(trailingFiltered)
                     pendingDeltaParts.append(trailingFiltered)
+                    pendingDeltaCharacters += trailingFiltered.count
                 }
                 emitPending(force: true)
 

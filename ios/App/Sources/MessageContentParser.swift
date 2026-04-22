@@ -24,8 +24,8 @@ enum MessageContentParser {
     private static let markdownImagePattern = #"!\[[^\]]*\]\(([^)]+)\)"#
     private static let bareURLPattern = #"(?<!\]\()https?://[^\s\"<>)\]]+"#
     private static let dataImagePattern = #"data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+"#
-    private static let streamingParseDebounce: TimeInterval = 0.06
-    private static let longStreamingParseDebounce: TimeInterval = 0.12
+    private static let streamingParseDebounce: TimeInterval = 0.022
+    private static let longStreamingParseDebounce: TimeInterval = 0.05
     private static let longStreamingContentThreshold = 16_000
     private static let maxCacheEntries = 360
     private static let maxStreamingSnapshots = 32

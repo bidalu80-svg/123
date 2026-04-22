@@ -521,7 +521,12 @@ struct MessageBubbleView: View {
             } else if message.isVideoGenerationPlaceholder && message.videoAttachments.isEmpty {
                 videoGenerationProgressContainer(streamingTextAnimated: true)
             } else {
-                let segments = parsedStreamingSegments(for: displayText)
+                let segments: [MessageSegment]
+                if shouldRenderStreamingTextDirectly(displayText) {
+                    segments = displayText.isEmpty ? [] : [.text(displayText)]
+                } else {
+                    segments = parsedStreamingSegments(for: displayText)
+                }
 
                 if segments.isEmpty {
                     if !message.imageAttachments.isEmpty || !message.videoAttachments.isEmpty {
@@ -770,6 +775,21 @@ struct MessageBubbleView: View {
             fileAttachments: message.fileAttachments
         )
         return MessageContentParser.parse(streamingMessage)
+    }
+
+    private func shouldRenderStreamingTextDirectly(_ text: String) -> Bool {
+        guard !text.isEmpty else { return true }
+        if !message.imageAttachments.isEmpty || !message.videoAttachments.isEmpty || !message.fileAttachments.isEmpty {
+            return false
+        }
+
+        // Keep heavy structured parsing only when needed. Plain text can stream directly.
+        let normalized = text.lowercased()
+        if normalized.contains("```") { return false }
+        if normalized.contains("[[file:") { return false }
+        if normalized.contains("|---") || normalized.contains("\n|") { return false }
+        if normalized.contains("![](") || normalized.contains("data:image/") { return false }
+        return true
     }
 
     private var imageGenerationProgressCard: some View {

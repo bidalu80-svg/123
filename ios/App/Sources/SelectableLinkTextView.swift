@@ -341,22 +341,12 @@ struct SelectableLinkTextView: UIViewRepresentable {
 
         private func streamingStepSize(for pendingCharacters: Int) -> Int {
             switch pendingCharacters {
-            case 2_200...:
-                return 12
-            case 1_500...:
-                return 10
-            case 900...:
-                return 8
-            case 520...:
-                return 6
-            case 260...:
-                return 5
-            case 120...:
-                return 4
-            case 48...:
+            case 3_000...:
                 return 3
-            default:
+            case 1_200...:
                 return 2
+            default:
+                return 1
             }
         }
 

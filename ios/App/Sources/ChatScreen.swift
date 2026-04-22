@@ -672,7 +672,7 @@ struct ChatScreen: View {
                     if speechToText.isRecording {
                         stopVoiceTranscription()
                     }
-                    Task { await viewModel.sendCurrentMessage() }
+                    sendCurrentComposerMessage()
                 }
             } label: {
                 Group {
@@ -721,7 +721,7 @@ struct ChatScreen: View {
             .focused($isComposerFocused)
             .onSubmit {
                 guard viewModel.canSend else { return }
-                Task { await viewModel.sendCurrentMessage() }
+                sendCurrentComposerMessage()
             }
             .font(.system(size: 15))
             .foregroundStyle(viewModel.isPrivateMode ? Color.white : Color.primary)
@@ -1266,12 +1266,14 @@ struct ChatScreen: View {
     }
 
     private var activeStreamingLeadUserMessage: ChatMessage? {
-        guard let active = activeStreamingRenderedMessage,
-              renderedMessages.last?.id == active.id,
-              renderedMessages.count >= 2 else {
+        guard let active = activeStreamingRenderedMessage else {
             return nil
         }
-        let candidate = makeDisplaySafeMessage(renderedMessages[renderedMessages.count - 2])
+        guard let activeIndex = viewModel.messages.lastIndex(where: { $0.id == active.id }),
+              activeIndex > 0 else {
+            return nil
+        }
+        let candidate = makeDisplaySafeMessage(viewModel.messages[activeIndex - 1])
         return candidate.role == .user ? candidate : nil
     }
 
@@ -1283,7 +1285,7 @@ struct ChatScreen: View {
 
     private var separateStreamingLeadUserMessage: ChatMessage? {
         guard let lead = activeStreamingLeadUserMessage else { return nil }
-        if frozenRenderedMessages.last?.id == lead.id {
+        if frozenRenderedMessages.contains(where: { $0.id == lead.id }) {
             return nil
         }
         return lead
@@ -1634,7 +1636,7 @@ struct ChatScreen: View {
 
         isComposerFocused = false
         viewModel.draftMessage = composed
-        Task { await viewModel.sendCurrentMessage() }
+        sendCurrentComposerMessage()
     }
 
     private func cancelPendingMessageDeletionTasks() {
@@ -1883,7 +1885,17 @@ struct ChatScreen: View {
         viewModel.statusMessage = "已粘贴剪贴板文本"
         isComposerFocused = true
         if sendAfterPaste {
-            Task { await viewModel.sendCurrentMessage() }
+            sendCurrentComposerMessage()
+        }
+    }
+
+    private func sendCurrentComposerMessage() {
+        guard viewModel.canSend else { return }
+        isPinnedToBottom = true
+        issueTranscriptCommand(.scrollToBottom(animated: false))
+        Task { @MainActor in
+            await viewModel.sendCurrentMessage()
+            issueTranscriptCommand(.scrollToBottom(animated: false))
         }
     }
 
