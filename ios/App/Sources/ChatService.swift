@@ -1049,8 +1049,8 @@ final class ChatService {
         }
 
         let nsError = error as NSError
-        if nsError.domain == NSURLErrorDomain,
-           let code = URLError.Code(rawValue: nsError.code) {
+        if nsError.domain == NSURLErrorDomain {
+            let code = URLError.Code(rawValue: nsError.code)
             switch code {
             case .timedOut,
                  .networkConnectionLost,
