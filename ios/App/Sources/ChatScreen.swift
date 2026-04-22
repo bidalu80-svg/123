@@ -524,8 +524,8 @@ struct ChatScreen: View {
             NativeTranscriptScrollView(
                 historyContent: AnyView(transcriptHistoryContent()),
                 historyVersion: transcriptHistoryVersion,
-                streamingLeadContent: effectiveStreamingLeadContent,
-                streamingLeadSignature: effectiveStreamingLeadSignature,
+                streamingLeadContent: activeStreamingLeadContent,
+                streamingLeadSignature: activeStreamingLeadSignature,
                 streamingMessage: activeStreamingRenderedMessage,
                 codeThemeSignature: codeThemeRenderSignature,
                 codeThemeMode: viewModel.config.codeThemeMode,
@@ -1236,8 +1236,15 @@ struct ChatScreen: View {
         frozenRenderedMessages.last(where: { $0.role == .assistant })?.id
     }
 
+    private var displayMessages: [ChatMessage] {
+        if let echo = pendingOutgoingEchoMessage {
+            return viewModel.messages + [echo]
+        }
+        return viewModel.messages
+    }
+
     private var renderedMessages: [ChatMessage] {
-        let source = viewModel.messages
+        let source = displayMessages
         guard !source.isEmpty else { return [] }
 
         var forceIncludeIDs = Set<UUID>()
@@ -1282,11 +1289,11 @@ struct ChatScreen: View {
         guard let active = activeStreamingRenderedMessage else {
             return nil
         }
-        guard let activeIndex = viewModel.messages.lastIndex(where: { $0.id == active.id }),
+        guard let activeIndex = displayMessages.lastIndex(where: { $0.id == active.id }),
               activeIndex > 0 else {
             return nil
         }
-        let candidate = makeDisplaySafeMessage(viewModel.messages[activeIndex - 1])
+        let candidate = makeDisplaySafeMessage(displayMessages[activeIndex - 1])
         return candidate.role == .user ? candidate : nil
     }
 
@@ -1308,16 +1315,6 @@ struct ChatScreen: View {
             imageAttachments: echo.imageAttachments,
             fileAttachments: fileAttachments
         )
-    }
-
-    private var pendingOutgoingLeadSignature: String? {
-        pendingOutgoingEchoMessage.map {
-            "\($0.id.uuidString)|\($0.content.count)|\($0.imageAttachments.count)|\($0.videoAttachments.count)|\($0.fileAttachments.count)|echo|\(codeThemeRenderSignature)"
-        }
-    }
-
-    private var effectiveStreamingLeadSignature: String? {
-        activeStreamingLeadSignature ?? pendingOutgoingLeadSignature
     }
 
     private var separateStreamingLeadUserMessage: ChatMessage? {
@@ -1365,26 +1362,6 @@ struct ChatScreen: View {
         )
     }
 
-    private var pendingOutgoingLeadContent: AnyView? {
-        guard let echoMessage = pendingOutgoingEchoMessage else { return nil }
-        guard viewModel.isSending || activeStreamingRenderedMessage != nil else { return nil }
-        return AnyView(
-            MessageBubbleView(
-                message: echoMessage,
-                codeThemeMode: viewModel.config.codeThemeMode,
-                apiKey: viewModel.config.apiKey,
-                apiBaseURL: viewModel.config.normalizedBaseURL,
-                showsAssistantActionBar: false,
-                onRegenerate: nil
-            )
-            .padding(.horizontal, 18)
-        )
-    }
-
-    private var effectiveStreamingLeadContent: AnyView? {
-        activeStreamingLeadContent ?? pendingOutgoingLeadContent
-    }
-
     private var frozenRenderedMessages: [ChatMessage] {
         guard let activeStreamingRenderedMessage,
               renderedMessages.last?.id == activeStreamingRenderedMessage.id else {
@@ -1394,7 +1371,7 @@ struct ChatScreen: View {
     }
 
     private var isRenderingWindowed: Bool {
-        renderedMessages.count < viewModel.messages.count
+        renderedMessages.count < displayMessages.count
     }
 
     private var transcriptHistoryVersion: String {
