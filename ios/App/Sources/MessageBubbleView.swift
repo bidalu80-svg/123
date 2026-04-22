@@ -1173,7 +1173,9 @@ struct MessageBubbleView: View {
             displayContent: content
         )
         let shouldAutoFollowTail = followsTailDuringStreaming && message.isStreaming
-        let disableSyntaxHighlighting = followsTailDuringStreaming && message.isStreaming
+        // Highlight during streaming for immediate readability.
+        // For very long code, degrade gracefully to plain text to avoid heavy per-tick regex cost.
+        let disableSyntaxHighlighting = followsTailDuringStreaming && message.isStreaming && content.count > 12_000
         let codeViewportHeight: CGFloat = 286
         let codeViewportInnerMaxHeight = codeViewportHeight - 20
         let shouldShowScrollHint = estimatedCodeLineCount(content) >= 14 || content.count >= 520

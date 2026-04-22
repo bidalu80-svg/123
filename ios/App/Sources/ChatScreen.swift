@@ -3,6 +3,7 @@ import PhotosUI
 import Photos
 import UniformTypeIdentifiers
 import UIKit
+import Combine
 
 struct ChatScreen: View {
     @EnvironmentObject private var viewModel: ChatViewModel
@@ -64,6 +65,7 @@ struct ChatScreen: View {
     @State private var noFileDirectiveAssistantIDs: Set<UUID> = []
     @State private var autoBuildEligibleAssistantIDs: Set<UUID> = []
     @State private var composerMeasuredHeight: CGFloat = 0
+    @State private var keyboardOverlapHeight: CGFloat = 0
     @State private var headerLeadingWidth: CGFloat = 36
     @State private var headerTrailingWidth: CGFloat = 108
     @State private var transcriptMetrics = ChatTranscriptMetrics()
@@ -171,6 +173,16 @@ struct ChatScreen: View {
                     selectedPhotoItems = []
                 }
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
+            handleKeyboardFrameNotification(notification)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            updateKeyboardOverlapHeight(0)
+        }
+        .onChange(of: keyboardOverlapHeight) { _, _ in
+            guard isPinnedToBottom else { return }
+            issueTranscriptCommand(.scrollToBottom(animated: false))
         }
         .onChange(of: speechToText.transcript) { _, newValue in
             applySpeechTranscript(newValue)
@@ -531,7 +543,7 @@ struct ChatScreen: View {
                 codeThemeMode: viewModel.config.codeThemeMode,
                 apiKey: viewModel.config.apiKey,
                 apiBaseURL: viewModel.config.normalizedBaseURL,
-                bottomReservedInset: composerMeasuredHeight,
+                bottomReservedInset: transcriptBottomReservedInset,
                 command: transcriptCommand,
                 onMetricsChanged: { metrics in
                     if transcriptMetrics != metrics {
@@ -1386,6 +1398,38 @@ struct ChatScreen: View {
             .sorted()
             .joined(separator: ",")
         return "\(windowFlag)|\(ids)|\(lengths)|\(attachments)|\(deletingIDs)|\(codeThemeRenderSignature)"
+    }
+
+    private var transcriptBottomReservedInset: CGFloat {
+        let measured = max(0, composerMeasuredHeight)
+        let keyboard = max(0, keyboardOverlapHeight)
+        guard keyboard > 0 else { return measured }
+
+        // Some iOS keyboard transitions can transiently inflate this measurement with keyboard height.
+        // Keep only the real composer height so first-send does not jump upward.
+        if measured > keyboard + 90 {
+            return max(44, measured - keyboard)
+        }
+        return measured
+    }
+
+    private func handleKeyboardFrameNotification(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let endFrameValue = userInfo[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue else {
+            return
+        }
+
+        let endFrame = endFrameValue.cgRectValue
+        let screenHeight = UIScreen.main.bounds.height
+        let overlap = max(0, screenHeight - endFrame.minY)
+        updateKeyboardOverlapHeight(overlap)
+    }
+
+    private func updateKeyboardOverlapHeight(_ value: CGFloat) {
+        let normalized = max(0, value)
+        if abs(normalized - keyboardOverlapHeight) > 0.5 {
+            keyboardOverlapHeight = normalized
+        }
     }
 
     private var renderWindowNotice: some View {
