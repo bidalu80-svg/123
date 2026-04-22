@@ -386,6 +386,17 @@ struct SelectableLinkTextView: UIViewRepresentable {
             let start = max(0, storage.length - tailSize)
             let tailRange = NSRange(location: start, length: storage.length - start)
             if tailRange.length > 0 {
+                // For very long bodies, keep fade lightweight to reduce attribute churn.
+                if storage.length > 18_000 {
+                    let tailColor = streamPrimaryColor.withAlphaComponent(0.42)
+                    storage.addAttribute(.foregroundColor, value: tailColor, range: tailRange)
+                    let latestRange = NSRange(location: storage.length - 1, length: 1)
+                    let latestColor = streamPrimaryColor.withAlphaComponent(0.28)
+                    storage.addAttribute(.foregroundColor, value: latestColor, range: latestRange)
+                    lastStreamingTailRange = tailRange
+                    return
+                }
+
                 for offset in 0..<tailRange.length {
                     let unit = tailRange.length <= 1 ? 1.0 : (Double(offset) / Double(tailRange.length - 1))
                     let alpha = CGFloat(1.0 - (0.58 * unit))
@@ -433,7 +444,15 @@ struct SelectableLinkTextView: UIViewRepresentable {
             guard textCount >= lastMeasuredTextCount else { return nil }
 
             let delta = textCount - lastMeasuredTextCount
-            if delta < 20 {
+            let reuseThreshold: Int
+            if textCount >= 12_000 {
+                reuseThreshold = 160
+            } else if textCount >= 5_000 {
+                reuseThreshold = 80
+            } else {
+                reuseThreshold = 20
+            }
+            if delta < reuseThreshold {
                 return CGSize(width: width, height: lastMeasuredHeight)
             }
             return nil

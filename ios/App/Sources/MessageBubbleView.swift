@@ -515,7 +515,8 @@ struct MessageBubbleView: View {
         if let payload = frontendProgressPayload {
             frontendProgressTimeline(payload)
         } else {
-            let displayText = normalizedStreamingText(message.content)
+            let streamingSlice = streamingDisplaySlice(from: message.content)
+            let displayText = streamingSlice.text
             if message.isImageGenerationPlaceholder && message.imageAttachments.isEmpty {
                 imageGenerationProgressCard
             } else if message.isVideoGenerationPlaceholder && message.videoAttachments.isEmpty {
@@ -540,6 +541,12 @@ struct MessageBubbleView: View {
                     }
                 } else {
                     VStack(alignment: .leading, spacing: 10) {
+                        if streamingSlice.isTruncated {
+                            Text("长文本生成中，已仅渲染最新片段以保持流畅；完成后自动展示全文。")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                         ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
                             segmentView(segment, streamingTextAnimated: true)
                         }
@@ -756,6 +763,22 @@ struct MessageBubbleView: View {
 
     private func normalizedStreamingText(_ raw: String) -> String {
         raw.replacingOccurrences(of: "\r\n", with: "\n")
+    }
+
+    private func streamingDisplaySlice(from raw: String) -> (text: String, isTruncated: Bool) {
+        let normalized = normalizedStreamingText(raw)
+        let hardLimit = 20_000
+        let tailLimit = 12_000
+        guard normalized.count > hardLimit else {
+            return (normalized, false)
+        }
+
+        let start = normalized.index(normalized.endIndex, offsetBy: -tailLimit)
+        var tail = String(normalized[start...])
+        if let firstBreak = tail.firstIndex(of: "\n"), firstBreak != tail.startIndex {
+            tail = String(tail[firstBreak...])
+        }
+        return (tail, true)
     }
 
     private func parsedStreamingSegments(for displayText: String) -> [MessageSegment] {

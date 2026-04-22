@@ -524,8 +524,8 @@ struct ChatScreen: View {
             NativeTranscriptScrollView(
                 historyContent: AnyView(transcriptHistoryContent()),
                 historyVersion: transcriptHistoryVersion,
-                streamingLeadContent: activeStreamingLeadContent,
-                streamingLeadSignature: activeStreamingLeadSignature,
+                streamingLeadContent: nil,
+                streamingLeadSignature: nil,
                 streamingMessage: activeStreamingRenderedMessage,
                 codeThemeSignature: codeThemeRenderSignature,
                 codeThemeMode: viewModel.config.codeThemeMode,

@@ -31,9 +31,9 @@ enum MessageContentParser {
     private static let mediumStreamingContentThreshold = 7_000
     private static let longStreamingContentThreshold = 16_000
     private static let ultraStreamingContentThreshold = 32_000
-    private static let maxCacheEntries = 220
-    private static let maxStreamingSnapshots = 16
-    private static let streamingSnapshotTTL: TimeInterval = 8
+    private static let maxCacheEntries = 160
+    private static let maxStreamingSnapshots = 8
+    private static let streamingSnapshotTTL: TimeInterval = 5
     private static var parseCache: [String: [MessageSegment]] = [:]
     private static var parseCacheOrder: [String] = []
     private static var streamingSnapshots: [UUID: StreamingParseSnapshot] = [:]
@@ -58,6 +58,7 @@ enum MessageContentParser {
     static func parse(_ message: ChatMessage) -> [MessageSegment] {
         let now = Date()
         pruneStreamingSnapshots(now: now)
+        trimParseCacheForStreamingPressureIfNeeded(message: message)
 
         let effectiveStreamingDebounce: TimeInterval = {
             guard message.isStreaming else { return streamingParseDebounce }
@@ -126,6 +127,15 @@ enum MessageContentParser {
             streamingSnapshots.removeValue(forKey: message.id)
         }
         return sectioned
+    }
+
+    private static func trimParseCacheForStreamingPressureIfNeeded(message: ChatMessage) {
+        guard message.isStreaming, message.content.count >= mediumStreamingContentThreshold else { return }
+        let targetCacheCount = max(48, maxCacheEntries / 2)
+        while parseCacheOrder.count > targetCacheCount {
+            let key = parseCacheOrder.removeFirst()
+            parseCache.removeValue(forKey: key)
+        }
     }
 
     static func extractInlineImageURLs(from text: String) -> [String] {
