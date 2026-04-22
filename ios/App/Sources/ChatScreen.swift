@@ -511,8 +511,8 @@ struct ChatScreen: View {
             NativeTranscriptScrollView(
                 historyContent: AnyView(transcriptHistoryContent()),
                 historyVersion: transcriptHistoryVersion,
-                streamingLeadContent: nil,
-                streamingLeadSignature: nil,
+                streamingLeadContent: activeStreamingLeadContent,
+                streamingLeadSignature: activeStreamingLeadSignature,
                 streamingMessage: activeStreamingRenderedMessage,
                 codeThemeSignature: codeThemeRenderSignature,
                 codeThemeMode: viewModel.config.codeThemeMode,
@@ -1276,9 +1276,17 @@ struct ChatScreen: View {
     }
 
     private var activeStreamingLeadSignature: String? {
-        activeStreamingLeadUserMessage.map {
+        separateStreamingLeadUserMessage.map {
             "\($0.id.uuidString)|\($0.content.count)|\($0.imageAttachments.count)|\($0.videoAttachments.count)|\($0.fileAttachments.count)|\(codeThemeRenderSignature)"
         }
+    }
+
+    private var separateStreamingLeadUserMessage: ChatMessage? {
+        guard let lead = activeStreamingLeadUserMessage else { return nil }
+        if frozenRenderedMessages.last?.id == lead.id {
+            return nil
+        }
+        return lead
     }
 
     private var codeThemeRenderSignature: String {
@@ -1304,7 +1312,7 @@ struct ChatScreen: View {
     }
 
     private var activeStreamingLeadContent: AnyView? {
-        guard let leadUser = activeStreamingLeadUserMessage else { return nil }
+        guard let leadUser = separateStreamingLeadUserMessage else { return nil }
         return AnyView(
             MessageBubbleView(
                 message: leadUser,

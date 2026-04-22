@@ -228,6 +228,8 @@ struct SelectableLinkTextView: UIViewRepresentable {
         private var pendingStreamingSuffix = ""
         private var streamAttributes: [NSAttributedString.Key: Any] = [:]
         private var streamAnimationEnabled = false
+        private var streamPrimaryColor: UIColor = .label
+        private var lastStreamingTailRange: NSRange?
 
         deinit {
             stopStreamingAnimation(clearPending: true)
@@ -253,6 +255,7 @@ struct SelectableLinkTextView: UIViewRepresentable {
         ) {
             activeTextView = textView
             streamAttributes = attributes
+            streamPrimaryColor = (attributes[.foregroundColor] as? UIColor) ?? .label
             streamAnimationEnabled = enabled
             if !enabled {
                 stopStreamingAnimation(clearPending: true)
@@ -266,6 +269,7 @@ struct SelectableLinkTextView: UIViewRepresentable {
         }
 
         func stopStreamingAnimation(clearPending: Bool) {
+            normalizeStreamingTailAppearance()
             streamTimer?.invalidate()
             streamTimer = nil
             streamLastTimestamp = 0
@@ -313,10 +317,13 @@ struct SelectableLinkTextView: UIViewRepresentable {
             guard !chunk.isEmpty else { return }
 
             autoreleasepool {
+                let storage = textView.textStorage
                 let appended = NSMutableAttributedString(string: chunk, attributes: streamAttributes)
-                textView.textStorage.beginEditing()
-                textView.textStorage.append(appended)
-                textView.textStorage.endEditing()
+                let appendedLength = appended.length
+                storage.beginEditing()
+                storage.append(appended)
+                applyStreamingTailFade(in: storage, appendedLength: appendedLength)
+                storage.endEditing()
             }
         }
 
@@ -351,6 +358,52 @@ struct SelectableLinkTextView: UIViewRepresentable {
             default:
                 return 2
             }
+        }
+
+        private func applyStreamingTailFade(in storage: NSTextStorage, appendedLength: Int) {
+            if let previous = lastStreamingTailRange,
+               previous.location != NSNotFound,
+               NSMaxRange(previous) <= storage.length {
+                storage.addAttribute(.foregroundColor, value: streamPrimaryColor, range: previous)
+            }
+
+            guard storage.length > 0 else {
+                lastStreamingTailRange = nil
+                return
+            }
+
+            let tailSize = min(max(8, appendedLength * 4), 22)
+            let start = max(0, storage.length - tailSize)
+            let tailRange = NSRange(location: start, length: storage.length - start)
+            let tailColor = streamPrimaryColor.withAlphaComponent(0.46)
+            storage.addAttribute(.foregroundColor, value: tailColor, range: tailRange)
+
+            let latestCount = min(2, tailRange.length)
+            if latestCount > 0 {
+                let latestRange = NSRange(location: storage.length - latestCount, length: latestCount)
+                let latestColor = streamPrimaryColor.withAlphaComponent(0.24)
+                storage.addAttribute(.foregroundColor, value: latestColor, range: latestRange)
+            }
+
+            lastStreamingTailRange = tailRange
+        }
+
+        private func normalizeStreamingTailAppearance() {
+            guard let textView = activeTextView else {
+                lastStreamingTailRange = nil
+                return
+            }
+            guard let tailRange = lastStreamingTailRange,
+                  tailRange.location != NSNotFound,
+                  NSMaxRange(tailRange) <= textView.textStorage.length else {
+                lastStreamingTailRange = nil
+                return
+            }
+
+            textView.textStorage.beginEditing()
+            textView.textStorage.addAttribute(.foregroundColor, value: streamPrimaryColor, range: tailRange)
+            textView.textStorage.endEditing()
+            lastStreamingTailRange = nil
         }
     }
 
