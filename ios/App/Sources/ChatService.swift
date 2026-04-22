@@ -808,7 +808,7 @@ final class ChatService {
         memorySystemContext: String?,
         onEvent: @escaping @Sendable (StreamChunk) -> Void
     ) async throws -> ChatReply {
-        let request = try ChatRequestBuilder.makeResponsesRequest(
+        var request = try ChatRequestBuilder.makeResponsesRequest(
             config: config,
             history: history,
             message: message,
@@ -816,8 +816,9 @@ final class ChatService {
             memorySystemContext: memorySystemContext,
             stream: true
         )
+        request.timeoutInterval = max(config.timeout, 90)
 
-        return try await withRetry { [self] in
+        return try await withRetry(maxRetries: 3) { [self] in
             let (bytes, response) = try await session.bytes(for: request)
 
             guard let httpResponse = response as? HTTPURLResponse else {
@@ -993,10 +994,14 @@ final class ChatService {
     }
 
     private func shouldFallbackResponsesStreamError(_ error: Error) -> Bool {
+        if isStreamingTransportError(error) {
+            return true
+        }
+
         guard let serviceError = error as? ChatServiceError else { return false }
         switch serviceError {
         case .httpError(let code):
-            return [400, 404, 405, 415, 422].contains(code)
+            return [400, 404, 405, 408, 415, 422, 425, 429, 500, 502, 503, 504].contains(code)
         case .invalidResponse, .noData:
             return true
         case .invalidInput(let reason):
@@ -1004,6 +1009,64 @@ final class ChatService {
         case .invalidURL, .unsupported:
             return false
         }
+    }
+
+    private func shouldFallbackChatCompletionsStreamError(_ error: Error) -> Bool {
+        if isStreamingTransportError(error) {
+            return true
+        }
+
+        guard let serviceError = error as? ChatServiceError else { return false }
+        switch serviceError {
+        case .httpError(let code):
+            return [408, 425, 429, 500, 502, 503, 504].contains(code)
+        case .invalidResponse, .noData:
+            return true
+        case .invalidURL, .invalidInput, .unsupported:
+            return false
+        }
+    }
+
+    private func isStreamingTransportError(_ error: Error) -> Bool {
+        if error is CancellationError {
+            return false
+        }
+
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .timedOut,
+                 .networkConnectionLost,
+                 .notConnectedToInternet,
+                 .cannotFindHost,
+                 .cannotConnectToHost,
+                 .dnsLookupFailed,
+                 .resourceUnavailable,
+                 .internationalRoamingOff:
+                return true
+            default:
+                return false
+            }
+        }
+
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain,
+           let code = URLError.Code(rawValue: nsError.code) {
+            switch code {
+            case .timedOut,
+                 .networkConnectionLost,
+                 .notConnectedToInternet,
+                 .cannotFindHost,
+                 .cannotConnectToHost,
+                 .dnsLookupFailed,
+                 .resourceUnavailable,
+                 .internationalRoamingOff:
+                return true
+            default:
+                break
+            }
+        }
+
+        return false
     }
 
     private func sendChatCompletions(
@@ -1032,8 +1095,11 @@ final class ChatService {
         )
 
         if config.streamEnabled {
-            return try await withRetry { [self] in
-                let (bytes, response) = try await session.bytes(for: request)
+            var streamRequest = request
+            streamRequest.timeoutInterval = max(config.timeout, 90)
+            do {
+                return try await withRetry(maxRetries: 3) { [self] in
+                    let (bytes, response) = try await session.bytes(for: streamRequest)
 
                 guard let httpResponse = response as? HTTPURLResponse else {
                     throw ChatServiceError.invalidResponse
@@ -1113,11 +1179,26 @@ final class ChatService {
                     throw ChatServiceError.noData
                 }
                 return ChatReply(text: mergedText, imageAttachments: images)
+                }
+            } catch {
+                if !shouldFallbackChatCompletionsStreamError(error) {
+                    throw error
+                }
             }
         }
 
+        var nonStreamingConfig = config
+        nonStreamingConfig.streamEnabled = false
+        let nonStreamingRequest = try ChatRequestBuilder.makeRequest(
+            config: nonStreamingConfig,
+            history: history,
+            message: message,
+            realtimeSystemContext: realtimeContext,
+            memorySystemContext: memoryContext
+        )
+
         let (data, response) = try await withRetry { [self] in
-            try await session.data(for: request)
+            try await session.data(for: nonStreamingRequest)
         }
 
         guard let httpResponse = response as? HTTPURLResponse else {

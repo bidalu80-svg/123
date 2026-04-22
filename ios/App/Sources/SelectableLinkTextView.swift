@@ -224,7 +224,6 @@ struct SelectableLinkTextView: UIViewRepresentable {
         private weak var activeTextView: UITextView?
         private var streamTimer: CADisplayLink?
         private var streamLastTimestamp: CFTimeInterval = 0
-        private var streamLastFadeTimestamp: CFTimeInterval = 0
         private var pendingStreamingSuffix = ""
         private var streamAttributes: [NSAttributedString.Key: Any] = [:]
         private var streamAnimationEnabled = false
@@ -269,7 +268,6 @@ struct SelectableLinkTextView: UIViewRepresentable {
             streamTimer?.invalidate()
             streamTimer = nil
             streamLastTimestamp = 0
-            streamLastFadeTimestamp = 0
             if clearPending {
                 pendingStreamingSuffix.removeAll(keepingCapacity: false)
             }
@@ -286,7 +284,6 @@ struct SelectableLinkTextView: UIViewRepresentable {
             timer.add(to: .main, forMode: .common)
             streamTimer = timer
             streamLastTimestamp = 0
-            streamLastFadeTimestamp = 0
         }
 
         @objc
@@ -304,7 +301,8 @@ struct SelectableLinkTextView: UIViewRepresentable {
                 return
             }
 
-            if streamLastTimestamp > 0, timer.timestamp - streamLastTimestamp < (1.0 / 36.0) {
+            // Keep updates close to display refresh cadence for smoother streaming.
+            if streamLastTimestamp > 0, timer.timestamp - streamLastTimestamp < (1.0 / 55.0) {
                 return
             }
             streamLastTimestamp = timer.timestamp
@@ -317,16 +315,6 @@ struct SelectableLinkTextView: UIViewRepresentable {
             textView.textStorage.beginEditing()
             textView.textStorage.append(appended)
             textView.textStorage.endEditing()
-
-            // Keep a ChatGPT-like subtle streaming fade, but at a controlled cadence.
-            if streamLastFadeTimestamp == 0 || timer.timestamp - streamLastFadeTimestamp >= (1.0 / 12.0) {
-                let fade = CATransition()
-                fade.type = .fade
-                fade.duration = 0.11
-                fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                textView.layer.add(fade, forKey: "chatapp.streaming.fade")
-                streamLastFadeTimestamp = timer.timestamp
-            }
         }
 
         private func consumeStreamingPrefix(maxCharacters: Int) -> String {
@@ -343,20 +331,20 @@ struct SelectableLinkTextView: UIViewRepresentable {
 
         private func streamingStepSize(for pendingCharacters: Int) -> Int {
             switch pendingCharacters {
-            case 1_800...:
-                return 24
-            case 1_100...:
-                return 20
-            case 700...:
-                return 16
-            case 380...:
+            case 2_200...:
                 return 12
-            case 180...:
+            case 1_500...:
+                return 10
+            case 900...:
                 return 8
-            case 90...:
+            case 520...:
                 return 6
-            case 48...:
+            case 260...:
+                return 5
+            case 120...:
                 return 4
+            case 48...:
+                return 3
             default:
                 return 2
             }

@@ -511,8 +511,8 @@ struct ChatScreen: View {
             NativeTranscriptScrollView(
                 historyContent: AnyView(transcriptHistoryContent()),
                 historyVersion: transcriptHistoryVersion,
-                streamingLeadContent: activeStreamingLeadContent,
-                streamingLeadSignature: activeStreamingLeadSignature,
+                streamingLeadContent: nil,
+                streamingLeadSignature: nil,
                 streamingMessage: activeStreamingRenderedMessage,
                 codeThemeSignature: codeThemeRenderSignature,
                 codeThemeMode: viewModel.config.codeThemeMode,
@@ -1323,12 +1323,7 @@ struct ChatScreen: View {
               renderedMessages.last?.id == activeStreamingRenderedMessage.id else {
             return renderedMessages
         }
-        var frozen = Array(renderedMessages.dropLast())
-        if let lead = activeStreamingLeadUserMessage,
-           frozen.last?.id == lead.id {
-            frozen.removeLast()
-        }
-        return frozen
+        return Array(renderedMessages.dropLast())
     }
 
     private var isRenderingWindowed: Bool {
