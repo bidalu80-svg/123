@@ -11,6 +11,8 @@ struct SelectableCodeTextView: UIViewRepresentable {
     var isDarkMode: Bool = false
     var isScrollEnabled: Bool = false
     var maximumHeight: CGFloat? = nil
+    var autoFollowTail: Bool = false
+    var disableSyntaxHighlighting: Bool = false
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -56,6 +58,8 @@ struct SelectableCodeTextView: UIViewRepresentable {
             || coordinator.lastIsDarkMode != isDarkMode
             || coordinator.lastIsScrollEnabled != isScrollEnabled
             || abs(coordinator.lastMaximumHeight - normalizedMaximumHeight) > 0.5
+            || coordinator.lastAutoFollowTail != autoFollowTail
+            || coordinator.lastDisableSyntaxHighlighting != disableSyntaxHighlighting
 
         guard shouldRebuild else { return }
 
@@ -70,23 +74,25 @@ struct SelectableCodeTextView: UIViewRepresentable {
         ]
 
         if coordinator.lastText.isEmpty || !text.hasPrefix(coordinator.lastText) {
-            uiView.attributedText = highlightedCode(
+            uiView.attributedText = renderCode(
                 code: text,
                 attributes: attributes,
                 language: language,
                 codeThemeMode: codeThemeMode,
-                isDarkMode: isDarkMode
+                isDarkMode: isDarkMode,
+                disableSyntaxHighlighting: disableSyntaxHighlighting
             )
         } else {
             let suffix = String(text.dropFirst(coordinator.lastText.count))
             if !suffix.isEmpty {
                 uiView.textStorage.append(
-                    highlightedCode(
+                    renderCode(
                         code: suffix,
                         attributes: attributes,
                         language: language,
                         codeThemeMode: codeThemeMode,
-                        isDarkMode: isDarkMode
+                        isDarkMode: isDarkMode,
+                        disableSyntaxHighlighting: disableSyntaxHighlighting
                     )
                 )
             }
@@ -101,6 +107,12 @@ struct SelectableCodeTextView: UIViewRepresentable {
         coordinator.lastIsDarkMode = isDarkMode
         coordinator.lastIsScrollEnabled = isScrollEnabled
         coordinator.lastMaximumHeight = normalizedMaximumHeight
+        coordinator.lastAutoFollowTail = autoFollowTail
+        coordinator.lastDisableSyntaxHighlighting = disableSyntaxHighlighting
+
+        if isScrollEnabled, autoFollowTail {
+            scrollToLatestCode(in: uiView)
+        }
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
@@ -109,6 +121,9 @@ struct SelectableCodeTextView: UIViewRepresentable {
         let fitted = uiView.sizeThatFits(target)
         let height = ceil(fitted.height)
         if let maximumHeight, maximumHeight > 0 {
+            if isScrollEnabled && autoFollowTail {
+                return CGSize(width: width, height: maximumHeight)
+            }
             return CGSize(width: width, height: min(height, maximumHeight))
         }
         return CGSize(width: width, height: height)
@@ -124,6 +139,46 @@ struct SelectableCodeTextView: UIViewRepresentable {
         var lastIsDarkMode = false
         var lastIsScrollEnabled = false
         var lastMaximumHeight: CGFloat = -1
+        var lastAutoFollowTail = false
+        var lastDisableSyntaxHighlighting = false
+    }
+
+    private func scrollToLatestCode(in uiView: UITextView) {
+        DispatchQueue.main.async {
+            guard uiView.isScrollEnabled else { return }
+
+            UIView.performWithoutAnimation {
+                uiView.layoutIfNeeded()
+                let bottomOffsetY = max(
+                    -uiView.adjustedContentInset.top,
+                    uiView.contentSize.height - uiView.bounds.height + uiView.adjustedContentInset.bottom
+                )
+                uiView.setContentOffset(
+                    CGPoint(x: uiView.contentOffset.x, y: bottomOffsetY),
+                    animated: false
+                )
+            }
+        }
+    }
+
+    private func renderCode(
+        code: String,
+        attributes: [NSAttributedString.Key: Any],
+        language: String?,
+        codeThemeMode: CodeThemeMode,
+        isDarkMode: Bool,
+        disableSyntaxHighlighting: Bool
+    ) -> NSAttributedString {
+        if disableSyntaxHighlighting {
+            return NSAttributedString(string: code, attributes: attributes)
+        }
+        return highlightedCode(
+            code: code,
+            attributes: attributes,
+            language: language,
+            codeThemeMode: codeThemeMode,
+            isDarkMode: isDarkMode
+        )
     }
 
     private struct SyntaxPalette {

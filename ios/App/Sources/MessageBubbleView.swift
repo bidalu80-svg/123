@@ -841,9 +841,19 @@ struct MessageBubbleView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
         case .code(let language, let content):
-            codeBlock(title: (language ?? "code").uppercased(), content: content, language: language)
+            codeBlock(
+                title: (language ?? "code").uppercased(),
+                content: content,
+                language: language,
+                followsTailDuringStreaming: false
+            )
         case .file(let name, let language, let content):
-            fileSegmentView(name: name, language: language, content: content)
+            fileSegmentView(
+                name: name,
+                language: language,
+                content: content,
+                followsTailDuringStreaming: false
+            )
         case .table(let headers, let rows):
             markdownTableCard(headers: headers, rows: rows)
         case .image(let attachment):
@@ -861,9 +871,19 @@ struct MessageBubbleView: View {
         case .text(let text):
             selectableTextContent(text, streamingTextAnimated: streamingTextAnimated)
         case .code(let language, let content):
-            codeBlock(title: (language ?? "code").uppercased(), content: content, language: language)
+            codeBlock(
+                title: (language ?? "code").uppercased(),
+                content: content,
+                language: language,
+                followsTailDuringStreaming: streamingTextAnimated
+            )
         case .file(let name, let language, let content):
-            fileSegmentView(name: name, language: language, content: content)
+            fileSegmentView(
+                name: name,
+                language: language,
+                content: content,
+                followsTailDuringStreaming: streamingTextAnimated
+            )
         case .table(let headers, let rows):
             markdownTableCard(headers: headers, rows: rows)
         case .image(let attachment):
@@ -882,7 +902,12 @@ struct MessageBubbleView: View {
     }
 
     @ViewBuilder
-    private func fileSegmentView(name: String, language: String?, content: String) -> some View {
+    private func fileSegmentView(
+        name: String,
+        language: String?,
+        content: String,
+        followsTailDuringStreaming: Bool
+    ) -> some View {
         let spreadsheetSheets = ExcelGenerationService.extractSheets(
             fromRawText: content,
             preferredName: (name as NSString).deletingPathExtension
@@ -891,7 +916,12 @@ struct MessageBubbleView: View {
         if isSpreadsheetPreviewFile(name: name), let firstSheet = spreadsheetSheets.first {
             spreadsheetPreviewCard(fileName: name, sheet: firstSheet)
         } else {
-            codeBlock(title: "FILE · \(name)", content: content, language: language)
+            codeBlock(
+                title: "FILE · \(name)",
+                content: content,
+                language: language,
+                followsTailDuringStreaming: followsTailDuringStreaming
+            )
         }
     }
 
@@ -1017,12 +1047,19 @@ struct MessageBubbleView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func codeBlock(title: String, content: String, language: String? = nil) -> some View {
+    private func codeBlock(
+        title: String,
+        content: String,
+        language: String? = nil,
+        followsTailDuringStreaming: Bool = false
+    ) -> some View {
         let actionContent = resolvedCodeActionContent(
             title: title,
             language: language,
             displayContent: content
         )
+        let shouldAutoFollowTail = followsTailDuringStreaming && message.isStreaming
+        let disableSyntaxHighlighting = followsTailDuringStreaming && message.isStreaming
         let codeViewportHeight: CGFloat = 286
         let codeViewportInnerMaxHeight = codeViewportHeight - 20
         let shouldShowScrollHint = estimatedCodeLineCount(content) >= 14 || content.count >= 520
@@ -1095,7 +1132,9 @@ struct MessageBubbleView: View {
                     codeThemeMode: codeThemeMode,
                     isDarkMode: colorScheme == .dark,
                     isScrollEnabled: true,
-                    maximumHeight: codeViewportInnerMaxHeight
+                    maximumHeight: codeViewportInnerMaxHeight,
+                    autoFollowTail: shouldAutoFollowTail,
+                    disableSyntaxHighlighting: disableSyntaxHighlighting
                 )
                 .frame(maxWidth: .infinity, maxHeight: codeViewportInnerMaxHeight, alignment: .topLeading)
                 .padding(.horizontal, 10)

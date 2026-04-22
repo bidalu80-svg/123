@@ -541,7 +541,7 @@ struct ChatScreen: View {
                 }
             }
             .onChange(of: viewModel.streamScrollTrigger) { _, _ in
-                if isPinnedToBottom {
+                if isPinnedToBottom && !shouldUseCodeViewportTailFollow {
                     issueTranscriptCommand(.scrollToBottom(animated: false))
                 }
             }
@@ -1270,6 +1270,15 @@ struct ChatScreen: View {
         activeStreamingLeadUserMessage.map {
             "\($0.id.uuidString)|\($0.content.count)|\($0.imageAttachments.count)|\($0.videoAttachments.count)|\($0.fileAttachments.count)"
         }
+    }
+
+    private var shouldUseCodeViewportTailFollow: Bool {
+        guard let active = activeStreamingRenderedMessage else { return false }
+        let normalized = active.content.lowercased()
+        if normalized.contains("```") || normalized.contains("[[file:") {
+            return true
+        }
+        return false
     }
 
     private var activeStreamingLeadContent: AnyView? {
@@ -2243,6 +2252,8 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             scrollView.keyboardDismissMode = .interactive
             scrollView.contentInsetAdjustmentBehavior = .never
             scrollView.scrollsToTop = true
+            scrollView.delaysContentTouches = false
+            scrollView.canCancelContentTouches = true
             scrollView.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(scrollView)
 
@@ -2537,8 +2548,7 @@ private struct DissolvingMessageRow<Content: View>: View {
                     .transition(.opacity)
             }
         }
-        .compositingGroup()
-        .allowsHitTesting(!isDeleting)
+        .allowsHitTesting(true)
         .onAppear {
             if isDeleting {
                 triggerDissolve()

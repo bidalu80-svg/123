@@ -122,7 +122,6 @@ struct SelectableLinkTextView: UIViewRepresentable {
             coordinator.configureStreamingAnimation(
                 textView: uiView,
                 attributes: attrs,
-                linkColor: linkColor,
                 enabled: streamingAnimated
             )
             coordinator.markdownRenderToken &+= 1
@@ -227,7 +226,6 @@ struct SelectableLinkTextView: UIViewRepresentable {
         private var streamLastTimestamp: CFTimeInterval = 0
         private var pendingStreamingSuffix = ""
         private var streamAttributes: [NSAttributedString.Key: Any] = [:]
-        private var streamLinkColor: UIColor = .secondaryLabel
         private var streamAnimationEnabled = false
 
         deinit {
@@ -250,12 +248,10 @@ struct SelectableLinkTextView: UIViewRepresentable {
         func configureStreamingAnimation(
             textView: UITextView,
             attributes: [NSAttributedString.Key: Any],
-            linkColor: UIColor,
             enabled: Bool
         ) {
             activeTextView = textView
             streamAttributes = attributes
-            streamLinkColor = linkColor
             streamAnimationEnabled = enabled
             if !enabled {
                 stopStreamingAnimation(clearPending: true)
@@ -305,7 +301,7 @@ struct SelectableLinkTextView: UIViewRepresentable {
                 return
             }
 
-            if streamLastTimestamp > 0, timer.timestamp - streamLastTimestamp < (1.0 / 75.0) {
+            if streamLastTimestamp > 0, timer.timestamp - streamLastTimestamp < (1.0 / 36.0) {
                 return
             }
             streamLastTimestamp = timer.timestamp
@@ -315,28 +311,9 @@ struct SelectableLinkTextView: UIViewRepresentable {
             guard !chunk.isEmpty else { return }
 
             let appended = NSMutableAttributedString(string: chunk, attributes: streamAttributes)
-            if let detector = SelectableLinkTextView.linkDetector {
-                let nsText = chunk as NSString
-                let fullRange = NSRange(location: 0, length: nsText.length)
-                detector.enumerateMatches(in: chunk, options: [], range: fullRange) { match, _, _ in
-                    guard let match, let url = match.url else { return }
-                    appended.addAttributes(
-                        [
-                            .link: url,
-                            .foregroundColor: self.streamLinkColor,
-                            .underlineStyle: 0
-                        ],
-                        range: match.range
-                    )
-                }
-            }
-
-            let fade = CATransition()
-            fade.type = .fade
-            fade.duration = 0.12
-            fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            textView.layer.add(fade, forKey: "chatapp.streaming.fade")
+            textView.textStorage.beginEditing()
             textView.textStorage.append(appended)
+            textView.textStorage.endEditing()
         }
 
         private func consumeStreamingPrefix(maxCharacters: Int) -> String {
@@ -353,18 +330,22 @@ struct SelectableLinkTextView: UIViewRepresentable {
 
         private func streamingStepSize(for pendingCharacters: Int) -> Int {
             switch pendingCharacters {
-            case 360...:
-                return 6
-            case 200...:
-                return 5
-            case 120...:
+            case 1_800...:
+                return 32
+            case 1_100...:
+                return 24
+            case 700...:
+                return 18
+            case 380...:
+                return 14
+            case 180...:
+                return 10
+            case 90...:
+                return 7
+            case 48...:
                 return 4
-            case 72...:
-                return 3
-            case 28...:
-                return 2
             default:
-                return 1
+                return 3
             }
         }
     }
