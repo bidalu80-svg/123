@@ -230,3 +230,149 @@
   - 链接：`https://github.com/Return-end/blankai-ios/actions/runs/24381110916`
 - 产物（已下载到本地）：
   - `artifacts/run-24381110916/chatapp-ipa/exported/IEXA.ipa`
+
+---
+
+## 2026-04-14 本轮追加要点（v2.3）
+
+### 1) 助手消息操作栏显示策略
+- 调整为：每条助手消息都显示底部操作栏（复制、点赞、点踩、更多）。
+- 重试按钮仍仅对“最新一条助手消息”生效，避免老消息触发错误重试语义。
+- 文件：
+  - `ios/App/Sources/ChatScreen.swift`
+
+### 2) 图标与回复风格升级（保持品牌 IEXA）
+- 保持品牌名称 `IEXA` 不变，仅调整左侧助手小图标视觉风格（Minis 风格方向）。
+- 系统提示词加入“结构化回答偏好”约束，默认更有层次（先结论再要点）。
+- 文本解析器改进：
+  - 保留并强化列表符号 `•`
+  - 对纯短行组自动进行 bullet 化，减少“无指示的逐行文本块”
+- 文件：
+  - `ios/App/Sources/MessageBubbleView.swift`
+  - `ios/App/Sources/ChatService.swift`
+  - `ios/App/Sources/MessageContentParser.swift`
+
+### 3) 配置页精简
+- 按需求移除配置页中的 endpoint 路径和完整 URL 展示。
+- 保留顶部/菜单内“接口模式切换”即可完成模式切换。
+- 文件：
+  - `ios/App/Sources/SettingsScreen.swift`
+
+### 4) 私密聊天模式（新）
+- 新增右上角 👻 私密开关。
+- 开启后行为：
+  - 输入框容器切换为深色风格
+  - 对话仅保存在内存（`privateMessages`），不写入会话持久化
+  - 关闭后恢复普通会话视图
+- 影响点：
+  - 发送、流式更新、停止、异常、清空等逻辑均区分私密/普通模式
+  - `persistSessions()` 在私密模式下禁写
+- 文件：
+  - `ios/App/Sources/ChatViewModel.swift`
+  - `ios/App/Sources/ChatScreen.swift`
+
+### 5) 底部输入区交互重做（按需求）
+- 移除独立话筒按钮。
+- 右侧黑色圆按钮改为双态：
+  - 无文本且无附件时：语音输入（再次点击停止）
+  - 有文本或附件时：发送
+  - 发送中：停止
+- 文件：
+  - `ios/App/Sources/ChatScreen.swift`
+
+### 6) 首次启动强制配置弹窗（一次性）
+- 新增首次使用 `InitialConfigSheet`：
+  - 首次打开必须先填基础配置（API URL / API Key / Model）
+  - 保存后写入本地标记 `chatapp.config.onboarding.done`
+  - 后续二次启动不再弹出
+- 文件：
+  - `ios/App/Sources/ChatScreen.swift`
+
+### 7) 本轮相关提交
+- `968a40f` docs: 记录 v2.2 变更与构建
+- `2b1e5d1` fix: 所有助手回复显示操作栏
+- `e3c5753` feat: Minis 风格图标 + 更结构化回复
+- `05689a1` refactor: 配置页隐藏接口路径/URL展示
+- `e7e57ba` feat: 私密模式 + 双态黑色圆按钮 + 首次配置弹窗
+
+### 8) 本轮 IPA 构建记录
+- Run `24381253122`（success）
+  - `artifacts/run-24381253122/chatapp-ipa/exported/IEXA.ipa`
+- Run `24382713906`（success）
+- Run `24383039887`（success）
+- Run `24383150851`（success）
+  - `artifacts/run-24383150851/chatapp-ipa/exported/IEXA.ipa`
+- Run `24383946194`（success）
+  - `artifacts/run-24383946194/chatapp-ipa/exported/IEXA.ipa`
+
+### 9) 当前状态总结
+- 接口切换、私密聊天、语音输入/发送双态、首次配置弹窗均已接通。
+- 品牌保持 `IEXA`，并未改名为 `Minis`。
+
+---
+
+## 2026-04-15 本轮要点（v2.4）
+
+### 1) 认证策略回调为“登录 + 注册”
+- 登录页恢复为账号密码模式，显示：
+  - `登录使用`
+  - `注册使用`
+- 已移除强依赖 Apple 登录的单按钮形态，避免描述文件能力不匹配导致不可用。
+- 相关文件：
+  - `ios/App/Sources/AuthScreen.swift`
+  - `ios/UITests/ChatAppUITests.swift`
+
+### 2) 设备限制策略（核心）
+- 注册限制：
+  - 同一设备仅允许成功注册 1 个账号。
+- 登录限制：
+  - 账号首次成功登录后绑定设备；
+  - 后续仅允许该账号在同一设备登录；
+  - 换设备登录将被拒绝（403）。
+- 客户端实现：
+  - 新增设备安装 ID（Keychain 持久化，失败回退 UserDefaults）。
+  - 所有 auth 关键请求自动携带头：`X-Device-Install-ID`。
+- 相关文件：
+  - `ios/App/Sources/DeviceInstallIdentity.swift`
+  - `ios/App/Sources/AuthService.swift`
+  - `cloudflare/auth-worker/src/index.ts`
+
+### 3) 管理员解绑设备（换机迁移）
+- 新增接口：`POST /auth/admin/unbind-device`
+- 仅管理员 token 可调用（`blank / 888888` 登录后拿 token）。
+- 行为：
+  - 删除账号设备绑定；
+  - 撤销该账号当前有效会话；
+  - 用户可在新设备重新登录并建立新绑定。
+- 文档已补充：
+  - `cloudflare/auth-worker/README.md`
+
+### 4) Cloudflare Worker 线上部署
+- Worker：`chatapp-auth-worker-v2`
+- 地址：`https://chatapp-auth-worker-v2.bidalu9.workers.dev`
+- 部署版本（当次）：`71dfc567-a803-4000-83b0-70b0c826adb7`
+- `/auth/health` 已确认：
+  - `accountDeviceBindingEnabled: true`
+  - `adminDeviceUnbindEnabled: true`
+
+### 5) 线上联调验证结果
+- 对线上环境执行了端到端验证，覆盖：
+  - 首次注册成功
+  - 同设备二次注册拦截
+  - 跨设备登录拦截（解绑前）
+  - 管理员解绑成功
+  - 解绑后新设备登录成功
+  - 旧设备再次拦截
+  - 无设备标识请求拦截（400）
+- 本轮自动化验证结果：`10/10 通过`。
+
+### 6) 最新 IPA 构建记录
+- Run：`24452435817`（success）
+- 链接：`https://github.com/bidalu80-svg/123/actions/runs/24452435817`
+- Artifact：`chatapp-ipa`
+
+### 7) 当前可用运维动作
+- 管理员解绑命令（示意）：
+  - 先 `POST /auth/login` 拿管理员 token
+  - 再 `POST /auth/admin/unbind-device` 指定 `account`
+- 该动作用于“用户换手机后无法登录”的人工放行。

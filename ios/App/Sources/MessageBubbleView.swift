@@ -1192,11 +1192,11 @@ struct MessageBubbleView: View {
 
             ZStack(alignment: .bottomTrailing) {
                 RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .fill(colorScheme == .dark ? Color.black.opacity(0.18) : Color.black.opacity(0.03))
+                    .fill(codeViewportBackgroundColor)
 
                 SelectableCodeTextView(
                     text: content,
-                    textColor: UIColor.label,
+                    textColor: codePrimaryTextColor,
                     font: .monospacedSystemFont(ofSize: 15.5, weight: .medium),
                     lineSpacing: 3.5,
                     language: language,
@@ -2261,6 +2261,30 @@ struct MessageBubbleView: View {
             return colorScheme == .dark
                 ? Color(red: 0.12, green: 0.12, blue: 0.14)
                 : Color(red: 0.97, green: 0.97, blue: 0.975)
+        }
+    }
+
+    private var codeViewportBackgroundColor: Color {
+        switch codeThemeMode {
+        case .vscodeDark:
+            return Color.black.opacity(0.20)
+        case .githubLight:
+            return Color.black.opacity(0.025)
+        case .followApp:
+            return colorScheme == .dark ? Color.black.opacity(0.20) : Color.black.opacity(0.025)
+        }
+    }
+
+    private var codePrimaryTextColor: UIColor {
+        switch codeThemeMode {
+        case .vscodeDark:
+            return UIColor(red: 0.83, green: 0.84, blue: 0.86, alpha: 1)
+        case .githubLight:
+            return UIColor(red: 0.14, green: 0.16, blue: 0.18, alpha: 1)
+        case .followApp:
+            return colorScheme == .dark
+                ? UIColor(red: 0.83, green: 0.84, blue: 0.86, alpha: 1)
+                : UIColor(red: 0.14, green: 0.16, blue: 0.18, alpha: 1)
         }
     }
 

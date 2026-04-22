@@ -6,6 +6,7 @@ import UIKit
 
 struct ChatScreen: View {
     @EnvironmentObject private var viewModel: ChatViewModel
+    @Environment(\.colorScheme) private var colorScheme
     @AppStorage("chatapp.config.onboarding.done") private var hasCompletedInitialConfig = false
 
     private let sidebarWidth: CGFloat = 286
@@ -513,6 +514,7 @@ struct ChatScreen: View {
                 streamingLeadContent: activeStreamingLeadContent,
                 streamingLeadSignature: activeStreamingLeadSignature,
                 streamingMessage: activeStreamingRenderedMessage,
+                codeThemeSignature: codeThemeRenderSignature,
                 codeThemeMode: viewModel.config.codeThemeMode,
                 apiKey: viewModel.config.apiKey,
                 apiBaseURL: viewModel.config.normalizedBaseURL,
@@ -614,7 +616,7 @@ struct ChatScreen: View {
                 draftFilePreview(file)
             }
 
-            if viewModel.messages.isEmpty {
+            if shouldShowStarterPrompts {
                 starterPromptStrip
             }
 
@@ -748,6 +750,13 @@ struct ChatScreen: View {
         return trimmed.isEmpty
             && viewModel.draftImageAttachments.isEmpty
             && viewModel.draftFileAttachment == nil
+    }
+
+    private var shouldShowStarterPrompts: Bool {
+        guard viewModel.messages.isEmpty else { return false }
+        return viewModel.draftMessage
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty
     }
 
     private var canTapPrimaryComposerButton: Bool {
@@ -1268,8 +1277,21 @@ struct ChatScreen: View {
 
     private var activeStreamingLeadSignature: String? {
         activeStreamingLeadUserMessage.map {
-            "\($0.id.uuidString)|\($0.content.count)|\($0.imageAttachments.count)|\($0.videoAttachments.count)|\($0.fileAttachments.count)"
+            "\($0.id.uuidString)|\($0.content.count)|\($0.imageAttachments.count)|\($0.videoAttachments.count)|\($0.fileAttachments.count)|\(codeThemeRenderSignature)"
         }
+    }
+
+    private var codeThemeRenderSignature: String {
+        let resolvedAppearance: String
+        switch viewModel.config.codeThemeMode {
+        case .vscodeDark:
+            resolvedAppearance = "dark"
+        case .githubLight:
+            resolvedAppearance = "light"
+        case .followApp:
+            resolvedAppearance = colorScheme == .dark ? "dark" : "light"
+        }
+        return "\(viewModel.config.codeThemeMode.rawValue)|\(resolvedAppearance)"
     }
 
     private var shouldUseCodeViewportTailFollow: Bool {
@@ -1324,7 +1346,7 @@ struct ChatScreen: View {
             .map(\.uuidString)
             .sorted()
             .joined(separator: ",")
-        return "\(windowFlag)|\(ids)|\(lengths)|\(attachments)|\(deletingIDs)"
+        return "\(windowFlag)|\(ids)|\(lengths)|\(attachments)|\(deletingIDs)|\(codeThemeRenderSignature)"
     }
 
     private var renderWindowNotice: some View {
@@ -2183,6 +2205,7 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
     let streamingLeadContent: AnyView?
     let streamingLeadSignature: String?
     let streamingMessage: ChatMessage?
+    let codeThemeSignature: String
     let codeThemeMode: CodeThemeMode
     let apiKey: String
     let apiBaseURL: String
@@ -2201,6 +2224,7 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             streamingLeadContent: streamingLeadContent,
             streamingLeadSignature: streamingLeadSignature,
             streamingMessage: streamingMessage,
+            codeThemeSignature: codeThemeSignature,
             codeThemeMode: codeThemeMode,
             apiKey: apiKey,
             apiBaseURL: apiBaseURL,
@@ -2323,6 +2347,7 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             streamingLeadContent: AnyView?,
             streamingLeadSignature: String?,
             streamingMessage: ChatMessage?,
+            codeThemeSignature: String,
             codeThemeMode: CodeThemeMode,
             apiKey: String,
             apiBaseURL: String,
@@ -2373,7 +2398,7 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             }
 
             let newStreamingSignature = streamingMessage.map {
-                "\($0.id.uuidString)|\($0.content.count)|\($0.imageAttachments.count)|\($0.videoAttachments.count)|\($0.fileAttachments.count)"
+                "\($0.id.uuidString)|\($0.content.count)|\($0.imageAttachments.count)|\($0.videoAttachments.count)|\($0.fileAttachments.count)|\(codeThemeSignature)"
             }
             if let streamingMessage {
                 pendingStreamingHideWorkItem?.cancel()
