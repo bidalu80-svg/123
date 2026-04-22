@@ -12,8 +12,8 @@ struct ChatScreen: View {
     private let sidebarWidth: CGFloat = 286
     private let edgeDragActivationWidth: CGFloat = 28
     private let headerCenterMinHorizontalInset: CGFloat = 76
-    private let maxRenderedMessages = 120
-    private let maxRenderedCharacters = 260_000
+    private let maxRenderedMessages = 100
+    private let maxRenderedCharacters = 200_000
     private let maxSingleRenderedMessageChars = 80_000
     private let maxRenderedFilePreviewChars = 18_000
 
@@ -2519,27 +2519,14 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
                     lastStreamingSignature = newStreamingSignature
                 }
             } else if !streamingRichHostingController.view.isHidden || lastStreamingSignature != nil {
-                let hideStreamingView: () -> Void = { [weak self] in
-                    guard let self else { return }
-                    UIView.performWithoutAnimation {
-                        self.streamingRichHostingController.rootView = AnyView(EmptyView())
-                        self.streamingRichHostingController.view.isHidden = true
-                    }
-                    self.lastStreamingSignature = nil
-                    self.pendingStreamingHideWorkItem = nil
-                    self.reportMetrics()
+                pendingStreamingHideWorkItem?.cancel()
+                pendingStreamingHideWorkItem = nil
+                UIView.performWithoutAnimation {
+                    streamingRichHostingController.rootView = AnyView(EmptyView())
+                    streamingRichHostingController.view.isHidden = true
                 }
-
-                if historyChanged {
-                    pendingStreamingHideWorkItem?.cancel()
-                    let workItem = DispatchWorkItem(block: hideStreamingView)
-                    pendingStreamingHideWorkItem = workItem
-                    DispatchQueue.main.async(execute: workItem)
-                } else {
-                    pendingStreamingHideWorkItem?.cancel()
-                    pendingStreamingHideWorkItem = nil
-                    hideStreamingView()
-                }
+                lastStreamingSignature = nil
+                reportMetrics()
             }
 
             var commandChanged = false
@@ -2621,8 +2608,10 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
 
         private func normalizeShortContentOffsetIfNeeded() {
             guard !canScroll else { return }
+            guard !scrollView.isTracking, !scrollView.isDragging, !scrollView.isDecelerating else { return }
             let topOffsetY = -scrollView.contentInset.top
-            guard abs(scrollView.contentOffset.y - topOffsetY) > 1 else { return }
+            // Avoid fighting user interaction when intrinsic height updates are still catching up.
+            guard abs(scrollView.contentOffset.y - topOffsetY) > 56 else { return }
             scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: topOffsetY), animated: false)
         }
 

@@ -31,9 +31,11 @@ enum MessageContentParser {
     private static let mediumStreamingContentThreshold = 7_000
     private static let longStreamingContentThreshold = 16_000
     private static let ultraStreamingContentThreshold = 32_000
-    private static let maxCacheEntries = 160
-    private static let maxStreamingSnapshots = 8
-    private static let streamingSnapshotTTL: TimeInterval = 5
+    private static let nonStreamingCacheContentThreshold = 12_000
+    private static let maxCachedSegmentsPerEntry = 140
+    private static let maxCacheEntries = 96
+    private static let maxStreamingSnapshots = 6
+    private static let streamingSnapshotTTL: TimeInterval = 3
     private static var parseCache: [String: [MessageSegment]] = [:]
     private static var parseCacheOrder: [String] = []
     private static var streamingSnapshots: [UUID: StreamingParseSnapshot] = [:]
@@ -84,7 +86,11 @@ enum MessageContentParser {
             return snapshot.segments
         }
 
-        let signature: String? = message.isStreaming ? nil : cacheSignature(for: message)
+        let signature: String? = {
+            guard !message.isStreaming else { return nil }
+            guard message.content.count <= nonStreamingCacheContentThreshold else { return nil }
+            return cacheSignature(for: message)
+        }()
         if let signature, let cached = parseCache[signature] {
             return cached
         }
@@ -131,7 +137,7 @@ enum MessageContentParser {
 
     private static func trimParseCacheForStreamingPressureIfNeeded(message: ChatMessage) {
         guard message.isStreaming, message.content.count >= mediumStreamingContentThreshold else { return }
-        let targetCacheCount = max(48, maxCacheEntries / 2)
+        let targetCacheCount = max(24, maxCacheEntries / 3)
         while parseCacheOrder.count > targetCacheCount {
             let key = parseCacheOrder.removeFirst()
             parseCache.removeValue(forKey: key)
@@ -853,7 +859,8 @@ enum MessageContentParser {
     private static func splitIntoSectionBlocks(_ rawText: String) -> [String] {
         let normalized = rawText.replacingOccurrences(of: "\r\n", with: "\n")
         let trimmed = normalized.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count >= 280 else { return [rawText] }
+        // Keep medium replies readable, but avoid over-fragmenting very long replies into too many views.
+        guard trimmed.count >= 560 else { return [rawText] }
 
         let paragraphs = trimmed
             .components(separatedBy: "\n\n")
@@ -876,7 +883,7 @@ enum MessageContentParser {
         for paragraph in paragraphs {
             let candidateLength = bufferLength + paragraph.count + (buffer.isEmpty ? 0 : 2)
             let shouldBreakForHeading = !buffer.isEmpty && isSectionHeading(paragraph)
-            let shouldBreakForLength = candidateLength >= 420
+            let shouldBreakForLength = candidateLength >= 980
 
             if shouldBreakForHeading || shouldBreakForLength {
                 flushBuffer()
@@ -885,7 +892,7 @@ enum MessageContentParser {
             buffer.append(paragraph)
             bufferLength += paragraph.count + (buffer.count > 1 ? 2 : 0)
 
-            if bufferLength >= 320 {
+            if bufferLength >= 760 {
                 flushBuffer()
             }
         }
@@ -930,6 +937,7 @@ enum MessageContentParser {
     }
 
     private static func storeParseCache(segments: [MessageSegment], signature: String) {
+        guard segments.count <= maxCachedSegmentsPerEntry else { return }
         parseCache[signature] = segments
         if !parseCacheOrder.contains(signature) {
             parseCacheOrder.append(signature)

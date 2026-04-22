@@ -190,6 +190,8 @@ struct SelectableLinkTextView: UIViewRepresentable {
             .foregroundColor: linkColor,
             .underlineStyle: 0
         ]
+        uiView.invalidateIntrinsicContentSize()
+        uiView.setNeedsLayout()
         coordinator.lastText = text
         coordinator.lastFontPointSize = font.pointSize
         coordinator.lastTextColor = textColor
@@ -200,13 +202,30 @@ struct SelectableLinkTextView: UIViewRepresentable {
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
         guard let width = proposal.width, width > 1 else { return nil }
-        if let cached = context.coordinator.cachedSizeIfAvailable(forWidth: width, textCount: text.count) {
+        let lineBreakCount = text.reduce(into: 0) { count, character in
+            if character == "\n" {
+                count += 1
+            }
+        }
+        if let cached = context.coordinator.cachedSizeIfAvailable(
+            forWidth: width,
+            textCount: text.count,
+            lineBreakCount: lineBreakCount
+        ) {
             return cached
+        }
+        if text.count >= 8_000 {
+            uiView.layoutManager.ensureLayout(for: uiView.textContainer)
         }
         let target = CGSize(width: width, height: .greatestFiniteMagnitude)
         let size = uiView.sizeThatFits(target)
         let fitted = CGSize(width: width, height: ceil(size.height))
-        context.coordinator.recordMeasuredSize(fitted, width: width, textCount: text.count)
+        context.coordinator.recordMeasuredSize(
+            fitted,
+            width: width,
+            textCount: text.count,
+            lineBreakCount: lineBreakCount
+        )
         return fitted
     }
 
@@ -239,6 +258,7 @@ struct SelectableLinkTextView: UIViewRepresentable {
         private var lastMeasuredWidth: CGFloat = 0
         private var lastMeasuredHeight: CGFloat = 0
         private var lastMeasuredTextCount: Int = 0
+        private var lastMeasuredLineBreakCount: Int = 0
 
         deinit {
             stopStreamingAnimation(clearPending: true)
@@ -437,20 +457,25 @@ struct SelectableLinkTextView: UIViewRepresentable {
             lastStreamingTailRange = nil
         }
 
-        func cachedSizeIfAvailable(forWidth width: CGFloat, textCount: Int) -> CGSize? {
+        func cachedSizeIfAvailable(forWidth width: CGFloat, textCount: Int, lineBreakCount: Int) -> CGSize? {
             guard lastStreamingAnimated else { return nil }
             guard lastMeasuredHeight > 0 else { return nil }
             guard abs(width - lastMeasuredWidth) < 0.5 else { return nil }
             guard textCount >= lastMeasuredTextCount else { return nil }
+            // Long responses need exact relayout; stale cached heights can cause overlap and wrong scroll range.
+            guard textCount < 12_000 else { return nil }
+            guard lineBreakCount <= lastMeasuredLineBreakCount else { return nil }
 
             let delta = textCount - lastMeasuredTextCount
             let reuseThreshold: Int
-            if textCount >= 12_000 {
-                reuseThreshold = 160
-            } else if textCount >= 5_000 {
-                reuseThreshold = 80
+            if textCount >= 7_000 {
+                reuseThreshold = 24
+            } else if textCount >= 3_000 {
+                reuseThreshold = 16
+            } else if textCount >= 1_200 {
+                reuseThreshold = 10
             } else {
-                reuseThreshold = 20
+                reuseThreshold = 6
             }
             if delta < reuseThreshold {
                 return CGSize(width: width, height: lastMeasuredHeight)
@@ -458,10 +483,11 @@ struct SelectableLinkTextView: UIViewRepresentable {
             return nil
         }
 
-        func recordMeasuredSize(_ size: CGSize, width: CGFloat, textCount: Int) {
+        func recordMeasuredSize(_ size: CGSize, width: CGFloat, textCount: Int, lineBreakCount: Int) {
             lastMeasuredWidth = width
             lastMeasuredHeight = size.height
             lastMeasuredTextCount = textCount
+            lastMeasuredLineBreakCount = lineBreakCount
         }
     }
 
