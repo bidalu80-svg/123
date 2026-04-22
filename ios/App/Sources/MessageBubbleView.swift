@@ -1037,7 +1037,7 @@ struct MessageBubbleView: View {
 
     private func selectableTextContent(_ text: String, streamingTextAnimated: Bool = false) -> some View {
         let displayText = decoratedAssistantListText(text)
-        SelectableLinkTextView(
+        return SelectableLinkTextView(
             text: displayText,
             textColor: UIColor.label,
             linkColor: UIColor.secondaryLabel,
