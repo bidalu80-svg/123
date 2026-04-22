@@ -16,10 +16,18 @@ struct ChatScreen: View {
     private let maxSingleRenderedMessageChars = 80_000
     private let maxRenderedFilePreviewChars = 18_000
     private let starterPrompts: [(title: String, subtitle: String)] = [
-        ("创作一幅插图", "为烘焙店"),
-        ("告诉我一个冷知识", "关于罗马帝国"),
-        ("提出建议", "根据我的数据"),
-        ("设计一款编程游戏", "以有趣的方式教授基础知识")
+        ("写一个 Swift 网络请求封装", "支持 async/await 和错误重试"),
+        ("帮我排查 iOS 卡顿", "给出 Instruments 的定位步骤"),
+        ("设计一个 Python 爬虫", "可并发抓取并写入 SQLite"),
+        ("写一个 React 登录页", "含表单校验和错误提示"),
+        ("实现 Go 限流中间件", "基于令牌桶并附测试"),
+        ("写一个 SQL 优化方案", "分析慢查询并给索引建议"),
+        ("做一个 Node 文件上传 API", "支持分片上传和断点续传"),
+        ("实现 Redis 缓存策略", "防穿透、防击穿、防雪崩"),
+        ("写一个 Linux 排障脚本", "一键采集 CPU/内存/磁盘日志"),
+        ("讲解 Git 冲突处理", "给出最安全的回滚流程"),
+        ("设计一个消息队列消费器", "保证幂等与失败重试"),
+        ("写一个算法题答案", "滑动窗口求最长无重复子串")
     ]
 
     @State private var showErrorAlert = false
@@ -51,6 +59,8 @@ struct ChatScreen: View {
     @State private var transcriptMetrics = ChatTranscriptMetrics()
     @State private var transcriptCommandSequence = 0
     @State private var transcriptCommand: ChatTranscriptCommand?
+    @State private var pendingMessageDeletionIDs: Set<UUID> = []
+    @State private var pendingMessageDeletionTasks: [UUID: Task<Void, Never>] = [:]
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -153,6 +163,7 @@ struct ChatScreen: View {
         }
         .onDisappear {
             speechToText.stopRecording()
+            cancelPendingMessageDeletionTasks()
         }
         .photosPicker(
             isPresented: $showPhotoPicker,
@@ -262,9 +273,9 @@ struct ChatScreen: View {
     }
 
     private var header: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 4) {
             Text("IEXA")
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 11.5, weight: .medium))
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .center)
 
@@ -370,26 +381,49 @@ struct ChatScreen: View {
                 }
             }
         } label: {
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(viewModel.isCurrentModelAvailable ? Color.green : Color.red)
-                    .frame(width: 7, height: 7)
-                Text(modelVendorSubtitle(viewModel.config.model, apiURL: viewModel.config.normalizedBaseURL))
-                    .font(.system(size: 12, weight: .semibold))
+            VStack(spacing: 2) {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(viewModel.isCurrentModelAvailable ? Color.green : Color.red)
+                        .frame(width: 7, height: 7)
+                    Text(headerModelName)
+                        .font(.system(size: 12, weight: .semibold))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(Color(.secondarySystemBackground))
+                )
+
+                Text(headerModelVendorName)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
             }
-            .foregroundStyle(.primary)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(Color(.secondarySystemBackground))
-            )
         }
         .buttonStyle(.plain)
+    }
+
+    private var headerModelName: String {
+        let model = viewModel.config.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        return model.isEmpty ? "未选择模型" : model
+    }
+
+    private var headerModelVendorName: String {
+        let model = viewModel.config.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        let directVendor = detectModelVendor(model)
+        if directVendor != "Unknown" {
+            return directVendor
+        }
+        let hostVendor = detectVendorFromAPIURL(viewModel.config.normalizedBaseURL)
+        return hostVendor == "Unknown" ? "未知厂商" : hostVendor
     }
 
     private var headerTrailingControls: some View {
@@ -507,7 +541,7 @@ struct ChatScreen: View {
                 }
             }
             .onChange(of: viewModel.streamScrollTrigger) { _, _ in
-                if isPinnedToBottom {
+                if isPinnedToBottom && !shouldUseCodeViewportTailFollow {
                     issueTranscriptCommand(.scrollToBottom(animated: false))
                 }
             }
@@ -538,19 +572,30 @@ struct ChatScreen: View {
             ForEach(frozenRenderedMessages, id: \.id) { message in
                 let isLatestAssistant = message.id == latestFrozenAssistantMessageID
                 let displayMessage = makeDisplaySafeMessage(message)
-                MessageBubbleView(
-                    message: displayMessage,
-                    sourceMessage: message,
-                    codeThemeMode: viewModel.config.codeThemeMode,
-                    apiKey: viewModel.config.apiKey,
-                    apiBaseURL: viewModel.config.normalizedBaseURL,
-                    showsAssistantActionBar: message.role == .assistant && !message.isStreaming,
-                    onRegenerate: (isLatestAssistant
-                        && (viewModel.config.endpointMode == .chatCompletions || viewModel.config.endpointMode == .responses)
-                        && !viewModel.isPrivateMode) ? {
-                        Task { await viewModel.regenerateLastAssistantReply() }
-                    } : nil
-                )
+                let isDeleting = pendingMessageDeletionIDs.contains(message.id)
+                let canDelete = message.role == .assistant && !message.isStreaming
+
+                DissolvingMessageRow(
+                    isDeleting: isDeleting,
+                    seed: message.id.dissolveSeed
+                ) {
+                    MessageBubbleView(
+                        message: displayMessage,
+                        sourceMessage: message,
+                        codeThemeMode: viewModel.config.codeThemeMode,
+                        apiKey: viewModel.config.apiKey,
+                        apiBaseURL: viewModel.config.normalizedBaseURL,
+                        showsAssistantActionBar: message.role == .assistant && !message.isStreaming && !isDeleting,
+                        onRegenerate: (isLatestAssistant
+                            && (viewModel.config.endpointMode == .chatCompletions || viewModel.config.endpointMode == .responses)
+                            && !viewModel.isPrivateMode) ? {
+                            Task { await viewModel.regenerateLastAssistantReply() }
+                        } : nil,
+                        onDelete: canDelete ? {
+                            scheduleAssistantMessageDeletion(message)
+                        } : nil
+                    )
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -948,7 +993,7 @@ struct ChatScreen: View {
     private var starterPromptStrip: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("推荐")
+                Text("编程推荐")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -966,8 +1011,7 @@ struct ChatScreen: View {
                 HStack(spacing: 10) {
                     ForEach(Array(activeStarterPrompts.enumerated()), id: \.offset) { _, prompt in
                         Button {
-                            viewModel.draftMessage = "\(prompt.title)\n\(prompt.subtitle)"
-                            isComposerFocused = true
+                            sendStarterPrompt(prompt)
                         } label: {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(prompt.title)
@@ -1228,6 +1272,15 @@ struct ChatScreen: View {
         }
     }
 
+    private var shouldUseCodeViewportTailFollow: Bool {
+        guard let active = activeStreamingRenderedMessage else { return false }
+        let normalized = active.content.lowercased()
+        if normalized.contains("```") || normalized.contains("[[file:") {
+            return true
+        }
+        return false
+    }
+
     private var activeStreamingLeadContent: AnyView? {
         guard let leadUser = activeStreamingLeadUserMessage else { return nil }
         return AnyView(
@@ -1267,7 +1320,11 @@ struct ChatScreen: View {
             .map { "\($0.imageAttachments.count)-\($0.videoAttachments.count)-\($0.fileAttachments.count)" }
             .joined(separator: ",")
         let windowFlag = isRenderingWindowed ? "1" : "0"
-        return "\(windowFlag)|\(ids)|\(lengths)|\(attachments)"
+        let deletingIDs = pendingMessageDeletionIDs
+            .map(\.uuidString)
+            .sorted()
+            .joined(separator: ",")
+        return "\(windowFlag)|\(ids)|\(lengths)|\(attachments)|\(deletingIDs)"
     }
 
     private var renderWindowNotice: some View {
@@ -1515,6 +1572,52 @@ struct ChatScreen: View {
             return "Tencent"
         }
         return "Unknown"
+    }
+
+    private func scheduleAssistantMessageDeletion(_ message: ChatMessage) {
+        guard message.role == .assistant, !message.isStreaming else { return }
+        guard !pendingMessageDeletionIDs.contains(message.id) else { return }
+
+        let messageID = message.id
+        pendingMessageDeletionTasks[messageID]?.cancel()
+        pendingMessageDeletionIDs.insert(messageID)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+
+        pendingMessageDeletionTasks[messageID] = Task { [messageID] in
+            do {
+                try await Task.sleep(nanoseconds: 380_000_000)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+
+            await MainActor.run {
+                pendingMessageDeletionTasks[messageID] = nil
+                viewModel.deleteMessage(id: messageID)
+                pendingMessageDeletionIDs.remove(messageID)
+            }
+        }
+    }
+
+    private func sendStarterPrompt(_ prompt: (title: String, subtitle: String)) {
+        guard !viewModel.isSending else { return }
+
+        let title = prompt.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let subtitle = prompt.subtitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let composed = subtitle.isEmpty ? title : "\(title)\n\(subtitle)"
+        guard !composed.isEmpty else { return }
+
+        isComposerFocused = false
+        viewModel.draftMessage = composed
+        Task { await viewModel.sendCurrentMessage() }
+    }
+
+    private func cancelPendingMessageDeletionTasks() {
+        for task in pendingMessageDeletionTasks.values {
+            task.cancel()
+        }
+        pendingMessageDeletionTasks.removeAll()
+        pendingMessageDeletionIDs.removeAll()
     }
 
     private func refreshStarterPromptsIfNeeded() {
@@ -2149,6 +2252,8 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             scrollView.keyboardDismissMode = .interactive
             scrollView.contentInsetAdjustmentBehavior = .never
             scrollView.scrollsToTop = true
+            scrollView.delaysContentTouches = false
+            scrollView.canCancelContentTouches = true
             scrollView.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(scrollView)
 
@@ -2411,6 +2516,126 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
                 -scrollView.contentInset.top,
                 scrollView.contentSize.height - scrollView.bounds.height + scrollView.contentInset.bottom
             )
+        }
+    }
+}
+
+private struct DissolvingMessageRow<Content: View>: View {
+    let isDeleting: Bool
+    let seed: UInt64
+    let content: Content
+    @State private var progress: CGFloat = 0
+
+    init(
+        isDeleting: Bool,
+        seed: UInt64,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.isDeleting = isDeleting
+        self.seed = seed
+        self.content = content()
+    }
+
+    var body: some View {
+        ZStack {
+            content
+                .opacity(1 - Double(progress))
+                .scaleEffect(1 - progress * 0.02, anchor: .center)
+                .blur(radius: progress * 2.8)
+
+            if progress > 0.001 {
+                MessageDissolveParticles(progress: progress, seed: seed)
+                    .transition(.opacity)
+            }
+        }
+        .allowsHitTesting(true)
+        .onAppear {
+            if isDeleting {
+                triggerDissolve()
+            }
+        }
+        .onChange(of: isDeleting) { _, newValue in
+            if newValue {
+                triggerDissolve()
+            } else {
+                progress = 0
+            }
+        }
+    }
+
+    private func triggerDissolve() {
+        progress = 0
+        withAnimation(.easeOut(duration: 0.34)) {
+            progress = 1
+        }
+    }
+}
+
+private struct MessageDissolveParticles: View {
+    let progress: CGFloat
+    let seed: UInt64
+
+    var body: some View {
+        GeometryReader { proxy in
+            Canvas { context, size in
+                let particleCount = 48
+                let clampedProgress = min(max(progress, 0), 1)
+
+                for index in 0..<particleCount {
+                    let baseXUnit = seededUnit(index * 7 + 1)
+                    let baseYUnit = seededUnit(index * 7 + 2)
+                    let driftXUnit = seededUnit(index * 7 + 3) - 0.5
+                    let driftYUnit = seededUnit(index * 7 + 4)
+                    let radiusUnit = seededUnit(index * 7 + 5)
+                    let alphaUnit = seededUnit(index * 7 + 6)
+
+                    let baseX = baseXUnit * size.width
+                    let baseY = baseYUnit * size.height
+                    let driftX = driftXUnit * size.width * 0.28 * clampedProgress
+                    let driftY = (0.05 + driftYUnit * 0.24) * size.height * clampedProgress
+                    let centerX = baseX + driftX
+                    let centerY = baseY - driftY
+
+                    let radius = (1.0 + radiusUnit * 2.4) * max(0.25, 1 - clampedProgress * 0.52)
+                    let opacity = Double(max(0, 1 - clampedProgress * 1.25))
+                        * Double(0.36 + alphaUnit * 0.64)
+                    guard opacity > 0.01 else { continue }
+
+                    let particleRect = CGRect(
+                        x: centerX - radius,
+                        y: centerY - radius,
+                        width: radius * 2,
+                        height: radius * 2
+                    )
+                    context.fill(
+                        Path(ellipseIn: particleRect),
+                        with: .color(Color.primary.opacity(opacity))
+                    )
+                }
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func seededUnit(_ index: Int) -> CGFloat {
+        var value = seed &+ UInt64(index) &* 0x9E3779B97F4A7C15
+        value ^= value >> 33
+        value &*= 0xFF51AFD7ED558CCD
+        value ^= value >> 33
+        value &*= 0xC4CEB9FE1A85EC53
+        value ^= value >> 33
+        let bucket = value & 0xFFFF
+        return CGFloat(bucket) / 65535
+    }
+}
+
+private extension UUID {
+    var dissolveSeed: UInt64 {
+        withUnsafeBytes(of: uuid) { rawBuffer in
+            rawBuffer.reduce(UInt64(1469598103934665603)) { partial, byte in
+                (partial ^ UInt64(byte)) &* 1099511628211
+            }
         }
     }
 }

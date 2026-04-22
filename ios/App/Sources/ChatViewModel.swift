@@ -23,8 +23,8 @@ final class ChatViewModel: ObservableObject {
     }
 
     private final class ActiveStreamState {
-        private static let maxCharactersPerCommit = 24
-        private static let minimumCommitInterval: TimeInterval = 0.02
+        private static let maxCharactersPerCommit = 64
+        private static let minimumCommitInterval: TimeInterval = 0.055
 
         let messageID: UUID
         let target: StreamTargetContext
@@ -124,7 +124,7 @@ final class ChatViewModel: ObservableObject {
 
     private let service: ChatService
     private var autoSaveEnabled = false
-    private let streamScrollThrottleInterval: TimeInterval = 0.045
+    private let streamScrollThrottleInterval: TimeInterval = 0.10
     private var lastStreamScrollSignal: Date = .distantPast
     private var inflightSendTask: Task<ChatReply, Error>?
     private var inflightTargetContext: StreamTargetContext?
@@ -531,6 +531,30 @@ final class ChatViewModel: ObservableObject {
         persistSessions()
     }
 
+    func deleteMessage(id: UUID) {
+        if isPrivateMode {
+            let beforeCount = privateMessages.count
+            privateMessages.removeAll { $0.id == id }
+            guard privateMessages.count != beforeCount else { return }
+            messages = privateMessages
+            statusMessage = "已删除 1 条回复"
+            appendLog("私密聊天：已删除 1 条回复。")
+            return
+        }
+
+        guard let index = currentSessionIndex else { return }
+        let beforeCount = sessions[index].messages.count
+        sessions[index].messages.removeAll { $0.id == id }
+        guard sessions[index].messages.count != beforeCount else { return }
+
+        sessions[index].updatedAt = Date()
+        sessions[index].title = buildSessionTitle(from: sessions[index])
+        messages = sessions[index].messages
+        persistSessions()
+        statusMessage = "已删除 1 条回复"
+        appendLog("聊天：已删除 1 条回复。")
+    }
+
     func loadDemoContent() {
         if config.apiURL.isEmpty {
             config.apiURL = ChatConfig.default.apiURL
@@ -777,8 +801,8 @@ final class ChatViewModel: ObservableObject {
         let buffer = StreamBuffer(maxBufferedCharacters: 120_000)
         let state = ActiveStreamState(messageID: messageID, target: target, buffer: buffer)
         let isLowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
-        let refreshInterval: TimeInterval = isLowPowerMode ? 0.05 : 0.016
-        let maxCharactersPerFrame = isLowPowerMode ? 10 : 12
+        let refreshInterval: TimeInterval = isLowPowerMode ? 0.075 : 0.028
+        let maxCharactersPerFrame = isLowPowerMode ? 20 : 28
         let maxCharactersFetchedPerTick = isLowPowerMode ? 900 : 1_200
 
         let renderer = StreamRenderer(

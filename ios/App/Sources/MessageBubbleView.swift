@@ -12,6 +12,7 @@ struct MessageBubbleView: View {
     let apiBaseURL: String
     let showsAssistantActionBar: Bool
     let onRegenerate: (() -> Void)?
+    let onDelete: (() -> Void)?
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject private var speechPlayback = SpeechPlaybackService.shared
     @State private var saveFeedback: String?
@@ -49,7 +50,8 @@ struct MessageBubbleView: View {
         apiKey: String,
         apiBaseURL: String,
         showsAssistantActionBar: Bool,
-        onRegenerate: (() -> Void)?
+        onRegenerate: (() -> Void)?,
+        onDelete: (() -> Void)? = nil
     ) {
         self.message = message
         self.sourceMessage = sourceMessage
@@ -58,6 +60,7 @@ struct MessageBubbleView: View {
         self.apiBaseURL = apiBaseURL
         self.showsAssistantActionBar = showsAssistantActionBar
         self.onRegenerate = onRegenerate
+        self.onDelete = onDelete
     }
 
     private var actionMessage: ChatMessage {
@@ -217,6 +220,17 @@ struct MessageBubbleView: View {
                 }
             }
 
+            if let onDelete {
+                iconActionButton(
+                    systemName: "trash",
+                    foregroundColor: .secondary,
+                    accessibilityLabel: "删除这条回复"
+                ) {
+                    onDelete()
+                    feedback(.light, "删除中…")
+                }
+            }
+
             if canGenerateFrontendProject {
                 Menu {
                     Button("生成到新项目", systemImage: "folder.badge.plus") {
@@ -260,6 +274,15 @@ struct MessageBubbleView: View {
                     Button("重试", systemImage: "arrow.clockwise") {
                         onRegenerate()
                         feedback(.light, "正在重试…")
+                    }
+                }
+                if let onDelete {
+                    Divider()
+                    Button(role: .destructive) {
+                        onDelete()
+                        feedback(.light, "删除中…")
+                    } label: {
+                        Label("删除这条回复", systemImage: "trash")
                     }
                 }
                 if canGenerateFrontendProject {
@@ -818,9 +841,19 @@ struct MessageBubbleView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
         case .code(let language, let content):
-            codeBlock(title: (language ?? "code").uppercased(), content: content, language: language)
+            codeBlock(
+                title: (language ?? "code").uppercased(),
+                content: content,
+                language: language,
+                followsTailDuringStreaming: false
+            )
         case .file(let name, let language, let content):
-            fileSegmentView(name: name, language: language, content: content)
+            fileSegmentView(
+                name: name,
+                language: language,
+                content: content,
+                followsTailDuringStreaming: false
+            )
         case .table(let headers, let rows):
             markdownTableCard(headers: headers, rows: rows)
         case .image(let attachment):
@@ -838,9 +871,19 @@ struct MessageBubbleView: View {
         case .text(let text):
             selectableTextContent(text, streamingTextAnimated: streamingTextAnimated)
         case .code(let language, let content):
-            codeBlock(title: (language ?? "code").uppercased(), content: content, language: language)
+            codeBlock(
+                title: (language ?? "code").uppercased(),
+                content: content,
+                language: language,
+                followsTailDuringStreaming: streamingTextAnimated
+            )
         case .file(let name, let language, let content):
-            fileSegmentView(name: name, language: language, content: content)
+            fileSegmentView(
+                name: name,
+                language: language,
+                content: content,
+                followsTailDuringStreaming: streamingTextAnimated
+            )
         case .table(let headers, let rows):
             markdownTableCard(headers: headers, rows: rows)
         case .image(let attachment):
@@ -859,7 +902,12 @@ struct MessageBubbleView: View {
     }
 
     @ViewBuilder
-    private func fileSegmentView(name: String, language: String?, content: String) -> some View {
+    private func fileSegmentView(
+        name: String,
+        language: String?,
+        content: String,
+        followsTailDuringStreaming: Bool
+    ) -> some View {
         let spreadsheetSheets = ExcelGenerationService.extractSheets(
             fromRawText: content,
             preferredName: (name as NSString).deletingPathExtension
@@ -868,7 +916,12 @@ struct MessageBubbleView: View {
         if isSpreadsheetPreviewFile(name: name), let firstSheet = spreadsheetSheets.first {
             spreadsheetPreviewCard(fileName: name, sheet: firstSheet)
         } else {
-            codeBlock(title: "FILE · \(name)", content: content, language: language)
+            codeBlock(
+                title: "FILE · \(name)",
+                content: content,
+                language: language,
+                followsTailDuringStreaming: followsTailDuringStreaming
+            )
         }
     }
 
@@ -994,12 +1047,22 @@ struct MessageBubbleView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func codeBlock(title: String, content: String, language: String? = nil) -> some View {
+    private func codeBlock(
+        title: String,
+        content: String,
+        language: String? = nil,
+        followsTailDuringStreaming: Bool = false
+    ) -> some View {
         let actionContent = resolvedCodeActionContent(
             title: title,
             language: language,
             displayContent: content
         )
+        let shouldAutoFollowTail = followsTailDuringStreaming && message.isStreaming
+        let disableSyntaxHighlighting = followsTailDuringStreaming && message.isStreaming
+        let codeViewportHeight: CGFloat = 286
+        let codeViewportInnerMaxHeight = codeViewportHeight - 20
+        let shouldShowScrollHint = estimatedCodeLineCount(content) >= 14 || content.count >= 520
         let copyToken = "\(title)|\(language ?? "")|\(actionContent)"
         let isCopied = copiedCodeToken == copyToken
         let isRunning = runningCodeToken == copyToken
@@ -1056,16 +1119,50 @@ struct MessageBubbleView: View {
                 .animation(.easeInOut(duration: 0.16), value: isCopied)
             }
 
-            SelectableCodeTextView(
-                text: content,
-                textColor: UIColor.label,
-                font: .monospacedSystemFont(ofSize: 15.5, weight: .medium),
-                lineSpacing: 3.5,
-                language: language,
-                codeThemeMode: codeThemeMode,
-                isDarkMode: colorScheme == .dark
+            ZStack(alignment: .bottomTrailing) {
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(colorScheme == .dark ? Color.black.opacity(0.18) : Color.black.opacity(0.03))
+
+                SelectableCodeTextView(
+                    text: content,
+                    textColor: UIColor.label,
+                    font: .monospacedSystemFont(ofSize: 15.5, weight: .medium),
+                    lineSpacing: 3.5,
+                    language: language,
+                    codeThemeMode: codeThemeMode,
+                    isDarkMode: colorScheme == .dark,
+                    isScrollEnabled: true,
+                    maximumHeight: codeViewportInnerMaxHeight,
+                    autoFollowTail: shouldAutoFollowTail,
+                    disableSyntaxHighlighting: disableSyntaxHighlighting
+                )
+                .frame(maxWidth: .infinity, maxHeight: codeViewportInnerMaxHeight, alignment: .topLeading)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 10)
+
+                if shouldShowScrollHint {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.up.and.down")
+                            .font(.system(size: 9, weight: .semibold))
+                        Text("上下拖动")
+                            .font(.system(size: 10, weight: .semibold))
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(Color(.secondarySystemBackground).opacity(colorScheme == .dark ? 0.72 : 0.9))
+                    )
+                    .padding(.trailing, 8)
+                    .padding(.bottom, 8)
+                }
+            }
+            .overlay(
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .stroke(Color.black.opacity(colorScheme == .dark ? 0.24 : 0.10), lineWidth: 0.8)
             )
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, maxHeight: codeViewportHeight, alignment: .topLeading)
 
             if isRunning {
                 HStack(spacing: 8) {
@@ -1133,6 +1230,17 @@ struct MessageBubbleView: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(codeCardBorderColor, lineWidth: 1)
         )
+    }
+
+    private func estimatedCodeLineCount(_ text: String) -> Int {
+        if text.isEmpty {
+            return 0
+        }
+        return text.reduce(into: 1) { count, character in
+            if character == "\n" {
+                count += 1
+            }
+        }
     }
 
     private func supportsPythonRun(language: String?, title: String) -> Bool {
