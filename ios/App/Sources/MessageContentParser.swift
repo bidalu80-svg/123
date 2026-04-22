@@ -24,8 +24,12 @@ enum MessageContentParser {
     private static let markdownImagePattern = #"!\[[^\]]*\]\(([^)]+)\)"#
     private static let bareURLPattern = #"(?<!\]\()https?://[^\s\"<>)\]]+"#
     private static let dataImagePattern = #"data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+"#
-    private static let streamingParseDebounce: TimeInterval = 0.04
+    private static let streamingParseDebounce: TimeInterval = 0.06
+    private static let longStreamingParseDebounce: TimeInterval = 0.12
+    private static let longStreamingContentThreshold = 16_000
     private static let maxCacheEntries = 360
+    private static let maxStreamingSnapshots = 32
+    private static let streamingSnapshotTTL: TimeInterval = 18
     private static var parseCache: [String: [MessageSegment]] = [:]
     private static var parseCacheOrder: [String] = []
     private static var streamingSnapshots: [UUID: StreamingParseSnapshot] = [:]
@@ -48,9 +52,19 @@ enum MessageContentParser {
     }
 
     static func parse(_ message: ChatMessage) -> [MessageSegment] {
+        let now = Date()
+        pruneStreamingSnapshots(now: now)
+
+        let effectiveStreamingDebounce: TimeInterval = {
+            guard message.isStreaming else { return streamingParseDebounce }
+            return message.content.count >= longStreamingContentThreshold
+                ? longStreamingParseDebounce
+                : streamingParseDebounce
+        }()
+
         if message.isStreaming,
            let snapshot = streamingSnapshots[message.id],
-           Date().timeIntervalSince(snapshot.parsedAt) < streamingParseDebounce,
+           now.timeIntervalSince(snapshot.parsedAt) < effectiveStreamingDebounce,
            message.content.count >= snapshot.contentLength,
            message.imageAttachments.count == snapshot.imageCount,
            message.videoAttachments.count == snapshot.videoCount,
@@ -58,18 +72,8 @@ enum MessageContentParser {
             return snapshot.segments
         }
 
-        let signature = cacheSignature(for: message)
-        if let cached = parseCache[signature] {
-            if message.isStreaming {
-                streamingSnapshots[message.id] = StreamingParseSnapshot(
-                    parsedAt: Date(),
-                    contentLength: message.content.count,
-                    imageCount: message.imageAttachments.count,
-                    videoCount: message.videoAttachments.count,
-                    fileCount: message.fileAttachments.count,
-                    segments: cached
-                )
-            }
+        let signature: String? = message.isStreaming ? nil : cacheSignature(for: message)
+        if let signature, let cached = parseCache[signature] {
             return cached
         }
 
@@ -94,17 +98,19 @@ enum MessageContentParser {
             role: message.role,
             isStreaming: message.isStreaming
         )
-        storeParseCache(segments: sectioned, signature: signature)
 
         if message.isStreaming {
             streamingSnapshots[message.id] = StreamingParseSnapshot(
-                parsedAt: Date(),
+                parsedAt: now,
                 contentLength: message.content.count,
                 imageCount: message.imageAttachments.count,
                 videoCount: message.videoAttachments.count,
                 fileCount: message.fileAttachments.count,
                 segments: sectioned
             )
+        } else if let signature {
+            storeParseCache(segments: sectioned, signature: signature)
+            streamingSnapshots.removeValue(forKey: message.id)
         } else {
             streamingSnapshots.removeValue(forKey: message.id)
         }
@@ -912,18 +918,28 @@ enum MessageContentParser {
             let oldest = parseCacheOrder.removeFirst()
             parseCache.removeValue(forKey: oldest)
         }
+    }
 
-        if !streamingSnapshots.isEmpty && streamingSnapshots.count > 80 {
-            let sortedKeys = streamingSnapshots.keys.sorted { lhs, rhs in
-                let left = streamingSnapshots[lhs]?.parsedAt ?? .distantPast
-                let right = streamingSnapshots[rhs]?.parsedAt ?? .distantPast
-                return left < right
-            }
-            let removeCount = max(0, streamingSnapshots.count - 80)
-            if removeCount > 0 {
-                for key in sortedKeys.prefix(removeCount) {
-                    streamingSnapshots.removeValue(forKey: key)
-                }
+    private static func pruneStreamingSnapshots(now: Date) {
+        guard !streamingSnapshots.isEmpty else { return }
+
+        streamingSnapshots = streamingSnapshots.filter { _, snapshot in
+            now.timeIntervalSince(snapshot.parsedAt) <= streamingSnapshotTTL
+        }
+
+        if streamingSnapshots.count <= maxStreamingSnapshots {
+            return
+        }
+
+        let sortedKeys = streamingSnapshots.keys.sorted { lhs, rhs in
+            let left = streamingSnapshots[lhs]?.parsedAt ?? .distantPast
+            let right = streamingSnapshots[rhs]?.parsedAt ?? .distantPast
+            return left < right
+        }
+        let removeCount = max(0, streamingSnapshots.count - maxStreamingSnapshots)
+        if removeCount > 0 {
+            for key in sortedKeys.prefix(removeCount) {
+                streamingSnapshots.removeValue(forKey: key)
             }
         }
     }

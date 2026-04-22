@@ -2025,7 +2025,8 @@ struct MessageBubbleView: View {
         displayContent: String
     ) -> String {
         let cleanedDisplay = removingPreviewTruncationMarkers(from: displayContent)
-        guard sourceMessage != nil else { return cleanedDisplay }
+        let shouldRecoverFromSource = hasPreviewTruncationMarker(in: displayContent)
+        guard shouldRecoverFromSource, sourceMessage != nil else { return cleanedDisplay }
 
         if let fileName = fileName(fromCodeTitle: title) {
             if let attachment = actionMessage.fileAttachments.first(where: {
@@ -2050,23 +2051,19 @@ struct MessageBubbleView: View {
             }
         }
 
-        let prefix = String(cleanedDisplay.prefix(120))
+        let prefix = String(cleanedDisplay.prefix(180))
         for segment in actionMessageStructuredSegments() {
             switch segment {
-            case .code(let candidateLanguage, let candidateContent):
+            case .code(_, let candidateContent):
                 if matchesActionCodeCandidate(
-                    language: language,
                     expectedPrefix: prefix,
-                    candidateLanguage: candidateLanguage,
                     candidateContent: candidateContent
                 ) {
                     return removingPreviewTruncationMarkers(from: candidateContent)
                 }
-            case .file(_, let candidateLanguage, let candidateContent):
+            case .file(_, _, let candidateContent):
                 if matchesActionCodeCandidate(
-                    language: language,
                     expectedPrefix: prefix,
-                    candidateLanguage: candidateLanguage,
                     candidateContent: candidateContent
                 ) {
                     return removingPreviewTruncationMarkers(from: candidateContent)
@@ -2084,21 +2081,13 @@ struct MessageBubbleView: View {
     }
 
     private func matchesActionCodeCandidate(
-        language: String?,
         expectedPrefix: String,
-        candidateLanguage: String?,
         candidateContent: String
     ) -> Bool {
         let normalizedCandidate = removingPreviewTruncationMarkers(from: candidateContent)
         guard !normalizedCandidate.isEmpty else { return false }
-
-        if !expectedPrefix.isEmpty && normalizedCandidate.hasPrefix(expectedPrefix) {
-            return true
-        }
-
-        let normalizedLanguage = (language ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let normalizedCandidateLanguage = (candidateLanguage ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return !normalizedLanguage.isEmpty && normalizedLanguage == normalizedCandidateLanguage
+        guard !expectedPrefix.isEmpty else { return false }
+        return normalizedCandidate.hasPrefix(expectedPrefix)
     }
 
     private func fileName(fromCodeTitle title: String) -> String? {
@@ -2113,6 +2102,11 @@ struct MessageBubbleView: View {
             .replacingOccurrences(of: "\n\n[附件预览过长，已截断显示。]", with: "")
             .replacingOccurrences(of: "\n\n[该消息过长，已在聊天页截断显示。]", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func hasPreviewTruncationMarker(in text: String) -> Bool {
+        text.contains("[附件预览过长，已截断显示。]")
+            || text.contains("[该消息过长，已在聊天页截断显示。]")
     }
 
     private func supportsHTMLPreview(language: String?, title: String, content: String) -> Bool {

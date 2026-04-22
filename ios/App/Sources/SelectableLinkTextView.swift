@@ -26,6 +26,7 @@ struct SelectableLinkTextView: UIViewRepresentable {
         view.textContainerInset = .zero
         view.textContainer.lineFragmentPadding = 0
         view.textContainer.widthTracksTextView = true
+        view.layoutManager.allowsNonContiguousLayout = true
         view.adjustsFontForContentSizeCategory = true
         view.setContentCompressionResistancePriority(.required, for: .vertical)
         view.setContentHuggingPriority(.required, for: .vertical)
@@ -311,10 +312,12 @@ struct SelectableLinkTextView: UIViewRepresentable {
             let chunk = consumeStreamingPrefix(maxCharacters: step)
             guard !chunk.isEmpty else { return }
 
-            let appended = NSMutableAttributedString(string: chunk, attributes: streamAttributes)
-            textView.textStorage.beginEditing()
-            textView.textStorage.append(appended)
-            textView.textStorage.endEditing()
+            autoreleasepool {
+                let appended = NSMutableAttributedString(string: chunk, attributes: streamAttributes)
+                textView.textStorage.beginEditing()
+                textView.textStorage.append(appended)
+                textView.textStorage.endEditing()
+            }
         }
 
         private func consumeStreamingPrefix(maxCharacters: Int) -> String {
