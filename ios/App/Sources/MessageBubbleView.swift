@@ -521,12 +521,9 @@ struct MessageBubbleView: View {
             } else if message.isVideoGenerationPlaceholder && message.videoAttachments.isEmpty {
                 videoGenerationProgressContainer(streamingTextAnimated: true)
             } else {
-                let segments: [MessageSegment]
-                if shouldRenderStreamingTextDirectly(displayText) {
-                    segments = displayText.isEmpty ? [] : [.text(displayText)]
-                } else {
-                    segments = parsedStreamingSegments(for: displayText)
-                }
+                let segments = shouldRenderStreamingTextDirectly(displayText)
+                    ? (displayText.isEmpty ? [] : [.text(displayText)])
+                    : parsedStreamingSegments(for: displayText)
 
                 if segments.isEmpty {
                     if !message.imageAttachments.isEmpty || !message.videoAttachments.isEmpty {
