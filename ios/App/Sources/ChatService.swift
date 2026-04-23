@@ -47,6 +47,7 @@ struct ChatRequestBuilder {
     11) 输出时尽量给出简短步骤日志（每行一个动作，如“写入 src/main.cpp”“构建并运行测试”），方便前端渲染进度胶囊。
     12) 终端命令请放在 `bash` 或 `powershell` 代码块中，避免散落在正文里。
     13) 除非用户明确要求解释，尽量以“简短说明 + 完整文件输出”为主。
+    14) 不要说“先检查 AGENTS.md / 先扫仓库 / 调用工具后再做”；直接输出可落盘文件内容与命令。
     """
     private static let strictCodeOnlySystemPrompt = """
     当用户明确提出“只输出代码、不输出解释、保持逻辑不变、自动修复格式”时，必须严格执行：
@@ -136,7 +137,11 @@ struct ChatRequestBuilder {
             ])
         }
 
-        if shouldInjectFrontendAutoBuildPrompt(enabled: frontendAutoBuildEnabled, message: message) {
+        if shouldInjectFrontendAutoBuildPrompt(
+            enabled: frontendAutoBuildEnabled,
+            message: message,
+            history: history
+        ) {
             prefix.append([
                 "role": "system",
                 "content": frontendAutoBuildSystemPrompt
@@ -151,6 +156,9 @@ struct ChatRequestBuilder {
         }
 
         for skill in enabledBuiltinSkills(from: enabledBuiltinSkillIDs) {
+            guard shouldInjectBuiltinSkillPrompt(skill: skill, userMessage: message) else {
+                continue
+            }
             let content = resolvedSkillPrompt(
                 for: skill,
                 customBuiltinSkillPrompts: customBuiltinSkillPrompts
@@ -170,6 +178,27 @@ struct ChatRequestBuilder {
         return BuiltinAISkill.allCases.filter { enabled.contains($0.rawValue) }
     }
 
+    private static func shouldInjectBuiltinSkillPrompt(
+        skill: BuiltinAISkill,
+        userMessage: ChatMessage
+    ) -> Bool {
+        guard userMessage.role == .user else { return false }
+
+        let text = userMessage.copyableText
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .lowercased()
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+
+        switch skill {
+        case .skillCreator:
+            let markers = [
+                "skill", "skill.md", "skills/",
+                "技能", "技能创建", "技能模板", "创建 skill", "更新 skill"
+            ]
+            return markers.contains(where: { text.contains($0) })
+        }
+    }
+
     private static func resolvedSkillPrompt(
         for skill: BuiltinAISkill,
         customBuiltinSkillPrompts: [String: String]
@@ -183,7 +212,8 @@ struct ChatRequestBuilder {
 
     private static func shouldInjectFrontendAutoBuildPrompt(
         enabled: Bool,
-        message: ChatMessage
+        message: ChatMessage,
+        history: [ChatMessage]
     ) -> Bool {
         guard enabled else { return false }
         guard message.role == .user else { return false }
@@ -264,6 +294,55 @@ struct ChatRequestBuilder {
             return true
         }
 
+        if recentConversationContainsProjectContext(history: history),
+           looksLikeProjectFollowupEdit(raw) {
+            return true
+        }
+
+        return false
+    }
+
+    private static func recentConversationContainsProjectContext(history: [ChatMessage]) -> Bool {
+        guard !history.isEmpty else { return false }
+        var inspected = 0
+        for message in history.reversed() {
+            guard message.role == .assistant else { continue }
+            inspected += 1
+            if FrontendProjectBuilder.canGenerateProject(from: message) {
+                return true
+            }
+            if inspected >= 6 {
+                break
+            }
+        }
+        return false
+    }
+
+    private static func looksLikeProjectFollowupEdit(_ raw: String) -> Bool {
+        let followupMarkers = [
+            "继续改", "继续修改", "继续完善", "继续优化", "继续修复",
+            "再改", "再修", "再优化", "再调整", "改一下", "修一下",
+            "优化一下", "调整一下", "完善一下", "重构一下", "补一下",
+            "把这个", "这个排版", "这个样式", "这个报错", "这个问题",
+            "continue", "modify", "update", "refine", "improve", "fix",
+            "polish", "adjust", "tweak", "iterate", "revise"
+        ]
+        if followupMarkers.contains(where: { raw.contains($0) }) {
+            return true
+        }
+
+        if raw.range(
+            of: #"(继续|再|然后|接着|顺便|把).{0,12}(改|修改|修复|优化|完善|调整|重构|补充|增加|删除)"#,
+            options: .regularExpression
+        ) != nil {
+            return true
+        }
+        if raw.range(
+            of: #"(fix|update|modify|improve|refactor|adjust|tweak).{0,20}(project|code|layout|style|ui|bug|error|file)"#,
+            options: .regularExpression
+        ) != nil {
+            return true
+        }
         return false
     }
 

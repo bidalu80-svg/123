@@ -172,16 +172,33 @@ final class RemoteShellExecutionService {
                 in: object
             )
             if !message.isEmpty {
-                return message
+                return clipErrorMessage(message)
             }
         }
 
         if let text = String(data: data, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
            !text.isEmpty {
-            return text
+            if looksLikeHTMLResponse(text) {
+                return "接口返回了 HTML 页面（常见于 404 Not Found）。请检查“终端执行接口”是否指向可用的 shell 路由（例如 /v1/shell/execute）。"
+            }
+            return clipErrorMessage(text)
         }
         return ""
+    }
+
+    private func looksLikeHTMLResponse(_ text: String) -> Bool {
+        let lowered = text.lowercased()
+        return lowered.contains("<!doctype html")
+            || lowered.contains("<html")
+            || lowered.contains("<head")
+            || lowered.contains("<body")
+    }
+
+    private func clipErrorMessage(_ text: String, limit: Int = 360) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > limit else { return trimmed }
+        return String(trimmed.prefix(limit)) + "…"
     }
 
     private func firstString(keys: [String], in object: [String: Any]) -> String {

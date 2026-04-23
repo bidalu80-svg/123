@@ -126,6 +126,9 @@ struct ChatScreen: View {
     @State private var frontendOverlayMessageID: UUID?
     @State private var frontendOverlayManualSelectionUntil: Date = .distantPast
     @State private var activeFrontendCodeViewer: CodeViewerPayload?
+    @State private var autoBuildRequestID: Int = 0
+    @State private var autoBuildRunningMessageID: UUID?
+    @State private var latestProjectHasPreviewEntry = false
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -175,6 +178,7 @@ struct ChatScreen: View {
             refreshStarterPromptsIfNeeded()
             ensureRecentPhotoAssets()
             seedAutoFrontendBuildCursor()
+            refreshLatestProjectPreviewEntryFlag()
             if !hasCompletedInitialConfig {
                 showInitialConfigSheet = true
             }
@@ -205,6 +209,8 @@ struct ChatScreen: View {
         }
         .onChange(of: viewModel.currentSessionID) { _, _ in
             pendingOutgoingEcho = nil
+            invalidatePendingAutoProjectBuild()
+            latestProjectHasPreviewEntry = false
             frontendOverlayMessageID = nil
             frontendOverlayFileIndex = 0
             frontendOverlayManualSelectionUntil = .distantPast
@@ -212,10 +218,13 @@ struct ChatScreen: View {
             Self.frontendOverlayCodeEntriesCacheOrder.removeAll()
             DispatchQueue.main.async {
                 seedAutoFrontendBuildCursor()
+                refreshLatestProjectPreviewEntryFlag()
             }
         }
         .onChange(of: viewModel.isPrivateMode) { _, _ in
             pendingOutgoingEcho = nil
+            invalidatePendingAutoProjectBuild()
+            latestProjectHasPreviewEntry = false
             frontendOverlayMessageID = nil
             frontendOverlayFileIndex = 0
             frontendOverlayManualSelectionUntil = .distantPast
@@ -223,6 +232,7 @@ struct ChatScreen: View {
             Self.frontendOverlayCodeEntriesCacheOrder.removeAll()
             DispatchQueue.main.async {
                 seedAutoFrontendBuildCursor()
+                refreshLatestProjectPreviewEntryFlag()
             }
         }
         .onPreferenceChange(ComposerHeightPreferenceKey.self) { newValue in
@@ -270,6 +280,7 @@ struct ChatScreen: View {
             applySpeechTranscript(newValue)
         }
         .onDisappear {
+            invalidatePendingAutoProjectBuild()
             speechToText.stopRecording()
             cancelPendingMessageDeletionTasks()
             tokenUsageHideTask?.cancel()
@@ -1071,6 +1082,7 @@ struct ChatScreen: View {
     ) {
         guard shouldAutoBuildFrontendFromAssistantReply else {
             autoBuildInFlightAssistantIDs.removeAll()
+            invalidatePendingAutoProjectBuild()
             return
         }
         guard let latestAssistant = newMessages.last(where: { $0.role == .assistant }) else { return }
@@ -1080,6 +1092,7 @@ struct ChatScreen: View {
             autoBuildEligibleAssistantIDs.remove(latestAssistant.id)
             autoBuildInFlightAssistantIDs.remove(latestAssistant.id)
             autoFrontendPreview = nil
+            cancelPendingAutoProjectBuild(for: latestAssistant.id)
             if !latestAssistant.isStreaming {
                 viewModel.statusMessage = "已按要求仅展示代码（未生成项目文件）"
             }
@@ -1096,6 +1109,7 @@ struct ChatScreen: View {
                 noFileDirectiveAssistantIDs.remove(latestAssistant.id)
             } else {
                 autoBuildInFlightAssistantIDs.remove(latestAssistant.id)
+                cancelPendingAutoProjectBuild(for: latestAssistant.id)
             }
             return
         }
@@ -1116,41 +1130,91 @@ struct ChatScreen: View {
             autoBuildEligibleAssistantIDs.remove(latestAssistant.id)
             autoBuildInFlightAssistantIDs.remove(latestAssistant.id)
             autoFrontendPreview = nil
+            cancelPendingAutoProjectBuild(for: latestAssistant.id)
             return
         }
         noFileDirectiveAssistantIDs.remove(latestAssistant.id)
 
         guard FrontendProjectBuilder.canGenerateProject(from: latestAssistant) else {
             autoBuildEligibleAssistantIDs.remove(latestAssistant.id)
+            cancelPendingAutoProjectBuild(for: latestAssistant.id)
+            if shouldAttemptBuild {
+                viewModel.statusMessage = "未识别到可写入的项目文件。可让模型按 [[file:路径]] ... [[endfile]] 格式输出。"
+            }
             return
         }
 
-        do {
-            let result = try FrontendProjectBuilder.buildProject(
-                from: latestAssistant,
-                mode: .overwriteLatestProject
-            )
-            autoBuildEligibleAssistantIDs.insert(latestAssistant.id)
-            autoBuildInFlightAssistantIDs.remove(latestAssistant.id)
-            if result.shouldAutoOpenPreview {
-                autoFrontendPreview = AutoFrontendPreviewPayload(
-                    title: "自动预览 · \(result.entryFileURL.lastPathComponent)",
-                    html: result.entryHTML,
-                    baseURL: result.projectDirectoryURL,
-                    entryFileURL: result.entryFileURL
-                )
-                viewModel.statusMessage = "项目已自动更新并预览（\(result.writtenRelativePaths.count) 文件）"
-            } else {
-                autoFrontendPreview = nil
-                viewModel.statusMessage = "项目文件已自动落盘（\(result.writtenRelativePaths.count) 文件）"
-            }
-        } catch {
-            // Auto mode should stay non-blocking; report status but avoid interrupting chat.
-            autoBuildEligibleAssistantIDs.remove(latestAssistant.id)
-            autoBuildInFlightAssistantIDs.remove(latestAssistant.id)
-            let reason = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            viewModel.statusMessage = "项目自动落盘失败：\(reason)"
+        enqueueAutoProjectBuild(for: latestAssistant)
+    }
+
+    private func enqueueAutoProjectBuild(for assistant: ChatMessage) {
+        autoBuildRequestID &+= 1
+        let requestID = autoBuildRequestID
+        if let runningID = autoBuildRunningMessageID, runningID != assistant.id {
+            autoBuildInFlightAssistantIDs.remove(runningID)
         }
+        autoBuildRunningMessageID = assistant.id
+        autoBuildInFlightAssistantIDs.insert(assistant.id)
+        let sourceAssistant = assistant
+
+        DispatchQueue.global(qos: .utility).async {
+            let result = Result {
+                try FrontendProjectBuilder.buildProject(
+                    from: sourceAssistant,
+                    mode: .overwriteLatestProject,
+                    useParseCache: false
+                )
+            }
+            DispatchQueue.main.async {
+                guard autoBuildRequestID == requestID,
+                      autoBuildRunningMessageID == sourceAssistant.id else {
+                    return
+                }
+
+                autoBuildRunningMessageID = nil
+                autoBuildInFlightAssistantIDs.remove(sourceAssistant.id)
+
+                switch result {
+                case .success(let buildResult):
+                    autoBuildEligibleAssistantIDs.insert(sourceAssistant.id)
+                    latestProjectHasPreviewEntry = true
+                    if buildResult.shouldAutoOpenPreview {
+                        autoFrontendPreview = AutoFrontendPreviewPayload(
+                            title: "自动预览 · \(buildResult.entryFileURL.lastPathComponent)",
+                            html: buildResult.entryHTML,
+                            baseURL: buildResult.projectDirectoryURL,
+                            entryFileURL: buildResult.entryFileURL
+                        )
+                        viewModel.statusMessage = "项目已自动更新并预览（\(buildResult.writtenRelativePaths.count) 文件）"
+                    } else {
+                        autoFrontendPreview = nil
+                        viewModel.statusMessage = "项目文件已自动落盘（\(buildResult.writtenRelativePaths.count) 文件）"
+                    }
+                case .failure(let error):
+                    // Auto mode should stay non-blocking; report status but avoid interrupting chat.
+                    autoBuildEligibleAssistantIDs.remove(sourceAssistant.id)
+                    let reason = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    viewModel.statusMessage = "项目自动落盘失败：\(reason)"
+                }
+            }
+        }
+    }
+
+    private func invalidatePendingAutoProjectBuild() {
+        autoBuildRequestID &+= 1
+        if let runningID = autoBuildRunningMessageID {
+            autoBuildInFlightAssistantIDs.remove(runningID)
+        }
+        autoBuildRunningMessageID = nil
+    }
+
+    private func cancelPendingAutoProjectBuild(for messageID: UUID) {
+        guard autoBuildRunningMessageID == messageID else { return }
+        invalidatePendingAutoProjectBuild()
+    }
+
+    private func refreshLatestProjectPreviewEntryFlag() {
+        latestProjectHasPreviewEntry = FrontendProjectBuilder.latestEntryFileURL() != nil
     }
 
     private func shouldSkipAutoProjectBuild(for assistant: ChatMessage, in messages: [ChatMessage]) -> Bool {
@@ -1869,7 +1933,7 @@ struct ChatScreen: View {
             return masked
         }
 
-        let codeEntries = frontendOverlayCodeEntries(from: message)
+        let codeEntries = frontendOverlayCodeEntriesForOverlay(from: message)
         let detectedCount = max(
             codeEntries.count,
             FrontendProjectBuilder.chatProgressSnapshot(from: message)?.detectedFileCount ?? 0
@@ -1882,7 +1946,7 @@ struct ChatScreen: View {
                 masked.content = "正在后台生成项目文件，请稍候…"
             }
         } else {
-            let hasPreview = FrontendProjectBuilder.latestEntryFileURL() != nil
+            let hasPreview = latestProjectHasPreviewEntry
             if let current = codeEntries.last {
                 masked.content = hasPreview
                     ? "项目文件已在后台写入完成（共 \(max(detectedCount, 1)) 个文件），最新文件：\(current.name)。可在左下角卡片继续预览或查看代码。"
@@ -1929,7 +1993,7 @@ struct ChatScreen: View {
                 detectedFileCount: 0,
                 hasEntryHTML: false
             )
-        let codeEntries = frontendOverlayCodeEntries(from: assistant)
+        let codeEntries = frontendOverlayCodeEntriesForOverlay(from: assistant)
         let detectedFileCount = max(snapshot.detectedFileCount, codeEntries.count)
 
         let totalSteps = 4
@@ -1961,7 +2025,7 @@ struct ChatScreen: View {
             stepIndex: stepIndex,
             stepTotal: totalSteps,
             fileCount: max(detectedFileCount, 1),
-            hasEntryPreview: snapshot.hasEntryHTML || FrontendProjectBuilder.latestEntryFileURL() != nil,
+            hasEntryPreview: snapshot.hasEntryHTML || latestProjectHasPreviewEntry,
             isCompleted: !assistant.isStreaming,
             codeEntries: codeEntries
         )
@@ -2087,12 +2151,6 @@ struct ChatScreen: View {
 
     private func frontendBuildMiniPreviewTile(entry: CodeViewerEntry?) -> some View {
         let previewText = frontendOverlayPreviewSnippet(for: entry?.content ?? "")
-        let highlighted = CodeHighlighter.highlighted(
-            previewText,
-            language: entry?.language,
-            colorScheme: colorScheme,
-            codeThemeMode: viewModel.config.codeThemeMode
-        )
 
         return ZStack(alignment: .topLeading) {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -2117,8 +2175,9 @@ struct ChatScreen: View {
                         .font(.system(size: 7.5, weight: .medium, design: .monospaced))
                         .foregroundStyle(Color.cyan.opacity(0.92))
                 } else {
-                    Text(highlighted)
+                    Text(previewText)
                         .font(.system(size: 7.5, weight: .medium, design: .monospaced))
+                        .foregroundStyle(Color.white.opacity(0.92))
                         .lineLimit(3)
                         .multilineTextAlignment(.leading)
                 }
@@ -2218,6 +2277,13 @@ struct ChatScreen: View {
             return normalized.count > 80 ? String(normalized.prefix(80)) + "…" : normalized
         }
         return collected.joined(separator: "\n")
+    }
+
+    private func frontendOverlayCodeEntriesForOverlay(from message: ChatMessage) -> [CodeViewerEntry] {
+        if message.isStreaming {
+            return Self.frontendOverlayCodeEntriesCache[message.id]?.entries ?? []
+        }
+        return frontendOverlayCodeEntries(from: message)
     }
 
     private func frontendOverlayCodeEntries(from message: ChatMessage) -> [CodeViewerEntry] {
@@ -2392,9 +2458,11 @@ struct ChatScreen: View {
 
     private func openLatestProjectPreviewFromFloatingCard() {
         guard let payload = latestFrontendPreviewPayload() else {
+            latestProjectHasPreviewEntry = false
             viewModel.statusMessage = "latest 目录里还没有可预览入口文件。"
             return
         }
+        latestProjectHasPreviewEntry = true
         autoFrontendPreview = payload
     }
 

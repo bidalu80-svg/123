@@ -283,8 +283,14 @@ enum FrontendProjectBuilder {
         try fileManager.createDirectory(at: latest, withIntermediateDirectories: true)
     }
 
-    static func buildProject(from message: ChatMessage, mode: BuildMode) throws -> BuildResult {
-        var parsedFiles = extractProjectFiles(from: message)
+    static func buildProject(
+        from message: ChatMessage,
+        mode: BuildMode,
+        useParseCache: Bool = true
+    ) throws -> BuildResult {
+        var parsedFiles = useParseCache
+            ? extractProjectFiles(from: message)
+            : extractProjectFilesWithoutCache(from: message)
         if parsedFiles.isEmpty {
             if let fallbackHTML = fallbackHTML(in: message.content) {
                 parsedFiles = [ParsedWebFile(path: "index.html", content: fallbackHTML)]
@@ -394,6 +400,14 @@ enum FrontendProjectBuilder {
             return cached
         }
 
+        let merged = extractProjectFilesWithoutCache(from: message)
+        if !message.isStreaming {
+            storeParsedFilesCache(merged, for: message.id)
+        }
+        return merged
+    }
+
+    private static func extractProjectFilesWithoutCache(from message: ChatMessage) -> [ParsedWebFile] {
         var files: [ParsedWebFile] = []
 
         for attachment in message.fileAttachments {
@@ -409,12 +423,7 @@ enum FrontendProjectBuilder {
         let text = message.content.replacingOccurrences(of: "\r\n", with: "\n")
         files.append(contentsOf: parseTaggedFiles(in: text))
         files.append(contentsOf: parseFencedCodeBlocks(in: text))
-        let merged = mergeParsedFiles(files)
-
-        if !message.isStreaming {
-            storeParsedFilesCache(merged, for: message.id)
-        }
-        return merged
+        return mergeParsedFiles(files)
     }
 
     private static func storeCanGenerateCache(_ value: Bool, for messageID: UUID) {

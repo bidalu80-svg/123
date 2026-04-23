@@ -8,6 +8,7 @@ struct SettingsScreen: View {
     @State private var projectActionFeedback: String?
     @State private var latestPreviewPayload: LatestFrontendPreviewPayload?
     @State private var projectBrowserPayload: FrontendProjectBrowserPayload?
+    @State private var expandedBuiltinSkillPromptIDs: Set<String> = []
 
     var body: some View {
         Form {
@@ -258,23 +259,49 @@ struct SettingsScreen: View {
                             .toggleStyle(.switch)
 
                             if isBuiltinSkillEnabled(skill) {
-                                Text("提示词（可修改）")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                TextEditor(text: builtinSkillPromptBinding(skill))
-                                    .font(.system(size: 12.5, weight: .regular, design: .monospaced))
-                                    .frame(minHeight: 140)
-                                    .padding(8)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                            .fill(Color(.secondarySystemBackground))
-                                    )
-                                HStack {
-                                    Spacer()
-                                    Button("恢复默认") {
-                                        resetBuiltinSkillPrompt(skill)
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Button {
+                                        withAnimation(.easeInOut(duration: 0.18)) {
+                                            toggleBuiltinSkillPromptExpanded(skill)
+                                        }
+                                    } label: {
+                                        HStack(spacing: 8) {
+                                            Text("提示词（可修改）")
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                            Spacer()
+                                            Text(isBuiltinSkillPromptExpanded(skill) ? "收起" : "展开")
+                                                .font(.caption2.weight(.semibold))
+                                                .foregroundStyle(.secondary)
+                                            Image(systemName: isBuiltinSkillPromptExpanded(skill) ? "chevron.up" : "chevron.down")
+                                                .font(.caption2.weight(.semibold))
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        .contentShape(Rectangle())
                                     }
-                                    .buttonStyle(.bordered)
+                                    .buttonStyle(.plain)
+
+                                    if isBuiltinSkillPromptExpanded(skill) {
+                                        TextEditor(text: builtinSkillPromptBinding(skill))
+                                            .font(.system(size: 12.5, weight: .regular, design: .monospaced))
+                                            .frame(minHeight: 140)
+                                            .padding(8)
+                                            .background(
+                                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                                    .fill(Color(.secondarySystemBackground))
+                                            )
+                                        HStack {
+                                            Spacer()
+                                            Button("恢复默认") {
+                                                resetBuiltinSkillPrompt(skill)
+                                            }
+                                            .buttonStyle(.bordered)
+                                        }
+                                    } else {
+                                        Text("点此展开后再编辑该技能提示词")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
                                 }
                             }
                         }
@@ -471,12 +498,25 @@ struct SettingsScreen: View {
                     enabledSet.insert(skill.rawValue)
                 } else {
                     enabledSet.remove(skill.rawValue)
+                    expandedBuiltinSkillPromptIDs.remove(skill.rawValue)
                 }
                 viewModel.config.enabledBuiltinSkillIDs = BuiltinAISkill.allCases
                     .map(\.rawValue)
                     .filter { enabledSet.contains($0) }
             }
         )
+    }
+
+    private func isBuiltinSkillPromptExpanded(_ skill: BuiltinAISkill) -> Bool {
+        expandedBuiltinSkillPromptIDs.contains(skill.rawValue)
+    }
+
+    private func toggleBuiltinSkillPromptExpanded(_ skill: BuiltinAISkill) {
+        if expandedBuiltinSkillPromptIDs.contains(skill.rawValue) {
+            expandedBuiltinSkillPromptIDs.remove(skill.rawValue)
+        } else {
+            expandedBuiltinSkillPromptIDs.insert(skill.rawValue)
+        }
     }
 
     private func builtinSkillPromptBinding(_ skill: BuiltinAISkill) -> Binding<String> {

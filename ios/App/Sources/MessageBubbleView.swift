@@ -47,6 +47,7 @@ struct MessageBubbleView: View {
     @State private var pptGenerationTask: Task<Void, Never>?
     @State private var wordGenerationTask: Task<Void, Never>?
     @State private var excelGenerationTask: Task<Void, Never>?
+    @State private var frontendBuildRequestID: Int = 0
     private let chatUIFont = UIFont(name: "PingFangSC-Medium", size: 16) ?? UIFont.systemFont(ofSize: 16, weight: .medium)
 
     init(
@@ -131,6 +132,8 @@ struct MessageBubbleView: View {
             ShareSheet(activityItems: [payload.fileURL])
         }
         .onDisappear {
+            frontendBuildRequestID &+= 1
+            isBuildingFrontendProject = false
             cancelAllPythonRuns()
             cancelAllShellRuns()
             pptGenerationTask?.cancel()
@@ -1235,8 +1238,28 @@ struct MessageBubbleView: View {
         ]
         let hasPrefixMarker = prefixMarkers.contains(where: { lowered.hasPrefix($0) })
         let hasKeywordMarker = keywordMarkers.contains(where: { lowered.contains($0) })
-        let looksLikeStep = duration != nil || hasPrefixMarker || (hasKeywordMarker && normalizedTitle.count <= 60)
+        let hasStepBulletPrefix = line.range(
+            of: #"^(?:[-*•·]|[0-9]+[.)、])\s+"#,
+            options: .regularExpression
+        ) != nil
+        let hasExplicitStepEmoji = line.contains("✅")
+            || line.contains("✔")
+            || line.contains("❌")
+            || line.contains("⚠️")
+        let hasCommandPrefix = normalizedTitle.hasPrefix("$ ") || normalizedTitle.hasPrefix("> ")
+        let looksLikeStep = duration != nil
+            || hasPrefixMarker
+            || hasExplicitStepEmoji
+            || hasCommandPrefix
+            || (hasStepBulletPrefix && hasKeywordMarker && normalizedTitle.count <= 80)
         guard looksLikeStep else { return nil }
+        if isLikelyConversationalAssistantLine(normalizedTitle),
+           duration == nil,
+           !hasPrefixMarker,
+           !hasExplicitStepEmoji,
+           !hasCommandPrefix {
+            return nil
+        }
 
         let status: AssistantStepStatus = {
             if normalizedTitle.contains("失败")
@@ -1309,6 +1332,40 @@ struct MessageBubbleView: View {
         }()
 
         return (normalizedTitle, duration, status, kind)
+    }
+
+    private func isLikelyConversationalAssistantLine(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 8 else { return false }
+
+        let lowered = trimmed.lowercased()
+        let hasConversationalPunctuation =
+            trimmed.contains("。")
+            || trimmed.contains("？")
+            || trimmed.contains("?")
+            || trimmed.contains("！")
+            || trimmed.contains("!")
+            || trimmed.contains("，")
+        guard hasConversationalPunctuation else { return false }
+
+        let executionMarkers = [
+            "运行", "执行", "构建", "编译", "测试", "安装",
+            "写入", "读取", "查看", "编辑", "修改",
+            "命令", "shell", "terminal", "cmake", "cargo", "npm", "pip", "gradle", "maven",
+            "src/", "dist/", "readme", "file", "[[file:"
+        ]
+        if executionMarkers.contains(where: { lowered.contains($0) }) {
+            return false
+        }
+
+        if trimmed.range(
+            of: #"([A-Za-z0-9._-]+/)+[A-Za-z0-9._-]+"#,
+            options: .regularExpression
+        ) != nil {
+            return false
+        }
+
+        return true
     }
 
     private func assistantStepChip(
@@ -2139,7 +2196,12 @@ struct MessageBubbleView: View {
                 await MainActor.run {
                     guard runningCodeToken == token else { return }
                     codeRunOutputs[token] = nil
-                    codeRunErrors[token] = error.localizedDescription
+                    let endpointHint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if endpointHint.isEmpty {
+                        codeRunErrors[token] = error.localizedDescription
+                    } else {
+                        codeRunErrors[token] = "\(error.localizedDescription)\n\n[接口 \(endpointHint)]"
+                    }
                     runningCodeToken = nil
                     feedback(.light, "终端运行失败")
                 }
@@ -2560,38 +2622,55 @@ struct MessageBubbleView: View {
         }
         guard !isBuildingFrontendProject else { return }
         isBuildingFrontendProject = true
-        defer { isBuildingFrontendProject = false }
 
-        do {
-            let result = try FrontendProjectBuilder.buildProject(from: actionMessage, mode: mode)
-            let fileCount = result.writtenRelativePaths.count
-            if result.shouldAutoOpenPreview {
-                let title = "网页预览 · \(result.entryFileURL.lastPathComponent)"
-                activeHTMLPreview = HTMLPreviewPayload(
-                    title: title,
-                    html: result.entryHTML,
-                    baseURL: result.projectDirectoryURL,
-                    entryFileURL: result.entryFileURL
+        frontendBuildRequestID &+= 1
+        let requestID = frontendBuildRequestID
+        let sourceMessage = actionMessage
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = Result {
+                try FrontendProjectBuilder.buildProject(
+                    from: sourceMessage,
+                    mode: mode,
+                    useParseCache: false
                 )
             }
+            DispatchQueue.main.async {
+                guard frontendBuildRequestID == requestID else { return }
+                isBuildingFrontendProject = false
 
-            switch mode {
-            case .createNewProject:
-                if result.shouldAutoOpenPreview {
-                    feedback(.success, "已生成项目并预览（\(fileCount) 文件）")
-                } else {
-                    feedback(.success, "已生成项目（\(fileCount) 文件）")
-                }
-            case .overwriteLatestProject:
-                if result.shouldAutoOpenPreview {
-                    feedback(.success, "已覆盖更新并预览（\(fileCount) 文件）")
-                } else {
-                    feedback(.success, "已覆盖更新（\(fileCount) 文件）")
+                switch result {
+                case .success(let buildResult):
+                    let fileCount = buildResult.writtenRelativePaths.count
+                    if buildResult.shouldAutoOpenPreview {
+                        let title = "网页预览 · \(buildResult.entryFileURL.lastPathComponent)"
+                        activeHTMLPreview = HTMLPreviewPayload(
+                            title: title,
+                            html: buildResult.entryHTML,
+                            baseURL: buildResult.projectDirectoryURL,
+                            entryFileURL: buildResult.entryFileURL
+                        )
+                    }
+
+                    switch mode {
+                    case .createNewProject:
+                        if buildResult.shouldAutoOpenPreview {
+                            feedback(.success, "已生成项目并预览（\(fileCount) 文件）")
+                        } else {
+                            feedback(.success, "已生成项目（\(fileCount) 文件）")
+                        }
+                    case .overwriteLatestProject:
+                        if buildResult.shouldAutoOpenPreview {
+                            feedback(.success, "已覆盖更新并预览（\(fileCount) 文件）")
+                        } else {
+                            feedback(.success, "已覆盖更新（\(fileCount) 文件）")
+                        }
+                    }
+                case .failure(let error):
+                    let text = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    saveFeedback = text
                 }
             }
-        } catch {
-            let text = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            saveFeedback = text
         }
     }
 
