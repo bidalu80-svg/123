@@ -253,6 +253,7 @@ struct ChatConfig: Codable, Equatable {
     static let defaultAudioTranscriptionsPath = "/v1/audio/transcriptions"
     static let defaultEmbeddingsPath = "/v1/embeddings"
     static let defaultModelsPath = "/v1/models"
+    static let defaultShellExecutionPath = "/v1/shell/execute"
 
     var apiURL: String
     var apiKey: String
@@ -271,6 +272,10 @@ struct ChatConfig: Codable, Equatable {
     var timeout: Double
     var streamEnabled: Bool
     var frontendAutoBuildEnabled: Bool
+    var shellExecutionEnabled: Bool
+    var shellExecutionPath: String
+    var shellExecutionTimeout: Double
+    var shellExecutionWorkingDirectory: String
     var themeMode: AppThemeMode
     var codeThemeMode: CodeThemeMode
     var realtimeContextEnabled: Bool
@@ -305,6 +310,10 @@ struct ChatConfig: Codable, Equatable {
         timeout: 30,
         streamEnabled: true,
         frontendAutoBuildEnabled: true,
+        shellExecutionEnabled: true,
+        shellExecutionPath: ChatConfig.defaultShellExecutionPath,
+        shellExecutionTimeout: 90,
+        shellExecutionWorkingDirectory: "latest",
         themeMode: .system,
         codeThemeMode: .followApp,
         realtimeContextEnabled: false,
@@ -340,6 +349,10 @@ struct ChatConfig: Codable, Equatable {
         timeout: Double,
         streamEnabled: Bool,
         frontendAutoBuildEnabled: Bool = true,
+        shellExecutionEnabled: Bool = true,
+        shellExecutionPath: String = ChatConfig.defaultShellExecutionPath,
+        shellExecutionTimeout: Double = 90,
+        shellExecutionWorkingDirectory: String = "latest",
         themeMode: AppThemeMode = .system,
         codeThemeMode: CodeThemeMode = .followApp,
         realtimeContextEnabled: Bool = false,
@@ -374,6 +387,10 @@ struct ChatConfig: Codable, Equatable {
         self.streamEnabled = streamEnabled
         _ = frontendAutoBuildEnabled
         self.frontendAutoBuildEnabled = true
+        self.shellExecutionEnabled = shellExecutionEnabled
+        self.shellExecutionPath = shellExecutionPath
+        self.shellExecutionTimeout = shellExecutionTimeout
+        self.shellExecutionWorkingDirectory = shellExecutionWorkingDirectory
         self.themeMode = themeMode
         self.codeThemeMode = codeThemeMode
         self.realtimeContextEnabled = realtimeContextEnabled
@@ -410,6 +427,10 @@ struct ChatConfig: Codable, Equatable {
         timeout = try c.decode(Double.self, forKey: .timeout)
         streamEnabled = try c.decode(Bool.self, forKey: .streamEnabled)
         frontendAutoBuildEnabled = true
+        shellExecutionEnabled = try c.decodeIfPresent(Bool.self, forKey: .shellExecutionEnabled) ?? true
+        shellExecutionPath = try c.decodeIfPresent(String.self, forKey: .shellExecutionPath) ?? ChatConfig.defaultShellExecutionPath
+        shellExecutionTimeout = try c.decodeIfPresent(Double.self, forKey: .shellExecutionTimeout) ?? 90
+        shellExecutionWorkingDirectory = try c.decodeIfPresent(String.self, forKey: .shellExecutionWorkingDirectory) ?? "latest"
         themeMode = try c.decodeIfPresent(AppThemeMode.self, forKey: .themeMode) ?? .system
         codeThemeMode = try c.decodeIfPresent(CodeThemeMode.self, forKey: .codeThemeMode) ?? .followApp
         realtimeContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .realtimeContextEnabled) ?? false
@@ -497,6 +518,10 @@ struct ChatConfig: Codable, Equatable {
         ChatConfigStore.endpointURL(apiURL, path: embeddingsPath, fallback: ChatConfig.defaultEmbeddingsPath)
     }
 
+    var shellExecutionURLString: String {
+        ChatConfigStore.endpointURL(apiURL, path: shellExecutionPath, fallback: ChatConfig.defaultShellExecutionPath)
+    }
+
     var activeEndpointURLString: String {
         switch endpointMode {
         case .chatCompletions:
@@ -565,6 +590,10 @@ enum ChatConfigStore {
             timeout: ChatConfig.default.timeout,
             streamEnabled: ChatConfig.default.streamEnabled,
             frontendAutoBuildEnabled: ChatConfig.default.frontendAutoBuildEnabled,
+            shellExecutionEnabled: ChatConfig.default.shellExecutionEnabled,
+            shellExecutionPath: ChatConfig.default.shellExecutionPath,
+            shellExecutionTimeout: ChatConfig.default.shellExecutionTimeout,
+            shellExecutionWorkingDirectory: ChatConfig.default.shellExecutionWorkingDirectory,
             themeMode: ChatConfig.default.themeMode,
             codeThemeMode: ChatConfig.default.codeThemeMode,
             realtimeContextEnabled: ChatConfig.default.realtimeContextEnabled,
@@ -665,7 +694,8 @@ enum ChatConfigStore {
             ChatConfig.defaultVideoGenerationsPath,
             ChatConfig.defaultAudioTranscriptionsPath,
             ChatConfig.defaultEmbeddingsPath,
-            ChatConfig.defaultModelsPath
+            ChatConfig.defaultModelsPath,
+            ChatConfig.defaultShellExecutionPath
         ]
     }
 
@@ -702,6 +732,10 @@ enum ChatConfigStore {
             timeout: min(max(config.timeout, 5), 120),
             streamEnabled: config.streamEnabled,
             frontendAutoBuildEnabled: true,
+            shellExecutionEnabled: config.shellExecutionEnabled,
+            shellExecutionPath: normalizeEndpointPath(config.shellExecutionPath, fallback: ChatConfig.defaultShellExecutionPath),
+            shellExecutionTimeout: min(max(config.shellExecutionTimeout, 5), 300),
+            shellExecutionWorkingDirectory: config.shellExecutionWorkingDirectory.trimmingCharacters(in: .whitespacesAndNewlines),
             themeMode: config.themeMode,
             codeThemeMode: config.codeThemeMode,
             realtimeContextEnabled: config.realtimeContextEnabled,

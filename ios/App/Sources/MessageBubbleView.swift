@@ -10,6 +10,10 @@ struct MessageBubbleView: View {
     let codeThemeMode: CodeThemeMode
     let apiKey: String
     let apiBaseURL: String
+    let shellExecutionEnabled: Bool
+    let shellExecutionURLString: String
+    let shellExecutionTimeout: Double
+    let shellExecutionWorkingDirectory: String
     let showsAssistantActionBar: Bool
     let onRegenerate: (() -> Void)?
     let onDelete: (() -> Void)?
@@ -21,6 +25,7 @@ struct MessageBubbleView: View {
     @State private var copiedCodeToken: String?
     @State private var runningCodeToken: String?
     @State private var pythonRunTasks: [String: Task<Void, Never>] = [:]
+    @State private var shellRunTasks: [String: Task<Void, Never>] = [:]
     @State private var codeRunOutputs: [String: String] = [:]
     @State private var codeRunErrors: [String: String] = [:]
     @State private var isBuildingFrontendProject = false
@@ -50,6 +55,10 @@ struct MessageBubbleView: View {
         codeThemeMode: CodeThemeMode,
         apiKey: String,
         apiBaseURL: String,
+        shellExecutionEnabled: Bool = false,
+        shellExecutionURLString: String = "",
+        shellExecutionTimeout: Double = 90,
+        shellExecutionWorkingDirectory: String = "",
         showsAssistantActionBar: Bool,
         onRegenerate: (() -> Void)?,
         onDelete: (() -> Void)? = nil
@@ -59,6 +68,10 @@ struct MessageBubbleView: View {
         self.codeThemeMode = codeThemeMode
         self.apiKey = apiKey
         self.apiBaseURL = apiBaseURL
+        self.shellExecutionEnabled = shellExecutionEnabled
+        self.shellExecutionURLString = shellExecutionURLString
+        self.shellExecutionTimeout = shellExecutionTimeout
+        self.shellExecutionWorkingDirectory = shellExecutionWorkingDirectory
         self.showsAssistantActionBar = showsAssistantActionBar
         self.onRegenerate = onRegenerate
         self.onDelete = onDelete
@@ -119,6 +132,7 @@ struct MessageBubbleView: View {
         }
         .onDisappear {
             cancelAllPythonRuns()
+            cancelAllShellRuns()
             pptGenerationTask?.cancel()
             pptGenerationTask = nil
             wordGenerationTask?.cancel()
@@ -1518,8 +1532,10 @@ struct MessageBubbleView: View {
         let copyToken = "\(title)|\(language ?? "")|\(actionContent)"
         let isCopied = copiedCodeToken == copyToken
         let isRunning = runningCodeToken == copyToken
+        let isShellRunning = shellRunTasks[copyToken] != nil && runningCodeToken == copyToken
         let canRunPython = supportsPythonRun(language: language, title: title)
             && PythonExecutionService.isRunnableSnippet(actionContent)
+        let canRunShell = supportsRemoteShellRun(language: language, title: title, content: actionContent)
         let canRunHTML = supportsHTMLPreview(language: language, title: title, content: actionContent)
         let runOutput = codeRunOutputs[copyToken]
         let runError = codeRunErrors[copyToken]
@@ -1541,6 +1557,19 @@ struct MessageBubbleView: View {
                     .font(.caption2)
                     .buttonStyle(.borderedProminent)
                     .tint(isRunning ? .red : Color(red: 0.08, green: 0.08, blue: 0.1))
+                    .foregroundStyle(.white)
+                }
+                if canRunShell {
+                    Button(isShellRunning ? "结束运行" : "终端运行") {
+                        if isShellRunning {
+                            stopRemoteShellRun(token: copyToken)
+                        } else {
+                            requestRemoteShellRun(actionContent, token: copyToken)
+                        }
+                    }
+                    .font(.caption2)
+                    .buttonStyle(.borderedProminent)
+                    .tint(isShellRunning ? .red : Color(red: 0.12, green: 0.58, blue: 0.35))
                     .foregroundStyle(.white)
                 }
                 if canRunHTML {
@@ -1966,6 +1995,52 @@ struct MessageBubbleView: View {
         }
     }
 
+    private func supportsRemoteShellRun(language: String?, title: String, content: String) -> Bool {
+        guard shellExecutionEnabled else { return false }
+        let normalizedLanguage = (language ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let shellLanguages: Set<String> = [
+            "bash", "shell", "sh", "zsh", "powershell", "ps1", "cmd", "bat"
+        ]
+        if shellLanguages.contains(normalizedLanguage) {
+            return true
+        }
+        if !normalizedLanguage.isEmpty {
+            return false
+        }
+
+        let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let titleLooksLikeCommand = normalizedTitle.contains("shell")
+            || normalizedTitle.contains("terminal")
+            || normalizedTitle.contains("powershell")
+            || normalizedTitle.contains("bash")
+            || normalizedTitle.contains("命令")
+            || normalizedTitle.contains("终端")
+        if titleLooksLikeCommand {
+            return true
+        }
+
+        let normalizedContent = content.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalizedContent.hasPrefix("$ ")
+            || normalizedContent.contains("\n$ ")
+            || normalizedContent.contains(" && ")
+            || normalizedContent.contains("cmake ")
+            || normalizedContent.contains("cargo ")
+            || normalizedContent.contains("npm ")
+            || normalizedContent.contains("pnpm ")
+            || normalizedContent.contains("pip ")
+            || normalizedContent.contains("python ")
+            || normalizedContent.contains("go test ")
+            || normalizedContent.contains("ctest")
+            || normalizedContent.contains("gradle ")
+            || normalizedContent.contains("mvn ") {
+            return true
+        }
+
+        return false
+    }
+
     private func supportsPythonRun(language: String?, title: String) -> Bool {
         let normalizedLanguage = (language ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if normalizedLanguage == "python" || normalizedLanguage == "py" {
@@ -1974,6 +2049,93 @@ struct MessageBubbleView: View {
 
         let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return normalizedTitle == "python" || normalizedTitle == "py"
+    }
+
+    private func requestRemoteShellRun(_ command: String, token: String) {
+        let normalizedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedCommand.isEmpty else {
+            feedback(.light, "命令为空")
+            return
+        }
+
+        guard shellExecutionEnabled else {
+            feedback(.light, "请先在设置里启用远端终端运行")
+            return
+        }
+        guard !shellExecutionURLString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            feedback(.light, "请先配置终端执行接口地址")
+            return
+        }
+
+        runRemoteShellCommand(normalizedCommand, token: token)
+    }
+
+    private func runRemoteShellCommand(_ command: String, token: String) {
+        shellRunTasks[token]?.cancel()
+        runningCodeToken = token
+        codeRunErrors[token] = nil
+        codeRunOutputs[token] = nil
+
+        let endpoint = shellExecutionURLString
+        let timeout = shellExecutionTimeout
+        let workingDirectory = shellExecutionWorkingDirectory
+        let key = apiKey
+
+        let task = Task {
+            defer {
+                Task { @MainActor in
+                    shellRunTasks[token] = nil
+                }
+            }
+
+            do {
+                let result = try await RemoteShellExecutionService.shared.run(
+                    command: command,
+                    endpoint: endpoint,
+                    apiKey: key,
+                    workingDirectory: workingDirectory,
+                    timeout: timeout
+                )
+                try Task.checkCancellation()
+                await MainActor.run {
+                    guard runningCodeToken == token else { return }
+                    let durationSuffix: String = {
+                        guard let durationMs = result.durationMs else { return "" }
+                        return "\n\n[耗时 \(durationMs)ms]"
+                    }()
+                    let rendered = result.output + durationSuffix
+                    if result.exitCode == 0 {
+                        codeRunOutputs[token] = rendered
+                        codeRunErrors[token] = nil
+                        feedback(.success, "终端运行完成")
+                    } else {
+                        codeRunOutputs[token] = nil
+                        codeRunErrors[token] = "\(rendered)\n\n[退出码 \(result.exitCode)]"
+                        feedback(.light, "终端运行失败")
+                    }
+                    runningCodeToken = nil
+                }
+            } catch is CancellationError {
+                await MainActor.run {
+                    if runningCodeToken == token {
+                        runningCodeToken = nil
+                    }
+                    if codeRunErrors[token] == nil {
+                        codeRunErrors[token] = "运行已结束。"
+                    }
+                    feedback(.light, "已结束运行")
+                }
+            } catch {
+                await MainActor.run {
+                    guard runningCodeToken == token else { return }
+                    codeRunOutputs[token] = nil
+                    codeRunErrors[token] = error.localizedDescription
+                    runningCodeToken = nil
+                    feedback(.light, "终端运行失败")
+                }
+            }
+        }
+        shellRunTasks[token] = task
     }
 
     private func requestPythonRun(_ code: String, token: String) {
@@ -2057,6 +2219,25 @@ struct MessageBubbleView: View {
             task.cancel()
         }
         pythonRunTasks.removeAll()
+        runningCodeToken = nil
+    }
+
+    private func stopRemoteShellRun(token: String) {
+        shellRunTasks[token]?.cancel()
+        shellRunTasks[token] = nil
+        if runningCodeToken == token {
+            runningCodeToken = nil
+        }
+        codeRunErrors[token] = "运行已结束。"
+        feedback(.light, "已结束运行")
+    }
+
+    private func cancelAllShellRuns() {
+        guard !shellRunTasks.isEmpty else { return }
+        for task in shellRunTasks.values {
+            task.cancel()
+        }
+        shellRunTasks.removeAll()
         runningCodeToken = nil
     }
 

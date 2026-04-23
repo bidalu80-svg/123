@@ -761,6 +761,10 @@ struct ChatScreen: View {
                 codeThemeMode: viewModel.config.codeThemeMode,
                 apiKey: viewModel.config.apiKey,
                 apiBaseURL: viewModel.config.normalizedBaseURL,
+                shellExecutionEnabled: viewModel.config.shellExecutionEnabled,
+                shellExecutionURLString: viewModel.config.shellExecutionURLString,
+                shellExecutionTimeout: viewModel.config.shellExecutionTimeout,
+                shellExecutionWorkingDirectory: viewModel.config.shellExecutionWorkingDirectory,
                 bottomReservedInset: transcriptBottomReservedInset,
                 command: transcriptCommand,
                 onMetricsChanged: { metrics in
@@ -830,6 +834,10 @@ struct ChatScreen: View {
                         codeThemeMode: viewModel.config.codeThemeMode,
                         apiKey: viewModel.config.apiKey,
                         apiBaseURL: viewModel.config.normalizedBaseURL,
+                        shellExecutionEnabled: viewModel.config.shellExecutionEnabled,
+                        shellExecutionURLString: viewModel.config.shellExecutionURLString,
+                        shellExecutionTimeout: viewModel.config.shellExecutionTimeout,
+                        shellExecutionWorkingDirectory: viewModel.config.shellExecutionWorkingDirectory,
                         showsAssistantActionBar: message.role == .assistant && !message.isStreaming && !isDeleting,
                         onRegenerate: (isLatestAssistant
                             && (viewModel.config.endpointMode == .chatCompletions || viewModel.config.endpointMode == .responses)
@@ -1659,6 +1667,10 @@ struct ChatScreen: View {
                 codeThemeMode: viewModel.config.codeThemeMode,
                 apiKey: viewModel.config.apiKey,
                 apiBaseURL: viewModel.config.normalizedBaseURL,
+                shellExecutionEnabled: viewModel.config.shellExecutionEnabled,
+                shellExecutionURLString: viewModel.config.shellExecutionURLString,
+                shellExecutionTimeout: viewModel.config.shellExecutionTimeout,
+                shellExecutionWorkingDirectory: viewModel.config.shellExecutionWorkingDirectory,
                 showsAssistantActionBar: false,
                 onRegenerate: nil
             )
@@ -3311,6 +3323,10 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
     let codeThemeMode: CodeThemeMode
     let apiKey: String
     let apiBaseURL: String
+    let shellExecutionEnabled: Bool
+    let shellExecutionURLString: String
+    let shellExecutionTimeout: Double
+    let shellExecutionWorkingDirectory: String
     let bottomReservedInset: CGFloat
     let command: ChatTranscriptCommand?
     let onMetricsChanged: (ChatTranscriptMetrics) -> Void
@@ -3330,6 +3346,10 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             codeThemeMode: codeThemeMode,
             apiKey: apiKey,
             apiBaseURL: apiBaseURL,
+            shellExecutionEnabled: shellExecutionEnabled,
+            shellExecutionURLString: shellExecutionURLString,
+            shellExecutionTimeout: shellExecutionTimeout,
+            shellExecutionWorkingDirectory: shellExecutionWorkingDirectory,
             bottomReservedInset: bottomReservedInset,
             command: command,
             onMetricsChanged: onMetricsChanged
@@ -3454,6 +3474,10 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             codeThemeMode: CodeThemeMode,
             apiKey: String,
             apiBaseURL: String,
+            shellExecutionEnabled: Bool,
+            shellExecutionURLString: String,
+            shellExecutionTimeout: Double,
+            shellExecutionWorkingDirectory: String,
             bottomReservedInset: CGFloat,
             command: ChatTranscriptCommand?,
             onMetricsChanged: @escaping (ChatTranscriptMetrics) -> Void
@@ -3514,6 +3538,10 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
                                 codeThemeMode: codeThemeMode,
                                 apiKey: apiKey,
                                 apiBaseURL: apiBaseURL,
+                                shellExecutionEnabled: shellExecutionEnabled,
+                                shellExecutionURLString: shellExecutionURLString,
+                                shellExecutionTimeout: shellExecutionTimeout,
+                                shellExecutionWorkingDirectory: shellExecutionWorkingDirectory,
                                 showsAssistantActionBar: false,
                                 onRegenerate: nil
                             )
