@@ -212,16 +212,6 @@ struct ChatScreen: View {
                 seedAutoFrontendBuildCursor()
             }
         }
-        .onChange(of: viewModel.config.frontendAutoBuildEnabled) { _, enabled in
-            if enabled {
-                seedAutoFrontendBuildCursor()
-            } else {
-                lastAutoBuiltAssistantMessageID = nil
-                noFileDirectiveAssistantIDs.removeAll()
-                autoBuildEligibleAssistantIDs.removeAll()
-                autoBuildInFlightAssistantIDs.removeAll()
-            }
-        }
         .onPreferenceChange(ComposerHeightPreferenceKey.self) { newValue in
             let clamped = max(0, ceil(newValue))
             if abs(clamped - composerMeasuredHeight) > 0.5 {
@@ -1175,16 +1165,39 @@ struct ChatScreen: View {
             "完整项目",
             "完整工程",
             "搭建项目",
+            "初始化项目",
+            "初始化工程",
+            "脚手架",
+            "仓库结构",
+            "目录结构",
+            "模块划分",
+            "多文件",
+            "多模块",
             "生成代码文件",
             "输出文件结构",
             "按[[file:",
             "写入latest",
             "自动落盘",
+            "服务端项目",
+            "后端项目",
+            "api项目",
+            "命令行工具",
+            "cli工具",
+            "sdk项目",
+            "库项目",
             "project",
             "codebase",
             "scaffold",
             "boilerplate",
             "starter template",
+            "multi module",
+            "repository structure",
+            "directory structure",
+            "backend project",
+            "api service",
+            "cli project",
+            "library project",
+            "sdk project",
             "generate project",
             "create project",
             "build project",
@@ -1196,15 +1209,54 @@ struct ChatScreen: View {
             return true
         }
 
+        if containsLanguageProjectIntent(normalized) {
+            return true
+        }
+
         if normalized.range(
-            of: #"(做|写|搭|建|生成|创建|开发|搞)(一个|个|套)?[^\n]{0,24}(网站|网页|页面|项目|前端|应用|app|demo|登录页|注册页|后台)"#,
+            of: #"(做|写|搭|建|生成|创建|开发|搞|初始化)(一个|个|套)?[^\n]{0,28}(网站|网页|页面|项目|前端|应用|app|demo|登录页|注册页|后台|服务|接口|api|后端|脚手架|命令行|cli|工具|sdk|库|package|模块|机器人|爬虫|微服务)"#,
             options: .regularExpression
         ) != nil {
             return true
         }
 
         if normalized.range(
-            of: #"(网站|网页|页面|项目|前端|应用|app|demo|登录页|注册页|后台)[^\n]{0,16}(做|写|搭|建|生成|创建|开发|搞)"#,
+            of: #"(网站|网页|页面|项目|前端|应用|app|demo|登录页|注册页|后台|服务|接口|api|后端|脚手架|命令行|cli|工具|sdk|库|package|模块|机器人|爬虫|微服务)[^\n]{0,20}(做|写|搭|建|生成|创建|开发|搞|初始化)"#,
+            options: .regularExpression
+        ) != nil {
+            return true
+        }
+
+        return false
+    }
+
+    private func containsLanguageProjectIntent(_ raw: String) -> Bool {
+        let languages = [
+            "python", "py", "java", "kotlin", "swift", "go", "golang", "rust",
+            "c#", "csharp", "c++", "cpp", "c语言", "node", "nodejs", "typescript",
+            "javascript", "js", "php", "ruby", "scala", "dart", "lua", "sql"
+        ]
+        let nouns = [
+            "项目", "工程", "脚手架", "模板", "服务", "后端", "接口", "api",
+            "命令行", "cli", "工具", "sdk", "库", "模块", "包", "微服务", "机器人", "爬虫"
+        ]
+
+        for language in languages {
+            for noun in nouns {
+                if raw.contains("\(language)\(noun)") || raw.contains("\(noun)\(language)") {
+                    return true
+                }
+            }
+        }
+
+        if raw.range(
+            of: #"\b(rust|go|golang|java|kotlin|swift|python|php|ruby|scala|dart|lua|typescript|javascript|node|nodejs|csharp|c#|cpp|c\+\+)\b[^\n]{0,24}\b(project|service|backend|api|cli|tool|sdk|library|package|scaffold|template|boilerplate)\b"#,
+            options: .regularExpression
+        ) != nil {
+            return true
+        }
+        if raw.range(
+            of: #"\b(project|service|backend|api|cli|tool|sdk|library|package|scaffold|template|boilerplate)\b[^\n]{0,24}\b(rust|go|golang|java|kotlin|swift|python|php|ruby|scala|dart|lua|typescript|javascript|node|nodejs|csharp|c#|cpp|c\+\+)\b"#,
             options: .regularExpression
         ) != nil {
             return true
@@ -1771,27 +1823,27 @@ struct ChatScreen: View {
             masked.content = stripped
         } else if message.isStreaming {
             if let current = codeEntries.last {
-                masked.content = "正在后台生成网站文件（\(max(detectedCount, 1)) 个）· 当前：\(current.name)"
+                masked.content = "正在后台生成项目文件（\(max(detectedCount, 1)) 个）· 当前：\(current.name)"
             } else {
-                masked.content = "正在后台生成网站文件，请稍候…"
+                masked.content = "正在后台生成项目文件，请稍候…"
             }
         } else {
             let hasPreview = FrontendProjectBuilder.latestEntryFileURL() != nil
             if let current = codeEntries.last {
                 masked.content = hasPreview
-                    ? "网站文件已在后台写入完成（共 \(max(detectedCount, 1)) 个文件），最新文件：\(current.name)。可在左下角卡片继续预览或查看代码。"
-                    : "网站文件已在后台写入完成（共 \(max(detectedCount, 1)) 个文件），最新文件：\(current.name)。"
+                    ? "项目文件已在后台写入完成（共 \(max(detectedCount, 1)) 个文件），最新文件：\(current.name)。可在左下角卡片继续预览或查看代码。"
+                    : "项目文件已在后台写入完成（共 \(max(detectedCount, 1)) 个文件），最新文件：\(current.name)。"
             } else {
                 masked.content = hasPreview
-                    ? "网站文件已在后台写入完成，可在左下角卡片点击预览。"
-                    : "网站文件已在后台写入完成。"
+                    ? "项目文件已在后台写入完成，可在左下角卡片点击预览。"
+                    : "项目文件已在后台写入完成。"
             }
         }
         return masked
     }
 
     private var shouldHideFrontendCodeInChat: Bool {
-        viewModel.config.frontendAutoBuildEnabled
+        true
     }
 
     private func shouldMaskFrontendCode(for message: ChatMessage, in messages: [ChatMessage]) -> Bool {
@@ -1866,7 +1918,7 @@ struct ChatScreen: View {
         let safeFileIndex = frontendOverlaySafeFileIndex(for: overlay)
         let totalFiles = max(overlay.codeEntries.count, 1)
 
-        HStack(alignment: .bottom, spacing: 10) {
+        return HStack(alignment: .bottom, spacing: 10) {
             Button {
                 openFrontendOverlayCodeViewer(overlay)
             } label: {
@@ -1945,7 +1997,7 @@ struct ChatScreen: View {
                         } label: {
                             HStack(spacing: 4) {
                                 Text("👉")
-                                Text("预览网站")
+                                Text("预览入口")
                                     .underline()
                             }
                             .font(.system(size: 12.5, weight: .semibold))
@@ -1988,7 +2040,7 @@ struct ChatScreen: View {
             codeThemeMode: viewModel.config.codeThemeMode
         )
 
-        ZStack(alignment: .topLeading) {
+        return ZStack(alignment: .topLeading) {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(
                     LinearGradient(
@@ -2184,20 +2236,36 @@ struct ChatScreen: View {
             return "js"
         case "typescript", "ts":
             return "ts"
+        case "tsx":
+            return "tsx"
+        case "jsx":
+            return "jsx"
         case "swift":
             return "swift"
         case "html", "htm", "xhtml":
             return "html"
         case "css":
             return "css"
+        case "scss":
+            return "scss"
+        case "less":
+            return "less"
         case "json":
             return "json"
         case "yaml", "yml":
             return "yml"
         case "xml":
             return "xml"
+        case "toml":
+            return "toml"
+        case "ini":
+            return "ini"
         case "bash", "shell", "sh":
             return "sh"
+        case "zsh":
+            return "zsh"
+        case "powershell", "ps1":
+            return "ps1"
         case "go":
             return "go"
         case "rust", "rs":
@@ -2206,12 +2274,28 @@ struct ChatScreen: View {
             return "java"
         case "kotlin":
             return "kt"
+        case "c":
+            return "c"
+        case "cpp", "c++", "cc", "cxx":
+            return "cpp"
+        case "csharp", "c#", "cs":
+            return "cs"
+        case "scala":
+            return "scala"
+        case "dart":
+            return "dart"
+        case "lua":
+            return "lua"
         case "php":
             return "php"
         case "ruby", "rb":
             return "rb"
         case "sql":
             return "sql"
+        case "dockerfile":
+            return "dockerfile"
+        case "makefile":
+            return "makefile"
         case "markdown", "md":
             return "md"
         default:
@@ -2235,7 +2319,7 @@ struct ChatScreen: View {
             return nil
         }
         return AutoFrontendPreviewPayload(
-            title: "网站预览 · \(entryFileURL.lastPathComponent)",
+            title: "项目预览 · \(entryFileURL.lastPathComponent)",
             html: html,
             baseURL: FrontendProjectBuilder.latestProjectURL() ?? entryFileURL.deletingLastPathComponent(),
             entryFileURL: entryFileURL
@@ -2260,7 +2344,7 @@ struct ChatScreen: View {
     }
 
     private var shouldAutoBuildFrontendFromAssistantReply: Bool {
-        viewModel.config.frontendAutoBuildEnabled
+        true
     }
 
     private func renderWeight(for message: ChatMessage) -> Int {

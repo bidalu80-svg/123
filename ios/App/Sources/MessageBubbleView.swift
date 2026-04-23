@@ -1092,9 +1092,21 @@ struct MessageBubbleView: View {
         case error
     }
 
+    private enum AssistantStepKind {
+        case command
+        case file
+        case memory
+        case generic
+    }
+
     private enum AssistantTextBlock: Equatable {
         case plain(String)
-        case step(title: String, duration: String?, status: AssistantStepStatus)
+        case step(
+            title: String,
+            duration: String?,
+            status: AssistantStepStatus,
+            kind: AssistantStepKind
+        )
     }
 
     @ViewBuilder
@@ -1108,8 +1120,8 @@ struct MessageBubbleView: View {
                     switch block {
                     case .plain(let plain):
                         selectableTextContent(plain, streamingTextAnimated: streamingTextAnimated)
-                    case .step(let title, let duration, let status):
-                        assistantStepChip(title: title, duration: duration, status: status)
+                    case .step(let title, let duration, let status, let kind):
+                        assistantStepChip(title: title, duration: duration, status: status, kind: kind)
                     }
                 }
             }
@@ -1144,7 +1156,14 @@ struct MessageBubbleView: View {
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             if let parsed = parseAssistantStepLine(trimmed) {
                 flushPlainBuffer()
-                output.append(.step(title: parsed.title, duration: parsed.duration, status: parsed.status))
+                output.append(
+                    .step(
+                        title: parsed.title,
+                        duration: parsed.duration,
+                        status: parsed.status,
+                        kind: parsed.kind
+                    )
+                )
             } else {
                 plainBuffer.append(line)
             }
@@ -1154,14 +1173,21 @@ struct MessageBubbleView: View {
         return output.isEmpty ? [.plain(text)] : output
     }
 
-    private func parseAssistantStepLine(_ line: String) -> (title: String, duration: String?, status: AssistantStepStatus)? {
+    private func parseAssistantStepLine(
+        _ line: String
+    ) -> (title: String, duration: String?, status: AssistantStepStatus, kind: AssistantStepKind)? {
         guard !line.isEmpty else { return nil }
 
         let duration: String? = {
-            guard let range = line.range(of: #"\s([0-9]+(?:\.[0-9]+)?(?:ms|s|m))$"#, options: .regularExpression) else {
+            guard let range = line.range(
+                of: #"\s\(?([0-9]+(?:\.[0-9]+)?(?:ms|s|m))\)?$"#,
+                options: .regularExpression
+            ) else {
                 return nil
             }
-            let value = line[range].trimmingCharacters(in: .whitespacesAndNewlines)
+            let value = line[range]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "()"))
             return value.isEmpty ? nil : value
         }()
 
@@ -1177,48 +1203,111 @@ struct MessageBubbleView: View {
         guard !normalizedTitle.isEmpty else { return nil }
 
         let lowered = normalizedTitle.lowercased()
-        let looksLikeStep = duration != nil
-            || lowered.hasPrefix("创建")
-            || lowered.hasPrefix("生成")
-            || lowered.hasPrefix("安装")
-            || lowered.hasPrefix("运行")
-            || lowered.hasPrefix("查看")
-            || lowered.hasPrefix("写入")
-            || lowered.hasPrefix("执行")
-            || lowered.hasPrefix("读取")
-            || lowered.contains("脚本")
-            || lowered.contains("依赖")
-            || lowered.contains("result")
+        let prefixMarkers = [
+            "已运行", "运行", "执行", "已执行",
+            "构建", "编译", "测试", "检查", "安装",
+            "写入", "读取", "查看", "编辑", "修改",
+            "创建", "生成", "回忆", "记录",
+            "正在", "处理中", "引导对话", "已处理", "已编辑"
+        ]
+        let keywordMarkers = [
+            "shell", "terminal", "cmake", "g++", "clang", "ctest", "cargo", "npm", "pnpm", "pip", "gradle", "maven",
+            "脚本", "依赖", "result", "命令", "源码", "文件", "memory", "readme", "main",
+            "编译", "构建", "测试", "运行", "写入", "读取", "查看", "编辑", "修改", "回忆", "记录", "改为"
+        ]
+        let hasPrefixMarker = prefixMarkers.contains(where: { lowered.hasPrefix($0) })
+        let hasKeywordMarker = keywordMarkers.contains(where: { lowered.contains($0) })
+        let looksLikeStep = duration != nil || hasPrefixMarker || (hasKeywordMarker && normalizedTitle.count <= 60)
         guard looksLikeStep else { return nil }
 
         let status: AssistantStepStatus = {
-            if normalizedTitle.contains("失败") || normalizedTitle.contains("错误") || line.contains("❌") {
+            if normalizedTitle.contains("失败")
+                || normalizedTitle.contains("错误")
+                || lowered.contains("error")
+                || lowered.contains("failed")
+                || lowered.contains("exit code")
+                || line.contains("❌") {
                 return .error
+            }
+            if normalizedTitle.contains("正在")
+                || normalizedTitle.contains("处理中")
+                || lowered.contains("running")
+                || lowered.contains("in progress")
+                || lowered.contains("reconnecting")
+                || normalizedTitle.contains("重试")
+                || normalizedTitle.contains("等待") {
+                return .running
             }
             if normalizedTitle.contains("完成")
                 || normalizedTitle.contains("成功")
                 || line.contains("✅")
-                || line.contains("✔") {
+                || line.contains("✔")
+                || lowered.hasPrefix("已")
+                || lowered.contains("done") {
                 return .success
-            }
-            if normalizedTitle.contains("正在") || normalizedTitle.contains("中…") || normalizedTitle.contains("中...") {
-                return .running
             }
             return .neutral
         }()
 
-        return (normalizedTitle, duration, status)
+        let kind: AssistantStepKind = {
+            if lowered.contains("回忆") || lowered.contains("memory") {
+                return .memory
+            }
+
+            if lowered.contains("运行")
+                || lowered.contains("执行")
+                || lowered.contains("构建")
+                || lowered.contains("编译")
+                || lowered.contains("测试")
+                || lowered.contains("安装")
+                || lowered.contains("命令")
+                || lowered.contains("shell")
+                || lowered.contains("terminal")
+                || lowered.contains("cmake")
+                || lowered.contains("g++")
+                || lowered.contains("clang")
+                || lowered.contains("cargo")
+                || lowered.contains("ctest")
+                || lowered.contains("npm")
+                || lowered.contains("pip")
+                || lowered.contains("gradle")
+                || lowered.contains("maven") {
+                return .command
+            }
+
+            if lowered.contains("写入")
+                || lowered.contains("读取")
+                || lowered.contains("查看")
+                || lowered.contains("编辑")
+                || lowered.contains("修改")
+                || lowered.contains("文件")
+                || lowered.contains("源码")
+                || lowered.contains("配置")
+                || lowered.contains("文档") {
+                return .file
+            }
+
+            return .generic
+        }()
+
+        return (normalizedTitle, duration, status, kind)
     }
 
     private func assistantStepChip(
         title: String,
         duration: String?,
-        status: AssistantStepStatus
+        status: AssistantStepStatus,
+        kind: AssistantStepKind
     ) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: stepIconName(for: title))
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(stepIconColor(status))
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(stepIconBadgeFill(kind: kind, status: status))
+                .frame(width: 22, height: 22)
+                .overlay(
+                    Image(systemName: stepIconName(for: title, kind: kind))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(stepIconColor(kind: kind, status: status))
+                )
             Text(title)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.primary)
@@ -1238,13 +1327,30 @@ struct MessageBubbleView: View {
         )
         .overlay(
             Capsule(style: .continuous)
-                .stroke(stepBorderColor(status), lineWidth: 1)
+                .stroke(stepBorderColor(status), lineWidth: 0.9)
         )
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func stepIconName(for title: String) -> String {
+    private func stepIconName(for title: String, kind: AssistantStepKind) -> String {
         let lowered = title.lowercased()
+        switch kind {
+        case .memory:
+            return "brain.head.profile"
+        case .command:
+            return "terminal"
+        case .file:
+            if lowered.contains("查看") || lowered.contains("读取") {
+                return "doc.text.magnifyingglass"
+            }
+            if lowered.contains("编辑") || lowered.contains("修改") {
+                return "square.and.pencil"
+            }
+            return "doc.fill"
+        case .generic:
+            break
+        }
+
         if lowered.contains("安装") || lowered.contains("apk") || lowered.contains("pip") {
             return "terminal.fill"
         }
@@ -1260,17 +1366,36 @@ struct MessageBubbleView: View {
         return "doc.fill"
     }
 
-    private func stepIconColor(_ status: AssistantStepStatus) -> Color {
-        switch status {
-        case .neutral:
-            return Color.green
-        case .running:
-            return Color.orange
-        case .success:
-            return Color.green
-        case .error:
+    private func stepIconColor(kind: AssistantStepKind, status: AssistantStepStatus) -> Color {
+        if status == .error {
             return Color.red
         }
+        if status == .running {
+            return Color.orange
+        }
+        switch kind {
+        case .command:
+            return Color.red
+        case .file, .memory, .generic:
+            return Color.green
+        }
+    }
+
+    private func stepIconBadgeFill(kind: AssistantStepKind, status: AssistantStepStatus) -> Color {
+        let base: Color
+        switch kind {
+        case .command:
+            base = .red
+        case .file, .memory, .generic:
+            base = .green
+        }
+        if status == .error {
+            return Color.red.opacity(0.12)
+        }
+        if status == .running {
+            return Color.orange.opacity(0.16)
+        }
+        return base.opacity(colorScheme == .dark ? 0.16 : 0.12)
     }
 
     private func stepBorderColor(_ status: AssistantStepStatus) -> Color {
@@ -1294,7 +1419,10 @@ struct MessageBubbleView: View {
             linkColor: UIColor.secondaryLabel,
             font: chatUIFont,
             renderMarkdown: false,
-            streamingAnimated: streamingTextAnimated
+            streamingAnimated: streamingTextAnimated,
+            onFileLinkTap: { path in
+                openCodeViewerForLinkedPath(path)
+            }
         )
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -1597,6 +1725,44 @@ struct MessageBubbleView: View {
             entries: entries,
             initialIndex: initialIndex
         )
+    }
+
+    private func openCodeViewerForLinkedPath(_ rawPath: String) {
+        let normalizedPath = rawPath
+            .replacingOccurrences(of: "\\", with: "/")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedPath.isEmpty else { return }
+
+        let entries = buildCodeViewerEntries(
+            fallbackTitle: "代码",
+            fallbackLanguage: nil,
+            fallbackContent: ""
+        )
+        guard !entries.isEmpty else {
+            feedback(.light, "当前没有可查看的项目代码")
+            return
+        }
+
+        let loweredTarget = normalizedPath.lowercased()
+        let index = entries.firstIndex(where: { entry in
+            let loweredName = entry.name
+                .replacingOccurrences(of: "\\", with: "/")
+                .lowercased()
+            return loweredName == loweredTarget
+                || loweredName.hasSuffix("/\(loweredTarget)")
+                || loweredTarget.hasSuffix("/\(loweredName)")
+        }) ?? 0
+
+        activeCodeViewer = CodeViewerPayload(
+            title: "项目代码",
+            entries: entries,
+            initialIndex: index
+        )
+
+        if index == 0,
+           entries.first?.name.caseInsensitiveCompare(normalizedPath) != .orderedSame {
+            feedback(.light, "未找到 \(normalizedPath)，已打开项目代码列表")
+        }
     }
 
     private func buildCodeViewerEntries(

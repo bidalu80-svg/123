@@ -40,7 +40,12 @@ struct ChatRequestBuilder {
     4) 语言不限：可生成 Python、Java、Go、Rust、Node.js/TypeScript、Swift、C/C++、PHP、Shell、SQL、配置文件等。
     5) 若用户未指定技术栈，先做合理技术决策，给出最小可运行结构（含必要入口文件和配置）。
     6) 若用户明确要求网页/前端项目，继续按网页最佳实践输出（例如 `index.html`、`styles.css`、`script.js` 或框架结构）。
-    7) 除非用户明确要求解释，尽量以“简短说明 + 完整文件输出”为主。
+    7) 所有文件必须“连接起来”：导入/引用/包含路径必须正确（例如 HTML 引 CSS/JS、C/C++ include 头文件、Python 包导入、Node/Java/Rust 模块引用、测试文件引用主模块）。
+    8) 必须补齐可运行所需的构建与依赖文件（如 `package.json`、`requirements.txt`、`Cargo.toml`、`go.mod`、`CMakeLists.txt`、`pom.xml`、`build.gradle` 等）。
+    9) 回复末尾追加“终端运行”小节，给出最小可执行命令链（安装依赖 -> 构建 -> 运行 -> 测试），命令需与输出文件严格一致。
+    10) 若某语言在当前环境常见坑较多，先在 README 写清环境要求与版本，再给命令。
+    11) 输出时尽量给出简短步骤日志（每行一个动作，如“写入 src/main.cpp”“构建并运行测试”），方便前端渲染进度胶囊。
+    12) 除非用户明确要求解释，尽量以“简短说明 + 完整文件输出”为主。
     """
     private static let strictCodeOnlySystemPrompt = """
     当用户明确提出“只输出代码、不输出解释、保持逻辑不变、自动修复格式”时，必须严格执行：
@@ -81,7 +86,7 @@ struct ChatRequestBuilder {
             message: message,
             realtimeSystemContext: realtimeSystemContext,
             memorySystemContext: memorySystemContext,
-            frontendAutoBuildEnabled: config.frontendAutoBuildEnabled,
+            frontendAutoBuildEnabled: true,
             enabledBuiltinSkillIDs: config.enabledBuiltinSkillIDs,
             customBuiltinSkillPrompts: config.customBuiltinSkillPrompts
         )
@@ -189,7 +194,7 @@ struct ChatRequestBuilder {
         guard !raw.isEmpty else { return false }
         if containsNoFileDirective(raw) { return false }
 
-        let directMarkers = [
+        let intentMarkers = [
             "生成项目",
             "创建项目",
             "项目结构",
@@ -197,35 +202,97 @@ struct ChatRequestBuilder {
             "完整项目",
             "完整工程",
             "搭建项目",
+            "初始化项目",
+            "初始化工程",
+            "脚手架",
+            "仓库结构",
+            "目录结构",
+            "模块划分",
+            "多文件",
+            "多模块",
             "生成代码文件",
             "输出文件结构",
             "按[[file:",
             "写入latest",
             "自动落盘",
+            "服务端项目",
+            "后端项目",
+            "api项目",
+            "命令行工具",
+            "cli工具",
+            "sdk项目",
+            "库项目",
             "project",
             "codebase",
             "scaffold",
             "boilerplate",
             "starter template",
+            "multi module",
+            "repository structure",
+            "directory structure",
+            "backend project",
+            "api service",
+            "cli project",
+            "library project",
+            "sdk project",
             "generate project",
             "create project",
             "build project",
             "multi-file",
             "repo structure"
         ]
-        if directMarkers.contains(where: { raw.contains($0) }) {
+        if intentMarkers.contains(where: { raw.contains($0) }) {
+            return true
+        }
+
+        if containsLanguageProjectIntent(raw) {
             return true
         }
 
         if raw.range(
-            of: #"(做|写|搭|建|生成|创建|开发|搞)(一个|个|套)?[^\n]{0,24}(网站|网页|页面|项目|前端|应用|app|demo|登录页|注册页|后台|管理系统|小程序)"#,
+            of: #"(做|写|搭|建|生成|创建|开发|搞|初始化)(一个|个|套)?[^\n]{0,28}(网站|网页|页面|项目|前端|应用|app|demo|登录页|注册页|后台|管理系统|小程序|服务|接口|api|后端|脚手架|命令行|cli|工具|sdk|库|package|模块|机器人|爬虫|微服务)"#,
             options: .regularExpression
         ) != nil {
             return true
         }
 
         if raw.range(
-            of: #"(网站|网页|页面|项目|前端|应用|app|demo|登录页|注册页|后台|管理系统|小程序)[^\n]{0,16}(做|写|搭|建|生成|创建|开发|搞)"#,
+            of: #"(网站|网页|页面|项目|前端|应用|app|demo|登录页|注册页|后台|管理系统|小程序|服务|接口|api|后端|脚手架|命令行|cli|工具|sdk|库|package|模块|机器人|爬虫|微服务)[^\n]{0,20}(做|写|搭|建|生成|创建|开发|搞|初始化)"#,
+            options: .regularExpression
+        ) != nil {
+            return true
+        }
+
+        return false
+    }
+
+    private static func containsLanguageProjectIntent(_ raw: String) -> Bool {
+        let cnLanguages = [
+            "python", "py", "java", "kotlin", "swift", "go", "golang", "rust",
+            "c#", "csharp", "c++", "cpp", "c语言", "node", "nodejs", "typescript",
+            "javascript", "js", "php", "ruby", "scala", "dart", "lua", "sql"
+        ]
+        let cnProjectNouns = [
+            "项目", "工程", "脚手架", "模板", "服务", "后端", "接口", "api",
+            "命令行", "cli", "工具", "sdk", "库", "模块", "包", "微服务", "机器人", "爬虫"
+        ]
+
+        for language in cnLanguages {
+            for noun in cnProjectNouns {
+                if raw.contains("\(language)\(noun)") || raw.contains("\(noun)\(language)") {
+                    return true
+                }
+            }
+        }
+
+        if raw.range(
+            of: #"\b(rust|go|golang|java|kotlin|swift|python|php|ruby|scala|dart|lua|typescript|javascript|node|nodejs|csharp|c#|cpp|c\+\+)\b[^\n]{0,24}\b(project|service|backend|api|cli|tool|sdk|library|package|scaffold|template|boilerplate)\b"#,
+            options: .regularExpression
+        ) != nil {
+            return true
+        }
+        if raw.range(
+            of: #"\b(project|service|backend|api|cli|tool|sdk|library|package|scaffold|template|boilerplate)\b[^\n]{0,24}\b(rust|go|golang|java|kotlin|swift|python|php|ruby|scala|dart|lua|typescript|javascript|node|nodejs|csharp|c#|cpp|c\+\+)\b"#,
             options: .regularExpression
         ) != nil {
             return true
@@ -416,7 +483,7 @@ struct ChatRequestBuilder {
             message: message,
             realtimeSystemContext: realtimeSystemContext,
             memorySystemContext: memorySystemContext,
-            frontendAutoBuildEnabled: config.frontendAutoBuildEnabled,
+            frontendAutoBuildEnabled: true,
             enabledBuiltinSkillIDs: config.enabledBuiltinSkillIDs,
             customBuiltinSkillPrompts: config.customBuiltinSkillPrompts
         )

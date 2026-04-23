@@ -304,7 +304,7 @@ struct ChatConfig: Codable, Equatable {
         imageGenerationSize: "1024x1024",
         timeout: 30,
         streamEnabled: true,
-        frontendAutoBuildEnabled: false,
+        frontendAutoBuildEnabled: true,
         themeMode: .system,
         codeThemeMode: .followApp,
         realtimeContextEnabled: false,
@@ -339,7 +339,7 @@ struct ChatConfig: Codable, Equatable {
         imageGenerationSize: String = "1024x1024",
         timeout: Double,
         streamEnabled: Bool,
-        frontendAutoBuildEnabled: Bool = false,
+        frontendAutoBuildEnabled: Bool = true,
         themeMode: AppThemeMode = .system,
         codeThemeMode: CodeThemeMode = .followApp,
         realtimeContextEnabled: Bool = false,
@@ -372,7 +372,8 @@ struct ChatConfig: Codable, Equatable {
         self.imageGenerationSize = imageGenerationSize
         self.timeout = timeout
         self.streamEnabled = streamEnabled
-        self.frontendAutoBuildEnabled = frontendAutoBuildEnabled
+        _ = frontendAutoBuildEnabled
+        self.frontendAutoBuildEnabled = true
         self.themeMode = themeMode
         self.codeThemeMode = codeThemeMode
         self.realtimeContextEnabled = realtimeContextEnabled
@@ -408,7 +409,7 @@ struct ChatConfig: Codable, Equatable {
         imageGenerationSize = try c.decodeIfPresent(String.self, forKey: .imageGenerationSize) ?? "1024x1024"
         timeout = try c.decode(Double.self, forKey: .timeout)
         streamEnabled = try c.decode(Bool.self, forKey: .streamEnabled)
-        frontendAutoBuildEnabled = try c.decodeIfPresent(Bool.self, forKey: .frontendAutoBuildEnabled) ?? false
+        frontendAutoBuildEnabled = true
         themeMode = try c.decodeIfPresent(AppThemeMode.self, forKey: .themeMode) ?? .system
         codeThemeMode = try c.decodeIfPresent(CodeThemeMode.self, forKey: .codeThemeMode) ?? .followApp
         realtimeContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .realtimeContextEnabled) ?? false
@@ -700,7 +701,7 @@ enum ChatConfigStore {
                 : config.imageGenerationSize.trimmingCharacters(in: .whitespacesAndNewlines),
             timeout: min(max(config.timeout, 5), 120),
             streamEnabled: config.streamEnabled,
-            frontendAutoBuildEnabled: config.frontendAutoBuildEnabled,
+            frontendAutoBuildEnabled: true,
             themeMode: config.themeMode,
             codeThemeMode: config.codeThemeMode,
             realtimeContextEnabled: config.realtimeContextEnabled,

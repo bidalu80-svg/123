@@ -8,11 +8,26 @@ struct SelectableLinkTextView: UIViewRepresentable {
     var font: UIFont = UIFont(name: "PingFangSC-Regular", size: 15.5) ?? .systemFont(ofSize: 15.5, weight: .regular)
     var renderMarkdown: Bool = false
     var streamingAnimated: Bool = false
+    var onFileLinkTap: ((String) -> Void)? = nil
     private static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
     private static let markdownRenderQueue = DispatchQueue(label: "chatapp.markdown.render", qos: .userInitiated)
+    private static let fileLinkScheme = "iexa-file"
+    private static let projectPathRegex = try? NSRegularExpression(
+        pattern: #"(?:^|[\s\(\[<"'`])((?:[A-Za-z0-9._\-]+/)*[A-Za-z0-9._\-]+\.[A-Za-z0-9_+\-]{1,12})(?=$|[\s\)\]>,:;"'`])"#
+    )
+    private static let pathLikeExtensions: Set<String> = [
+        "txt", "md", "json", "yaml", "yml", "toml", "ini", "cfg", "conf",
+        "xml", "html", "css", "scss", "less", "js", "mjs", "cjs", "ts", "tsx", "jsx",
+        "py", "swift", "go", "rs", "java", "kt", "kts", "c", "h", "hpp", "hh", "cc", "cpp", "cxx",
+        "cs", "php", "rb", "lua", "sql", "sh", "bash", "zsh", "ps1", "dockerfile", "makefile", "gradle", "properties", "lock"
+    ]
+    private static let pathLikeFileNames: Set<String> = [
+        "dockerfile", "makefile", "cmakelists.txt", "readme", "readme.md", "package.json",
+        "requirements.txt", "pyproject.toml", "cargo.toml", "go.mod", "pom.xml", "build.gradle", "build.gradle.kts"
+    ]
 
     func makeCoordinator() -> Coordinator {
-        Coordinator()
+        Coordinator(onFileLinkTap: onFileLinkTap)
     }
 
     func makeUIView(context: Context) -> UITextView {
@@ -43,6 +58,7 @@ struct SelectableLinkTextView: UIViewRepresentable {
 
     func updateUIView(_ uiView: UITextView, context: Context) {
         let coordinator = context.coordinator
+        coordinator.onFileLinkTap = onFileLinkTap
         let shouldRebuildText =
             coordinator.lastText != text
             || coordinator.lastFontPointSize != font.pointSize
@@ -157,6 +173,11 @@ struct SelectableLinkTextView: UIViewRepresentable {
                             )
                         }
                     }
+                    Self.addProjectPathLinks(
+                        to: attributed,
+                        sourceText: text,
+                        linkColor: linkColor
+                    )
                     uiView.attributedText = attributed
                 }
             } else {
@@ -181,6 +202,11 @@ struct SelectableLinkTextView: UIViewRepresentable {
                                 )
                             }
                         }
+                        Self.addProjectPathLinks(
+                            to: appended,
+                            sourceText: suffix,
+                            linkColor: linkColor
+                        )
                         uiView.textStorage.append(appended)
                     }
                 }
@@ -260,6 +286,12 @@ struct SelectableLinkTextView: UIViewRepresentable {
         private var lastMeasuredHeight: CGFloat = 0
         private var lastMeasuredTextCount: Int = 0
         private var lastMeasuredLineBreakCount: Int = 0
+        var onFileLinkTap: ((String) -> Void)?
+
+        init(onFileLinkTap: ((String) -> Void)?) {
+            self.onFileLinkTap = onFileLinkTap
+            super.init()
+        }
 
         deinit {
             stopStreamingAnimation(clearPending: true)
@@ -271,6 +303,10 @@ struct SelectableLinkTextView: UIViewRepresentable {
             in characterRange: NSRange,
             interaction: UITextItemInteraction
         ) -> Bool {
+            if let filePath = SelectableLinkTextView.filePath(fromProjectLink: URL) {
+                onFileLinkTap?(filePath)
+                return false
+            }
             if interaction == .invokeDefaultAction {
                 UIApplication.shared.open(URL)
                 return false
@@ -534,14 +570,107 @@ struct SelectableLinkTextView: UIViewRepresentable {
                         )
                     }
                 }
+                Self.addProjectPathLinks(
+                    to: output,
+                    sourceText: output.string,
+                    linkColor: linkColor
+                )
 
                 return output
             } catch {
-                return NSAttributedString(string: trimmed, attributes: fallbackAttributes)
+                let fallback = NSMutableAttributedString(string: trimmed, attributes: fallbackAttributes)
+                Self.addProjectPathLinks(
+                    to: fallback,
+                    sourceText: trimmed,
+                    linkColor: linkColor
+                )
+                return fallback
             }
         }
 
-        return NSAttributedString(string: trimmed, attributes: fallbackAttributes)
+        let fallback = NSMutableAttributedString(string: trimmed, attributes: fallbackAttributes)
+        Self.addProjectPathLinks(
+            to: fallback,
+            sourceText: trimmed,
+            linkColor: linkColor
+        )
+        return fallback
+    }
+
+    private static func addProjectPathLinks(
+        to attributed: NSMutableAttributedString,
+        sourceText: String,
+        linkColor: UIColor
+    ) {
+        guard !sourceText.isEmpty else { return }
+        guard let regex = projectPathRegex else { return }
+        let nsText = sourceText as NSString
+        let fullRange = NSRange(location: 0, length: nsText.length)
+
+        regex.enumerateMatches(in: sourceText, options: [], range: fullRange) { match, _, _ in
+            guard let match, match.numberOfRanges > 1 else { return }
+            let pathRange = match.range(at: 1)
+            guard pathRange.location != NSNotFound, pathRange.length > 0 else { return }
+            guard pathRange.location < attributed.length else { return }
+            guard attributed.attribute(.link, at: pathRange.location, effectiveRange: nil) == nil else { return }
+
+            let rawCandidate = nsText.substring(with: pathRange)
+            guard let normalizedPath = normalizedProjectPathCandidate(rawCandidate) else { return }
+            guard let encodedPath = normalizedPath.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+                  let url = URL(string: "\(fileLinkScheme)://open?path=\(encodedPath)") else {
+                return
+            }
+
+            attributed.addAttributes(
+                [
+                    .link: url,
+                    .foregroundColor: linkColor,
+                    .underlineStyle: NSUnderlineStyle.single.rawValue
+                ],
+                range: pathRange
+            )
+        }
+    }
+
+    private static func normalizedProjectPathCandidate(_ raw: String) -> String? {
+        var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        value = value.trimmingCharacters(in: CharacterSet(charactersIn: "\"'`()[]{}<>"))
+        value = value.replacingOccurrences(of: "\\", with: "/")
+        while value.hasPrefix("./") {
+            value.removeFirst(2)
+        }
+        guard !value.isEmpty else { return nil }
+        guard !value.hasPrefix("../"), !value.hasPrefix("/") else { return nil }
+        guard !value.contains("://") else { return nil }
+        guard value.range(of: #"^[A-Za-z0-9._/\-]+$"#, options: .regularExpression) != nil else { return nil }
+
+        let lowered = value.lowercased()
+        if pathLikeFileNames.contains(lowered) {
+            return value
+        }
+
+        let fileName = (lowered as NSString).lastPathComponent
+        if pathLikeFileNames.contains(fileName) {
+            return value
+        }
+
+        guard let dot = fileName.lastIndex(of: ".") else { return nil }
+        let ext = String(fileName[fileName.index(after: dot)...])
+        guard pathLikeExtensions.contains(ext) else { return nil }
+        return value
+    }
+
+    private static func filePath(fromProjectLink url: URL) -> String? {
+        guard url.scheme?.lowercased() == fileLinkScheme else { return nil }
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let path = components.queryItems?.first(where: { $0.name == "path" })?.value else {
+            return nil
+        }
+
+        let normalized = path
+            .replacingOccurrences(of: "\\", with: "/")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalized.isEmpty ? nil : normalized
     }
 
     private static func applyHeadingTypography(

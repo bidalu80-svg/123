@@ -1257,7 +1257,7 @@ final class ChatViewModel: ObservableObject {
                 : input.imageGenerationSize.trimmingCharacters(in: .whitespacesAndNewlines),
             timeout: min(max(input.timeout, 5), 120),
             streamEnabled: input.streamEnabled,
-            frontendAutoBuildEnabled: input.frontendAutoBuildEnabled,
+            frontendAutoBuildEnabled: true,
             themeMode: input.themeMode,
             codeThemeMode: input.codeThemeMode,
             realtimeContextEnabled: input.realtimeContextEnabled,

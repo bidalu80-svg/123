@@ -134,10 +134,7 @@ struct SettingsScreen: View {
 
             Section("请求选项") {
                 Toggle("启用流式输出", isOn: $viewModel.config.streamEnabled)
-                Toggle("项目自动生成模式（多语言）", isOn: $viewModel.config.frontendAutoBuildEnabled)
-                Text(viewModel.config.frontendAutoBuildEnabled
-                    ? "开启后会注入项目生成提示词，并在助手回复完成后自动落盘到 latest。网页类项目会自动预览。"
-                    : "关闭后仅保留普通聊天，不自动生成本地项目文件。")
+                Text("项目代码模块已默认开启：无需手动开关，始终支持多语言项目文件生成与查看。")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 Toggle("启用消息音效（发送/回复完成）", isOn: $viewModel.config.soundEffectsEnabled)
@@ -358,7 +355,6 @@ struct SettingsScreen: View {
                 statusRow("当前接口", value: viewModel.config.endpointMode.title)
                 statusRow("当前模型", value: viewModel.config.model)
                 statusRow("流式模式", value: viewModel.config.streamEnabled ? "开启" : "关闭")
-                statusRow("项目自动生成", value: viewModel.config.frontendAutoBuildEnabled ? "开启" : "关闭")
                 statusRow("回复朗读", value: viewModel.config.replySpeechPlaybackEnabled ? "开启" : "关闭")
                 if viewModel.config.replySpeechPlaybackEnabled {
                     statusRow("朗读声线", value: viewModel.config.replySpeechVoicePreset.title)
