@@ -1393,7 +1393,7 @@ struct MessageBubbleView: View {
         }
         switch kind {
         case .command:
-            return Color.red
+            return Color.blue
         case .file, .memory, .generic:
             return Color.green
         }
@@ -1403,7 +1403,7 @@ struct MessageBubbleView: View {
         let base: Color
         switch kind {
         case .command:
-            base = .red
+            base = .blue
         case .file, .memory, .generic:
             base = .green
         }

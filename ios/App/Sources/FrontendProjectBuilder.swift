@@ -83,27 +83,56 @@ enum FrontendProjectBuilder {
         ".gitignore", ".gitattributes", ".editorconfig", ".env", ".env.example"
     ]
     private static let latestEntryPointerFileName = ".iexa-latest-entry"
+    private static let canGenerateCacheLimit = 64
+    private static let progressSnapshotCacheLimit = 36
+    private static let parsedFilesCacheLimit = 6
+    private enum ProgressSnapshotCacheValue {
+        case some(ChatProgressSnapshot)
+        case none
+    }
+    private static var canGenerateCache: [UUID: Bool] = [:]
+    private static var canGenerateCacheOrder: [UUID] = []
+    private static var progressSnapshotCache: [UUID: ProgressSnapshotCacheValue] = [:]
+    private static var progressSnapshotCacheOrder: [UUID] = []
+    private static var parsedFilesCache: [UUID: [ParsedWebFile]] = [:]
+    private static var parsedFilesCacheOrder: [UUID] = []
 
     static func canGenerateProject(from message: ChatMessage) -> Bool {
+        if !message.isStreaming, let cached = canGenerateCache[message.id] {
+            return cached
+        }
+
+        let canGenerate: Bool
         if message.fileAttachments.contains(where: {
             $0.binaryBase64 == nil
                 && sanitizeRelativePath($0.fileName) != nil
                 && !$0.textContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }) {
-            return true
+            canGenerate = true
+        } else {
+            let text = message.content.replacingOccurrences(of: "\r\n", with: "\n")
+            canGenerate = containsTaggedFile(in: text)
+                || containsLikelyProjectFencedBlock(in: text)
+                || looksLikeHTML(text)
+                || looksLikePHP(text)
         }
 
-        let text = message.content.replacingOccurrences(of: "\r\n", with: "\n")
-        if containsTaggedFile(in: text) {
-            return true
+        if !message.isStreaming {
+            storeCanGenerateCache(canGenerate, for: message.id)
         }
-        if containsLikelyProjectFencedBlock(in: text) {
-            return true
-        }
-        return looksLikeHTML(text) || looksLikePHP(text)
+        return canGenerate
     }
 
     static func chatProgressSnapshot(from message: ChatMessage) -> ChatProgressSnapshot? {
+        if !message.isStreaming, let cached = progressSnapshotCache[message.id] {
+            switch cached {
+            case .some(let snapshot):
+                return snapshot
+            case .none:
+                return nil
+            }
+        }
+
         let text = message.content.replacingOccurrences(of: "\r\n", with: "\n")
         let parsed = extractProjectFiles(from: message)
         let normalizedPaths = parsed.map { $0.path.lowercased() }
@@ -129,9 +158,7 @@ enum FrontendProjectBuilder {
             || hasHTMLText
             || hasPHPText
             || hasProjectAttachment
-        guard shouldRenderProgress else { return nil }
-
-        return ChatProgressSnapshot(
+        let snapshot: ChatProgressSnapshot? = shouldRenderProgress ? ChatProgressSnapshot(
             detectedFileCount: uniquePaths.count,
             hasEntryHTML: hasHTMLPath
                 || hasPHPPath
@@ -139,7 +166,12 @@ enum FrontendProjectBuilder {
                 || hasPHPLikeFile
                 || hasHTMLText
                 || hasPHPText
-        )
+        ) : nil
+
+        if !message.isStreaming {
+            storeProgressSnapshotCache(snapshot, for: message.id)
+        }
+        return snapshot
     }
 
     static func projectsRootURL() -> URL? {
@@ -358,6 +390,10 @@ enum FrontendProjectBuilder {
     }
 
     private static func extractProjectFiles(from message: ChatMessage) -> [ParsedWebFile] {
+        if !message.isStreaming, let cached = parsedFilesCache[message.id] {
+            return cached
+        }
+
         var files: [ParsedWebFile] = []
 
         for attachment in message.fileAttachments {
@@ -373,8 +409,42 @@ enum FrontendProjectBuilder {
         let text = message.content.replacingOccurrences(of: "\r\n", with: "\n")
         files.append(contentsOf: parseTaggedFiles(in: text))
         files.append(contentsOf: parseFencedCodeBlocks(in: text))
+        let merged = mergeParsedFiles(files)
 
-        return mergeParsedFiles(files)
+        if !message.isStreaming {
+            storeParsedFilesCache(merged, for: message.id)
+        }
+        return merged
+    }
+
+    private static func storeCanGenerateCache(_ value: Bool, for messageID: UUID) {
+        canGenerateCache[messageID] = value
+        canGenerateCacheOrder.removeAll(where: { $0 == messageID })
+        canGenerateCacheOrder.append(messageID)
+        while canGenerateCacheOrder.count > canGenerateCacheLimit {
+            let removed = canGenerateCacheOrder.removeFirst()
+            canGenerateCache.removeValue(forKey: removed)
+        }
+    }
+
+    private static func storeProgressSnapshotCache(_ value: ChatProgressSnapshot?, for messageID: UUID) {
+        progressSnapshotCache[messageID] = value.map { .some($0) } ?? .none
+        progressSnapshotCacheOrder.removeAll(where: { $0 == messageID })
+        progressSnapshotCacheOrder.append(messageID)
+        while progressSnapshotCacheOrder.count > progressSnapshotCacheLimit {
+            let removed = progressSnapshotCacheOrder.removeFirst()
+            progressSnapshotCache.removeValue(forKey: removed)
+        }
+    }
+
+    private static func storeParsedFilesCache(_ value: [ParsedWebFile], for messageID: UUID) {
+        parsedFilesCache[messageID] = value
+        parsedFilesCacheOrder.removeAll(where: { $0 == messageID })
+        parsedFilesCacheOrder.append(messageID)
+        while parsedFilesCacheOrder.count > parsedFilesCacheLimit {
+            let removed = parsedFilesCacheOrder.removeFirst()
+            parsedFilesCache.removeValue(forKey: removed)
+        }
     }
 
     private static func parseTaggedFiles(in text: String) -> [ParsedWebFile] {

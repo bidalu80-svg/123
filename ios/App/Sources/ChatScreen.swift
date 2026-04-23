@@ -26,6 +26,7 @@ struct ChatScreen: View {
     private let autoSessionRotateViewportOverflowAbsoluteGap: CGFloat = 180
     private let autoSessionRotateViewportMinAssistantCharacters = 32_000
     private let autoSessionRotateViewportMinMessageCount = 20
+    private static let frontendOverlayCodeEntriesCacheLimit = 8
 
     private struct OutgoingEcho {
         let id: UUID
@@ -56,6 +57,14 @@ struct ChatScreen: View {
         let isCompleted: Bool
         let codeEntries: [CodeViewerEntry]
     }
+
+    private struct FrontendOverlayCodeEntriesCacheEntry {
+        let signature: String
+        let entries: [CodeViewerEntry]
+    }
+
+    private static var frontendOverlayCodeEntriesCache: [UUID: FrontendOverlayCodeEntriesCacheEntry] = [:]
+    private static var frontendOverlayCodeEntriesCacheOrder: [UUID] = []
 
     private let starterPrompts: [(title: String, subtitle: String)] = [
         ("写一个 Swift 网络请求封装", "支持 async/await 和错误重试"),
@@ -199,6 +208,8 @@ struct ChatScreen: View {
             frontendOverlayMessageID = nil
             frontendOverlayFileIndex = 0
             frontendOverlayManualSelectionUntil = .distantPast
+            Self.frontendOverlayCodeEntriesCache.removeAll()
+            Self.frontendOverlayCodeEntriesCacheOrder.removeAll()
             DispatchQueue.main.async {
                 seedAutoFrontendBuildCursor()
             }
@@ -208,6 +219,8 @@ struct ChatScreen: View {
             frontendOverlayMessageID = nil
             frontendOverlayFileIndex = 0
             frontendOverlayManualSelectionUntil = .distantPast
+            Self.frontendOverlayCodeEntriesCache.removeAll()
+            Self.frontendOverlayCodeEntriesCacheOrder.removeAll()
             DispatchQueue.main.async {
                 seedAutoFrontendBuildCursor()
             }
@@ -502,7 +515,33 @@ struct ChatScreen: View {
 
     private var headerModelName: String {
         let model = viewModel.config.model.trimmingCharacters(in: .whitespacesAndNewlines)
-        return model.isEmpty ? "未选择模型" : model.uppercased()
+        return model.isEmpty ? "未选择模型" : formatModelDisplayName(model)
+    }
+
+    private func formatModelDisplayName(_ raw: String) -> String {
+        let normalized = raw
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+        guard !normalized.isEmpty else { return raw }
+
+        let tokens = normalized
+            .split(whereSeparator: { $0.isWhitespace })
+            .map(String.init)
+        guard !tokens.isEmpty else { return raw }
+
+        return tokens.map { token in
+            let lowered = token.lowercased()
+            if lowered == "gpt" || lowered == "o1" || lowered == "o3" || lowered == "o4" {
+                return lowered.uppercased()
+            }
+            if lowered.allSatisfy({ $0.isNumber || $0 == "." }) {
+                return token
+            }
+            guard let first = lowered.first else { return token }
+            return String(first).uppercased() + String(lowered.dropFirst())
+        }
+        .joined(separator: " ")
     }
 
     private var headerModelVendorName: String {
@@ -1825,15 +1864,18 @@ struct ChatScreen: View {
         var masked = message
         masked.fileAttachments = []
         let stripped = stripFrontendProjectPayload(from: message.content)
+        if !stripped.isEmpty {
+            masked.content = stripped
+            return masked
+        }
+
         let codeEntries = frontendOverlayCodeEntries(from: message)
         let detectedCount = max(
             codeEntries.count,
             FrontendProjectBuilder.chatProgressSnapshot(from: message)?.detectedFileCount ?? 0
         )
 
-        if !stripped.isEmpty {
-            masked.content = stripped
-        } else if message.isStreaming {
+        if message.isStreaming {
             if let current = codeEntries.last {
                 masked.content = "正在后台生成项目文件（\(max(detectedCount, 1)) 个）· 当前：\(current.name)"
             } else {
@@ -2179,6 +2221,11 @@ struct ChatScreen: View {
     }
 
     private func frontendOverlayCodeEntries(from message: ChatMessage) -> [CodeViewerEntry] {
+        let signature = frontendOverlayCodeEntriesSignature(for: message)
+        if let cached = Self.frontendOverlayCodeEntriesCache[message.id], cached.signature == signature {
+            return cached.entries
+        }
+
         let segments = MessageContentParser.parse(message)
         var entries: [CodeViewerEntry] = []
         var snippetIndex = 1
@@ -2214,12 +2261,40 @@ struct ChatScreen: View {
         var seen = Set<String>()
         var deduped: [CodeViewerEntry] = []
         for entry in entries {
-            let key = "\(entry.name.lowercased())|\((entry.language ?? "").lowercased())|\(entry.content)"
+            let contentPrefixHash = String(entry.content.prefix(180)).hashValue
+            let contentSuffixHash = String(entry.content.suffix(180)).hashValue
+            let key = "\(entry.name.lowercased())|\((entry.language ?? "").lowercased())|\(entry.content.count)|\(contentPrefixHash)|\(contentSuffixHash)"
             if seen.insert(key).inserted {
                 deduped.append(entry)
             }
         }
+
+        Self.frontendOverlayCodeEntriesCache[message.id] = FrontendOverlayCodeEntriesCacheEntry(
+            signature: signature,
+            entries: deduped
+        )
+        Self.frontendOverlayCodeEntriesCacheOrder.removeAll(where: { $0 == message.id })
+        Self.frontendOverlayCodeEntriesCacheOrder.append(message.id)
+        while Self.frontendOverlayCodeEntriesCacheOrder.count > Self.frontendOverlayCodeEntriesCacheLimit {
+            let removedID = Self.frontendOverlayCodeEntriesCacheOrder.removeFirst()
+            Self.frontendOverlayCodeEntriesCache.removeValue(forKey: removedID)
+        }
+
         return deduped
+    }
+
+    private func frontendOverlayCodeEntriesSignature(for message: ChatMessage) -> String {
+        let content = message.content
+        let prefixHash = String(content.prefix(240)).hashValue
+        let suffixHash = String(content.suffix(240)).hashValue
+        return [
+            message.id.uuidString,
+            message.isStreaming ? "1" : "0",
+            String(content.count),
+            String(prefixHash),
+            String(suffixHash),
+            String(message.fileAttachments.count)
+        ].joined(separator: "|")
     }
 
     private func removeRenderTruncationMarkers(from text: String) -> String {
