@@ -117,7 +117,7 @@ final class StreamRenderer {
             stageAppendLocked(fetched)
         }
 
-        let delta = stageConsumeLocked(maxCharacters: configuration.maxCharactersPerFrame)
+        let delta = stageConsumeLocked(maxCharacters: dynamicFrameCharacterBudgetLocked())
         if !delta.isEmpty {
             onBackgroundBatch?(delta)
             DispatchQueue.main.async {
@@ -127,6 +127,24 @@ final class StreamRenderer {
 
         if inputCompleted && buffer.isEmpty && stagedCharacters == 0 {
             finishDrainLocked()
+        }
+    }
+
+    private func dynamicFrameCharacterBudgetLocked() -> Int {
+        let base = max(1, configuration.maxCharactersPerFrame)
+        switch stagedCharacters {
+        case 12_000...:
+            return min(420, base * 28)
+        case 6_000...:
+            return min(320, base * 18)
+        case 2_500...:
+            return min(220, base * 12)
+        case 900...:
+            return min(150, base * 8)
+        case 360...:
+            return min(96, base * 4)
+        default:
+            return base
         }
     }
 

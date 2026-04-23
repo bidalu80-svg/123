@@ -23,8 +23,8 @@ final class ChatViewModel: ObservableObject {
     }
 
     private final class ActiveStreamState {
-        private static let maxCharactersPerCommit = 24
-        private static let minimumCommitInterval: TimeInterval = 0.018
+        private static let maxCharactersPerCommit = 96
+        private static let minimumCommitInterval: TimeInterval = 0.055
 
         let messageID: UUID
         let target: StreamTargetContext
@@ -808,9 +808,9 @@ final class ChatViewModel: ObservableObject {
         let buffer = StreamBuffer(maxBufferedCharacters: 120_000)
         let state = ActiveStreamState(messageID: messageID, target: target, buffer: buffer)
         let isLowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
-        let refreshInterval: TimeInterval = isLowPowerMode ? 0.036 : 0.024
-        let maxCharactersPerFrame = isLowPowerMode ? 2 : 3
-        let maxCharactersFetchedPerTick = isLowPowerMode ? 280 : 420
+        let refreshInterval: TimeInterval = isLowPowerMode ? 0.072 : 0.048
+        let maxCharactersPerFrame = isLowPowerMode ? 8 : 14
+        let maxCharactersFetchedPerTick = isLowPowerMode ? 520 : 860
 
         let renderer = StreamRenderer(
             buffer: buffer,

@@ -791,8 +791,8 @@ struct MessageBubbleView: View {
 
     private func streamingDisplaySlice(from raw: String) -> (text: String, isTruncated: Bool) {
         let normalized = normalizedStreamingText(raw)
-        let hardLimit = 20_000
-        let tailLimit = 12_000
+        let hardLimit = 16_000
+        let tailLimit = 8_000
         guard normalized.count > hardLimit else {
             return (normalized, false)
         }
@@ -827,10 +827,14 @@ struct MessageBubbleView: View {
             return false
         }
 
-        // Route markdown-like content through parser immediately to hide control symbols sooner.
+        // Keep strict parsing for structural blocks.
         if text.contains("```") || text.contains("[[file:") { return false }
         if text.contains("|---") || text.contains("\n|") { return false }
         if text.contains("![](") || text.contains("data:image/") { return false }
+
+        // For long streaming text, skip markdown parsing to reduce per-frame layout work.
+        if text.count >= 2_400 { return true }
+
         if text.contains("**") || text.contains("__") || text.contains("`") { return false }
         if text.hasPrefix("#") || text.contains("\n#") { return false }
         if text.hasPrefix("- ") || text.contains("\n- ") { return false }
@@ -1494,13 +1498,17 @@ struct MessageBubbleView: View {
         } else {
             displayText = decoratedAssistantListText(text)
         }
+        let enableStreamingAnimation =
+            streamingTextAnimated
+            && displayText.count <= 3_500
+            && !ProcessInfo.processInfo.isLowPowerModeEnabled
         return SelectableLinkTextView(
             text: displayText,
             textColor: UIColor.label,
             linkColor: UIColor.secondaryLabel,
             font: chatUIFont,
             renderMarkdown: false,
-            streamingAnimated: streamingTextAnimated,
+            streamingAnimated: enableStreamingAnimation,
             onFileLinkTap: { path in
                 openCodeViewerForLinkedPath(path)
             }
