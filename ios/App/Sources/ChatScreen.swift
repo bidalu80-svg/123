@@ -17,6 +17,7 @@ struct ChatScreen: View {
     private let maxRenderedCharacters = 90_000
     private let maxSingleRenderedMessageChars = 28_000
     private let maxSingleRenderedCodeMessageChars = 65_000
+    private let maxSingleRenderedStreamingMessageChars = 8_000
     private let maxRenderedFilePreviewChars = 4_000
     private let autoSessionRotateMessageCount = 60
     private let autoSessionRotateCharacterCount = 100_000
@@ -2117,11 +2118,6 @@ struct ChatScreen: View {
     }
 
     private var shouldUseCodeViewportTailFollow: Bool {
-        guard let active = activeStreamingRenderedMessage else { return false }
-        let normalized = active.content.lowercased()
-        if normalized.contains("```") || normalized.contains("[[file:") {
-            return true
-        }
         return false
     }
 
@@ -2242,15 +2238,19 @@ struct ChatScreen: View {
         }
 
         let hasCodeLikePayload = safe.content.contains("```") || safe.content.contains("[[file:")
-        let singleMessageLimit = hasCodeLikePayload
-            ? maxSingleRenderedCodeMessageChars
-            : maxSingleRenderedMessageChars
+        let singleMessageLimit: Int
+        if preserveStreamingState {
+            singleMessageLimit = maxSingleRenderedStreamingMessageChars
+        } else {
+            singleMessageLimit = hasCodeLikePayload
+                ? maxSingleRenderedCodeMessageChars
+                : maxSingleRenderedMessageChars
+        }
 
         if safe.content.count > singleMessageLimit {
-            safe.content = clippedContentForRender(
-                safe.content,
-                limit: singleMessageLimit
-            )
+            safe.content = preserveStreamingState
+                ? clippedStreamingContentForRender(safe.content, limit: singleMessageLimit)
+                : clippedContentForRender(safe.content, limit: singleMessageLimit)
             if !preserveStreamingState {
                 safe.isStreaming = false
             }
@@ -2281,6 +2281,17 @@ struct ChatScreen: View {
         return clipped + "\n\n[该消息过长，已在聊天页截断显示。]"
     }
 
+    private func clippedStreamingContentForRender(_ raw: String, limit: Int) -> String {
+        guard raw.count > limit else { return raw }
+
+        let start = raw.index(raw.endIndex, offsetBy: -limit)
+        var clipped = String(raw[start...])
+        if let firstBreak = clipped.firstIndex(of: "\n"), firstBreak != clipped.startIndex {
+            clipped = String(clipped[firstBreak...])
+        }
+        return "[流式阶段仅渲染最新片段]\n\n" + clipped
+    }
+
     private func frontendProgressDisplayMessage(for message: ChatMessage) -> ChatMessage? {
         guard shouldHideFrontendCodeInChat else { return nil }
         guard message.role == .assistant else { return nil }
@@ -2300,19 +2311,18 @@ struct ChatScreen: View {
             return masked
         }
 
-        let codeEntries = frontendOverlayCodeEntriesForOverlay(from: message)
-        let detectedCount = max(
-            codeEntries.count,
-            FrontendProjectBuilder.chatProgressSnapshot(from: message)?.detectedFileCount ?? 0
-        )
-
         if message.isStreaming {
-            if let current = codeEntries.last {
-                masked.content = "正在后台生成项目文件（\(max(detectedCount, 1)) 个）· 当前：\(current.name)"
-            } else {
-                masked.content = "正在后台生成项目文件，请稍候…"
-            }
+            let detectedCount = max(
+                1,
+                FrontendProjectBuilder.chatProgressSnapshot(from: message)?.detectedFileCount ?? 0
+            )
+            masked.content = "正在后台生成项目文件（\(detectedCount) 个），为保证流畅度暂不展开代码预览…"
         } else {
+            let codeEntries = frontendOverlayCodeEntriesForOverlay(from: message)
+            let detectedCount = max(
+                codeEntries.count,
+                FrontendProjectBuilder.chatProgressSnapshot(from: message)?.detectedFileCount ?? 0
+            )
             let hasPreview = latestProjectHasPreviewEntry
             if let current = codeEntries.last {
                 masked.content = hasPreview
@@ -2870,7 +2880,7 @@ struct ChatScreen: View {
                 detectedFileCount: 0,
                 hasEntryHTML: false
             )
-        let codeEntries = frontendOverlayCodeEntriesForOverlay(from: assistant)
+        let codeEntries = assistant.isStreaming ? [] : frontendOverlayCodeEntriesForOverlay(from: assistant)
         let detectedFileCount = max(snapshot.detectedFileCount, codeEntries.count)
 
         let totalSteps = 4
@@ -4679,7 +4689,9 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             }
 
             let newStreamingSignature = streamingMessage.map {
-                "\($0.id.uuidString)|\($0.content.count)|\($0.imageAttachments.count)|\($0.videoAttachments.count)|\($0.fileAttachments.count)|\(codeThemeSignature)"
+                let headSample = String($0.content.prefix(96))
+                let tailSample = String($0.content.suffix(256))
+                return "\($0.id.uuidString)|\($0.content.count)|\(headSample)|\(tailSample)|\($0.imageAttachments.count)|\($0.videoAttachments.count)|\($0.fileAttachments.count)|\(codeThemeSignature)"
             }
             if let streamingMessage {
                 pendingStreamingHideWorkItem?.cancel()
