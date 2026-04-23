@@ -20,7 +20,9 @@ struct ChatScreen: View {
     private let autoSessionRotateMessageCount = 60
     private let autoSessionRotateCharacterCount = 100_000
     private let autoSessionRotateAssistantCharacterCount = 70_000
-    private let autoSessionRotateSingleAssistantCharacterCount = 22_000
+    private let autoSessionRotateSingleAssistantCharacterCount = 12_000
+    private let autoSessionRotateViewportOverflowRatio: CGFloat = 7.0
+    private let autoSessionRotateViewportOverflowAbsoluteGap: CGFloat = 220
 
     private struct OutgoingEcho {
         let id: UUID
@@ -153,6 +155,15 @@ struct ChatScreen: View {
         }
         .onChange(of: viewModel.isSending) { _, isSending in
             guard !isSending else { return }
+            maybeAutoRotateLongConversation(using: viewModel.messages)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                guard !viewModel.isSending else { return }
+                maybeAutoRotateLongConversation(using: viewModel.messages)
+            }
+        }
+        .onChange(of: transcriptMetrics) { _, metrics in
+            guard !viewModel.isSending else { return }
+            guard metrics.contentHeight > metrics.viewportHeight + 8 else { return }
             maybeAutoRotateLongConversation(using: viewModel.messages)
         }
         .onChange(of: viewModel.currentSessionID) { _, _ in
@@ -2168,6 +2179,7 @@ struct ChatScreen: View {
         autoRotatedSessionIDs.formIntersection(Set(viewModel.sessions.map(\.id)))
         guard !viewModel.isPrivateMode else { return }
         guard !viewModel.isSending else { return }
+        guard !transcriptMetrics.isUserInteracting else { return }
         guard !messages.isEmpty else { return }
         guard let latest = messages.last else { return }
         // Only rotate after an assistant reply is fully finished.
@@ -2182,11 +2194,21 @@ struct ChatScreen: View {
         let exceededByTotalCharacters = totalCharacters >= autoSessionRotateCharacterCount
         let exceededByAssistantCharacters = totalAssistantCharacters >= autoSessionRotateAssistantCharacterCount
         let exceededBySingleAssistantReply = latestAssistantCharacters >= autoSessionRotateSingleAssistantCharacterCount
+        let viewportHeight = max(1, transcriptMetrics.viewportHeight)
+        let contentHeight = max(viewportHeight, transcriptMetrics.contentHeight)
+        let viewportOverflowGap = max(0, contentHeight - viewportHeight)
+        let viewportOverflowRatio = contentHeight / viewportHeight
+        let exceededByViewportRatio = viewportOverflowRatio >= autoSessionRotateViewportOverflowRatio
+        let exceededByViewportGap = viewportOverflowGap >= autoSessionRotateViewportOverflowAbsoluteGap
+            && totalAssistantCharacters >= 30_000
+            && messages.count >= 24
+        let exceededByViewportOverflow = exceededByViewportRatio || exceededByViewportGap
 
         guard exceededByMessageCount
             || exceededByTotalCharacters
             || exceededByAssistantCharacters
-            || exceededBySingleAssistantReply else {
+            || exceededBySingleAssistantReply
+            || exceededByViewportOverflow else {
             return
         }
 
@@ -2198,6 +2220,9 @@ struct ChatScreen: View {
             viewModel.statusMessage = "助手内容累计过长，已自动开启新会话以保持流畅。旧会话仍可在侧栏查看。"
         } else if exceededByTotalCharacters {
             viewModel.statusMessage = "当前会话总内容过长，已自动开启新会话以保持流畅。旧会话仍可在侧栏查看。"
+        } else if exceededByViewportOverflow {
+            let ratioText = String(format: "%.1f", viewportOverflowRatio)
+            viewModel.statusMessage = "当前窗口内容高度约为视口 \(ratioText)x，已自动开启新会话以保证完整显示与流畅滑动。旧会话仍可在侧栏查看。"
         } else {
             viewModel.statusMessage = "当前会话超过 \(autoSessionRotateMessageCount) 条，已自动开启新会话以保持流畅。旧会话仍可在侧栏查看。"
         }
@@ -2527,6 +2552,9 @@ private struct ComposerHeightPreferenceKey: PreferenceKey {
 private struct ChatTranscriptMetrics: Equatable {
     var canScroll: Bool = false
     var isAtBottom: Bool = true
+    var contentHeight: CGFloat = 0
+    var viewportHeight: CGFloat = 0
+    var isUserInteracting: Bool = false
 }
 
 private struct ChatTranscriptCommand: Equatable {
@@ -2839,9 +2867,13 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             let bottomDistance = bottomOffsetY - scrollView.contentOffset.y
             let translationY = scrollView.panGestureRecognizer.translation(in: scrollView).y
             let isDraggingUp = scrollView.isDragging && translationY < -4
+            let isUserInteracting = scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating
             let metrics = ChatTranscriptMetrics(
                 canScroll: canScroll,
-                isAtBottom: !canScroll || (!isDraggingUp && bottomDistance <= 28)
+                isAtBottom: !canScroll || (!isDraggingUp && bottomDistance <= 28),
+                contentHeight: max(0, scrollView.contentSize.height),
+                viewportHeight: max(0, scrollView.bounds.height),
+                isUserInteracting: isUserInteracting
             )
 
             if metrics != lastReportedMetrics {
