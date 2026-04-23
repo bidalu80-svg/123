@@ -1525,6 +1525,10 @@ struct MessageBubbleView: View {
 
             let leading = String(line.prefix { $0 == " " || $0 == "\t" })
             let trimmedStart = String(line.dropFirst(leading.count))
+            if isLikelyFileTreeLine(trimmedStart) {
+                output.append(line)
+                continue
+            }
 
             if let markerRange = trimmedStart.range(
                 of: #"^\d+\s*[)\.、:：]\s+"#,
@@ -1552,6 +1556,21 @@ struct MessageBubbleView: View {
         }
 
         return output.joined(separator: "\n")
+    }
+
+    private func isLikelyFileTreeLine(_ raw: String) -> Bool {
+        let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !line.isEmpty else { return false }
+        if line.contains("├") || line.contains("└") || line.contains("│") {
+            return true
+        }
+        if line.contains("[[file:") || line.contains("[[endfile]]") {
+            return true
+        }
+        if line.range(of: #"^[A-Za-z0-9._/\-]+\s*/$"#, options: .regularExpression) != nil {
+            return true
+        }
+        return false
     }
 
     private func numberedListIcon(number: Int, lineIndex: Int) -> String {
@@ -1872,7 +1891,7 @@ struct MessageBubbleView: View {
         for segment in actionMessageStructuredSegments() {
             switch segment {
             case .file(let name, let language, let content):
-                let normalized = removingPreviewTruncationMarkers(from: content)
+                let normalized = normalizedCodeViewerContent(content)
                 guard !normalized.isEmpty else { continue }
                 entries.append(
                     CodeViewerEntry(
@@ -1882,7 +1901,7 @@ struct MessageBubbleView: View {
                     )
                 )
             case .code(let language, let content):
-                let normalized = removingPreviewTruncationMarkers(from: content)
+                let normalized = normalizedCodeViewerContent(content)
                 guard !normalized.isEmpty else { continue }
                 entries.append(
                     CodeViewerEntry(
@@ -1902,7 +1921,7 @@ struct MessageBubbleView: View {
             return deduped
         }
 
-        let normalizedFallback = removingPreviewTruncationMarkers(from: fallbackContent)
+        let normalizedFallback = normalizedCodeViewerContent(fallbackContent)
         guard !normalizedFallback.isEmpty else { return [] }
         return [
             CodeViewerEntry(
@@ -3012,6 +3031,52 @@ struct MessageBubbleView: View {
         return normalizedCandidate.hasPrefix(expectedPrefix)
     }
 
+    private func normalizedCodeViewerContent(_ text: String) -> String {
+        let cleaned = removingPreviewTruncationMarkers(from: text)
+        return unwrapSingleFencedCodeContentIfNeeded(cleaned)
+    }
+
+    private func unwrapSingleFencedCodeContentIfNeeded(_ raw: String) -> String {
+        let normalized = raw
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return "" }
+
+        let lines = normalized.components(separatedBy: "\n")
+        guard !lines.isEmpty else { return normalized }
+
+        let firstLine = lines[0].trimmingCharacters(in: .whitespacesAndNewlines)
+        let isTickFence = firstLine.hasPrefix("```")
+        let isWaveFence = firstLine.hasPrefix("~~~")
+        guard isTickFence || isWaveFence else { return normalized }
+
+        let closingPattern = isTickFence
+            ? #"^`{3,}\s*$"#
+            : #"^~{3,}\s*$"#
+        var closingIndex: Int?
+        if lines.count > 1 {
+            for index in stride(from: lines.count - 1, through: 1, by: -1) {
+                let candidate = lines[index].trimmingCharacters(in: .whitespacesAndNewlines)
+                if candidate.range(of: closingPattern, options: .regularExpression) != nil {
+                    closingIndex = index
+                    break
+                }
+            }
+        }
+
+        let contentLines: [String]
+        if let closingIndex, closingIndex > 0 {
+            contentLines = Array(lines[1..<closingIndex])
+        } else {
+            contentLines = Array(lines.dropFirst())
+        }
+
+        let content = contentLines
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return content.isEmpty ? normalized : content
+    }
+
     private func fileName(fromCodeTitle title: String) -> String? {
         let prefix = "FILE · "
         guard title.hasPrefix(prefix) else { return nil }
@@ -3020,10 +3085,38 @@ struct MessageBubbleView: View {
     }
 
     private func removingPreviewTruncationMarkers(from text: String) -> String {
-        text
-            .replacingOccurrences(of: "\n\n[附件预览过长，已截断显示。]", with: "")
-            .replacingOccurrences(of: "\n\n[该消息过长，已在聊天页截断显示。]", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        var normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
+        let hadTruncationMarker = normalized.contains("[附件预览过长，已截断显示。]")
+            || normalized.contains("[该消息过长，已在聊天页截断显示。]")
+
+        normalized = normalized.replacingOccurrences(
+            of: #"\s*\[(?:附件预览过长，已截断显示。|该消息过长，已在聊天页截断显示。)\]\s*"#,
+            with: "\n",
+            options: .regularExpression
+        )
+        normalized = normalized.replacingOccurrences(
+            of: #"\n{3,}"#,
+            with: "\n\n",
+            options: .regularExpression
+        )
+
+        if hadTruncationMarker {
+            normalized = normalized.replacingOccurrences(
+                of: #"\n(?:`{3,}|~{3,})\s*$"#,
+                with: "",
+                options: .regularExpression
+            )
+        }
+
+        // Guard against malformed trailing markdown fences like `` / ``` / ~~~
+        // that occasionally leak into viewer content.
+        normalized = normalized.replacingOccurrences(
+            of: #"(?:\n|\A)\s*[`~]{2,}\s*$"#,
+            with: "",
+            options: .regularExpression
+        )
+
+        return normalized.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func hasPreviewTruncationMarker(in text: String) -> Bool {

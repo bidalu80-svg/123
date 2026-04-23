@@ -192,8 +192,10 @@ struct ChatRequestBuilder {
         switch skill {
         case .skillCreator:
             let markers = [
-                "skill", "skill.md", "skills/",
-                "技能", "技能创建", "技能模板", "创建 skill", "更新 skill"
+                "skill", "sikll", "skil", "skill.md", "skills/", "skill-creator",
+                "builtin skill", "built-in skill", "skill creator",
+                "内置skill", "内置 skill", "内置技能",
+                "技能", "技能创建", "技能模板", "创建 skill", "更新 skill", "创建技能", "更新技能"
             ]
             return markers.contains(where: { text.contains($0) })
         }

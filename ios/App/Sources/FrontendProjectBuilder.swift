@@ -518,6 +518,7 @@ enum FrontendProjectBuilder {
             let descriptor = String(text[descriptorRange]).trimmingCharacters(in: .whitespacesAndNewlines)
             let codeContent = normalizeFileContent(String(text[contentRange]))
             guard !codeContent.isEmpty else { continue }
+            guard !containsTaggedFileMarker(codeContent) else { continue }
 
             let prefixStart = max(0, match.range.location - 260)
             let prefixLength = max(0, match.range.location - prefixStart)
@@ -872,6 +873,16 @@ enum FrontendProjectBuilder {
             }
 
             let existing = merged[normalizedPath] ?? ""
+            let existingHasMarker = containsTaggedFileMarker(existing)
+            let candidateHasMarker = containsTaggedFileMarker(normalizedContent)
+
+            if existingHasMarker != candidateHasMarker {
+                if !candidateHasMarker {
+                    merged[normalizedPath] = normalizedContent
+                }
+                continue
+            }
+
             if normalizedContent.count >= existing.count {
                 merged[normalizedPath] = normalizedContent
             }
@@ -1401,9 +1412,36 @@ enum FrontendProjectBuilder {
     }
 
     private static func normalizeFileContent(_ raw: String) -> String {
-        raw
+        let normalized = raw
             .replacingOccurrences(of: "\r\n", with: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        return removeLeakedTaggedFileMarkers(from: normalized)
+    }
+
+    private static func containsTaggedFileMarker(_ text: String) -> Bool {
+        let lowered = text.lowercased()
+        return lowered.contains("[[file:") || lowered.contains("[[endfile]]")
+    }
+
+    private static func removeLeakedTaggedFileMarkers(from raw: String) -> String {
+        var text = raw
+
+        text = text.replacingOccurrences(
+            of: #"(?is)\s*\[\[endfile\]\]\s*\[\[file:[^\]]+\]\]\s*"#,
+            with: "\n",
+            options: .regularExpression
+        )
+        text = text.replacingOccurrences(
+            of: #"(?im)^\s*\[\[(?:endfile|file:[^\]]+)\]\]\s*$"#,
+            with: "",
+            options: .regularExpression
+        )
+        text = text.replacingOccurrences(
+            of: #"\n{3,}"#,
+            with: "\n\n",
+            options: .regularExpression
+        )
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func unwrapSingleFencedTaggedFileContent(_ raw: String) -> String {

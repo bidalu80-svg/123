@@ -549,15 +549,32 @@ struct SettingsScreen: View {
 
         do {
             let html = try String(contentsOf: entryFileURL, encoding: .utf8)
+            let previewHTML = sanitizedFrontendPreviewHTML(html)
             latestPreviewPayload = LatestFrontendPreviewPayload(
                 title: "latest 预览 · \(entryFileURL.lastPathComponent)",
-                html: html,
+                html: previewHTML,
                 baseURL: FrontendProjectBuilder.latestProjectURL() ?? entryFileURL.deletingLastPathComponent(),
                 entryFileURL: entryFileURL
             )
         } catch {
             projectActionFeedback = "读取 latest 预览失败：\(error.localizedDescription)"
         }
+    }
+
+    private func sanitizedFrontendPreviewHTML(_ raw: String) -> String {
+        var html = raw
+        html = html.replacingOccurrences(
+            of: #"(?is)\s*\[\[endfile\]\]\s*\[\[file:[^\]]+\]\]\s*"#,
+            with: "\n",
+            options: .regularExpression
+        )
+        html = html.replacingOccurrences(
+            of: #"(?im)^\s*\[\[(?:endfile|file:[^\]]+)\]\]\s*$"#,
+            with: "",
+            options: .regularExpression
+        )
+        html = html.replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression)
+        return html.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func clearLatestProject() {

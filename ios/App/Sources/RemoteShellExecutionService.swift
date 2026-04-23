@@ -51,22 +51,16 @@ final class RemoteShellExecutionService {
         }
 
         let endpointText = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !endpointText.isEmpty, let url = URL(string: endpointText) else {
+        let endpointCandidates = shellEndpointCandidates(from: endpointText)
+        guard !endpointCandidates.isEmpty else {
             throw RemoteShellExecutionError.invalidURL
         }
 
-        var request = URLRequest(url: url, timeoutInterval: min(max(timeout, 5), 300))
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
         let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedKey.isEmpty {
-            request.setValue("Bearer \(trimmedKey)", forHTTPHeaderField: "Authorization")
-        }
-
+        let requestTimeout = min(max(timeout, 5), 300)
         var payload: [String: Any] = [
             "command": trimmedCommand,
-            "timeout": Int(min(max(timeout, 5), 300))
+            "timeout": Int(requestTimeout)
         ]
         if let workingDirectory {
             let cwd = workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -74,23 +68,76 @@ final class RemoteShellExecutionService {
                 payload["cwd"] = cwd
             }
         }
-        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        let requestBody = try JSONSerialization.data(withJSONObject: payload)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw RemoteShellExecutionError.invalidResponse("缺少 HTTP 响应头")
+        var notFoundEndpoints: [String] = []
+        var lastTransportError: Error?
+
+        for (index, candidateURL) in endpointCandidates.enumerated() {
+            var request = URLRequest(url: candidateURL, timeoutInterval: requestTimeout)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            if !trimmedKey.isEmpty {
+                request.setValue("Bearer \(trimmedKey)", forHTTPHeaderField: "Authorization")
+            }
+            request.httpBody = requestBody
+
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse else {
+                    throw RemoteShellExecutionError.invalidResponse("缺少 HTTP 响应头")
+                }
+
+                if (200...299).contains(http.statusCode) {
+                    guard !data.isEmpty else {
+                        throw RemoteShellExecutionError.noData
+                    }
+                    return try parseResult(data: data, command: trimmedCommand)
+                }
+
+                let candidateEndpoint = candidateURL.absoluteString
+                let message = parsedErrorMessage(
+                    from: data,
+                    endpoint: candidateEndpoint,
+                    status: http.statusCode
+                )
+
+                if http.statusCode == 404 {
+                    notFoundEndpoints.append(candidateEndpoint)
+                    if index < endpointCandidates.count - 1 {
+                        continue
+                    }
+                    let fallbackMessage = mergedNotFoundMessage(
+                        parsedMessage: message,
+                        attemptedEndpoints: notFoundEndpoints
+                    )
+                    throw RemoteShellExecutionError.httpError(status: 404, message: fallbackMessage)
+                }
+
+                throw RemoteShellExecutionError.httpError(status: http.statusCode, message: message)
+            } catch let error as RemoteShellExecutionError {
+                throw error
+            } catch {
+                lastTransportError = error
+                if shouldTryNextEndpoint(after: error), index < endpointCandidates.count - 1 {
+                    continue
+                }
+                throw error
+            }
         }
 
-        if !(200...299).contains(http.statusCode) {
-            let message = parsedErrorMessage(from: data)
-            throw RemoteShellExecutionError.httpError(status: http.statusCode, message: message)
+        if !notFoundEndpoints.isEmpty {
+            throw RemoteShellExecutionError.httpError(
+                status: 404,
+                message: mergedNotFoundMessage(parsedMessage: "", attemptedEndpoints: notFoundEndpoints)
+            )
         }
 
-        guard !data.isEmpty else {
-            throw RemoteShellExecutionError.noData
+        if let lastTransportError {
+            throw lastTransportError
         }
 
-        return try parseResult(data: data, command: trimmedCommand)
+        throw RemoteShellExecutionError.invalidURL
     }
 
     private func parseResult(data: Data, command: String) throws -> ShellExecutionResult {
@@ -165,8 +212,17 @@ final class RemoteShellExecutionService {
         return fb
     }
 
-    private func parsedErrorMessage(from data: Data) -> String {
+    private func parsedErrorMessage(from data: Data, endpoint: String, status: Int) -> String {
         if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let errorObject = object["error"] as? [String: Any] {
+                let nestedMessage = firstString(
+                    keys: ["message", "detail", "reason", "error_description"],
+                    in: errorObject
+                )
+                if !nestedMessage.isEmpty {
+                    return clipErrorMessage(nestedMessage)
+                }
+            }
             let message = firstString(
                 keys: ["message", "error", "detail", "reason"],
                 in: object
@@ -180,11 +236,117 @@ final class RemoteShellExecutionService {
             .trimmingCharacters(in: .whitespacesAndNewlines),
            !text.isEmpty {
             if looksLikeHTMLResponse(text) {
-                return "接口返回了 HTML 页面（常见于 404 Not Found）。请检查“终端执行接口”是否指向可用的 shell 路由（例如 /v1/shell/execute）。"
+                return buildNotFoundGuidance(endpoint: endpoint, status: status)
             }
             return clipErrorMessage(text)
         }
+        if status == 404 {
+            return buildNotFoundGuidance(endpoint: endpoint, status: status)
+        }
         return ""
+    }
+
+    private func buildNotFoundGuidance(endpoint: String, status: Int) -> String {
+        if status != 404 {
+            return "接口请求失败（HTTP \(status)）。"
+        }
+        return "终端接口返回 404，当前地址为 \(endpoint)。请在设置中把“终端执行接口”改成你服务器真实可用的 shell 路由（例如 http://<server-ip>:8787/v1/shell/execute）。"
+    }
+
+    private func shellEndpointCandidates(from endpoint: String) -> [URL] {
+        let trimmed = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let baseURL = URL(string: trimmed) else {
+            return []
+        }
+        guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
+            return [baseURL]
+        }
+
+        let preferredPath: String = {
+            let path = components.percentEncodedPath.trimmingCharacters(in: .whitespacesAndNewlines)
+            if path.isEmpty { return "/v1/shell/execute" }
+            return path.hasPrefix("/") ? path : "/\(path)"
+        }()
+        let shellPaths = uniqueStrings([
+            preferredPath,
+            "/v1/shell/execute",
+            "/shell/execute"
+        ])
+
+        var candidates: [URL] = []
+
+        func appendCandidate(_ value: URL?) {
+            guard let value else { return }
+            guard !candidates.contains(value) else { return }
+            candidates.append(value)
+        }
+
+        appendCandidate(baseURL)
+
+        for path in shellPaths {
+            var pathComponents = components
+            pathComponents.percentEncodedPath = path
+            appendCandidate(pathComponents.url)
+        }
+
+        if components.port != 8787 {
+            for path in shellPaths {
+                var portComponents = components
+                portComponents.port = 8787
+                portComponents.percentEncodedPath = path
+                appendCandidate(portComponents.url)
+            }
+        }
+
+        if components.scheme?.lowercased() == "https" {
+            for path in shellPaths {
+                var httpComponents = components
+                httpComponents.scheme = "http"
+                httpComponents.port = 8787
+                httpComponents.percentEncodedPath = path
+                appendCandidate(httpComponents.url)
+            }
+        }
+
+        return candidates
+    }
+
+    private func shouldTryNextEndpoint(after error: Error) -> Bool {
+        guard let urlError = error as? URLError else { return false }
+        switch urlError.code {
+        case .badURL,
+             .cannotFindHost,
+             .cannotConnectToHost,
+             .dnsLookupFailed,
+             .networkConnectionLost,
+             .notConnectedToInternet,
+             .secureConnectionFailed,
+             .serverCertificateUntrusted,
+             .timedOut:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func mergedNotFoundMessage(parsedMessage: String, attemptedEndpoints: [String]) -> String {
+        if !parsedMessage.isEmpty,
+           !parsedMessage.contains("终端接口返回 404"),
+           !parsedMessage.contains("Not Found") {
+            return parsedMessage
+        }
+
+        let tried = uniqueStrings(attemptedEndpoints)
+        let topTried = tried.prefix(4).joined(separator: "\n")
+        if topTried.isEmpty {
+            return "终端接口返回 404。请在设置中把“终端执行接口”改成你服务器真实可用的 shell 路由（例如 http://<server-ip>:8787/v1/shell/execute）。"
+        }
+        return """
+        终端接口返回 404，已自动尝试以下地址但仍不可用：
+        \(topTried)
+
+        请在服务器启动 shell_execute_server.py，并把“终端执行接口”改成 http://<server-ip>:8787/v1/shell/execute。
+        """
     }
 
     private func looksLikeHTMLResponse(_ text: String) -> Bool {
@@ -199,6 +361,18 @@ final class RemoteShellExecutionService {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count > limit else { return trimmed }
         return String(trimmed.prefix(limit)) + "…"
+    }
+
+    private func uniqueStrings(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for value in values {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            guard seen.insert(trimmed).inserted else { continue }
+            result.append(trimmed)
+        }
+        return result
     }
 
     private func firstString(keys: [String], in object: [String: Any]) -> String {
