@@ -81,7 +81,9 @@ struct ChatRequestBuilder {
             message: message,
             realtimeSystemContext: realtimeSystemContext,
             memorySystemContext: memorySystemContext,
-            frontendAutoBuildEnabled: config.frontendAutoBuildEnabled
+            frontendAutoBuildEnabled: config.frontendAutoBuildEnabled,
+            enabledBuiltinSkillIDs: config.enabledBuiltinSkillIDs,
+            customBuiltinSkillPrompts: config.customBuiltinSkillPrompts
         )
 
         let payload: [String: Any] = [
@@ -99,7 +101,9 @@ struct ChatRequestBuilder {
         message: ChatMessage,
         realtimeSystemContext: String?,
         memorySystemContext: String?,
-        frontendAutoBuildEnabled: Bool
+        frontendAutoBuildEnabled: Bool,
+        enabledBuiltinSkillIDs: [String],
+        customBuiltinSkillPrompts: [String: String]
     ) -> [[String: Any]] {
         let hasSystemMessage = history.contains { $0.role == .system } || message.role == .system
         var prefix: [[String: Any]] = []
@@ -140,8 +144,35 @@ struct ChatRequestBuilder {
             ])
         }
 
+        for skill in enabledBuiltinSkills(from: enabledBuiltinSkillIDs) {
+            let content = resolvedSkillPrompt(
+                for: skill,
+                customBuiltinSkillPrompts: customBuiltinSkillPrompts
+            )
+            prefix.append([
+                "role": "system",
+                "content": content
+            ])
+        }
+
         let compactHistory = compactHistoryForRequest(history)
         return prefix + compactHistory.map(\.apiPayload) + [message.apiPayload]
+    }
+
+    private static func enabledBuiltinSkills(from ids: [String]) -> [BuiltinAISkill] {
+        let enabled = Set(ids)
+        return BuiltinAISkill.allCases.filter { enabled.contains($0.rawValue) }
+    }
+
+    private static func resolvedSkillPrompt(
+        for skill: BuiltinAISkill,
+        customBuiltinSkillPrompts: [String: String]
+    ) -> String {
+        if let custom = customBuiltinSkillPrompts[skill.rawValue]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !custom.isEmpty {
+            return custom
+        }
+        return skill.defaultPrompt
     }
 
     private static func shouldInjectFrontendAutoBuildPrompt(
@@ -385,7 +416,9 @@ struct ChatRequestBuilder {
             message: message,
             realtimeSystemContext: realtimeSystemContext,
             memorySystemContext: memorySystemContext,
-            frontendAutoBuildEnabled: config.frontendAutoBuildEnabled
+            frontendAutoBuildEnabled: config.frontendAutoBuildEnabled,
+            enabledBuiltinSkillIDs: config.enabledBuiltinSkillIDs,
+            customBuiltinSkillPrompts: config.customBuiltinSkillPrompts
         )
 
         let shouldStream = stream ?? config.streamEnabled

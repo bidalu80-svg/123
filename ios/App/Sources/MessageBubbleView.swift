@@ -27,6 +27,7 @@ struct MessageBubbleView: View {
     @State private var activeHTMLPreview: HTMLPreviewPayload?
     @State private var activeImagePreview: ImagePreviewPayload?
     @State private var activeVideoPreview: VideoPreviewPayload?
+    @State private var activeCodeViewer: CodeViewerPayload?
     @State private var pendingPythonRun: PendingPythonRun?
     @State private var waitingDotPulse = false
     @State private var frontendProgressPulse = false
@@ -99,6 +100,12 @@ struct MessageBubbleView: View {
         }
         .sheet(item: $activeVideoPreview) { payload in
             VideoPreviewSheet(urlString: payload.urlString)
+        }
+        .sheet(item: $activeCodeViewer) { payload in
+            CodeViewerSheet(
+                payload: payload,
+                codeThemeMode: codeThemeMode
+            )
         }
         .sheet(item: $pendingPythonRun) { payload in
             pythonInputSheet(payload: payload)
@@ -912,7 +919,7 @@ struct MessageBubbleView: View {
     private func segmentView(_ segment: MessageSegment, streamingTextAnimated: Bool) -> some View {
         switch segment {
         case .text(let text):
-            selectableTextContent(text, streamingTextAnimated: streamingTextAnimated)
+            assistantTextSegmentView(text, streamingTextAnimated: streamingTextAnimated)
         case .code(let language, let content):
             codeBlock(
                 title: (language ?? "code").uppercased(),
@@ -1078,6 +1085,207 @@ struct MessageBubbleView: View {
         return cells + Array(repeating: "", count: targetCount - cells.count)
     }
 
+    private enum AssistantStepStatus {
+        case neutral
+        case running
+        case success
+        case error
+    }
+
+    private enum AssistantTextBlock: Equatable {
+        case plain(String)
+        case step(title: String, duration: String?, status: AssistantStepStatus)
+    }
+
+    @ViewBuilder
+    private func assistantTextSegmentView(_ text: String, streamingTextAnimated: Bool) -> some View {
+        let blocks = assistantTextBlocks(from: text, streamingTextAnimated: streamingTextAnimated)
+        if blocks.count == 1, case .plain(let only)? = blocks.first {
+            selectableTextContent(only, streamingTextAnimated: streamingTextAnimated)
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                    switch block {
+                    case .plain(let plain):
+                        selectableTextContent(plain, streamingTextAnimated: streamingTextAnimated)
+                    case .step(let title, let duration, let status):
+                        assistantStepChip(title: title, duration: duration, status: status)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func assistantTextBlocks(from text: String, streamingTextAnimated: Bool) -> [AssistantTextBlock] {
+        guard message.role == .assistant else {
+            return [.plain(text)]
+        }
+        guard !streamingTextAnimated else {
+            return [.plain(text)]
+        }
+
+        let lines = text.components(separatedBy: "\n")
+        guard lines.count >= 2 else { return [.plain(text)] }
+
+        var output: [AssistantTextBlock] = []
+        var plainBuffer: [String] = []
+
+        func flushPlainBuffer() {
+            guard !plainBuffer.isEmpty else { return }
+            let plain = plainBuffer.joined(separator: "\n")
+            if !plain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                output.append(.plain(plain))
+            }
+            plainBuffer.removeAll(keepingCapacity: true)
+        }
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let parsed = parseAssistantStepLine(trimmed) {
+                flushPlainBuffer()
+                output.append(.step(title: parsed.title, duration: parsed.duration, status: parsed.status))
+            } else {
+                plainBuffer.append(line)
+            }
+        }
+
+        flushPlainBuffer()
+        return output.isEmpty ? [.plain(text)] : output
+    }
+
+    private func parseAssistantStepLine(_ line: String) -> (title: String, duration: String?, status: AssistantStepStatus)? {
+        guard !line.isEmpty else { return nil }
+
+        let duration: String? = {
+            guard let range = line.range(of: #"\s([0-9]+(?:\.[0-9]+)?(?:ms|s|m))$"#, options: .regularExpression) else {
+                return nil
+            }
+            let value = line[range].trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? nil : value
+        }()
+
+        var title = line
+        if let duration {
+            title = line.replacingOccurrences(of: duration, with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let normalizedTitle = title
+            .replacingOccurrences(of: #"^[✅✔☑️🟢🔴🟡❌⚠️•·\-\s]+"#, with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedTitle.isEmpty else { return nil }
+
+        let lowered = normalizedTitle.lowercased()
+        let looksLikeStep = duration != nil
+            || lowered.hasPrefix("创建")
+            || lowered.hasPrefix("生成")
+            || lowered.hasPrefix("安装")
+            || lowered.hasPrefix("运行")
+            || lowered.hasPrefix("查看")
+            || lowered.hasPrefix("写入")
+            || lowered.hasPrefix("执行")
+            || lowered.hasPrefix("读取")
+            || lowered.contains("脚本")
+            || lowered.contains("依赖")
+            || lowered.contains("result")
+        guard looksLikeStep else { return nil }
+
+        let status: AssistantStepStatus = {
+            if normalizedTitle.contains("失败") || normalizedTitle.contains("错误") || line.contains("❌") {
+                return .error
+            }
+            if normalizedTitle.contains("完成")
+                || normalizedTitle.contains("成功")
+                || line.contains("✅")
+                || line.contains("✔") {
+                return .success
+            }
+            if normalizedTitle.contains("正在") || normalizedTitle.contains("中…") || normalizedTitle.contains("中...") {
+                return .running
+            }
+            return .neutral
+        }()
+
+        return (normalizedTitle, duration, status)
+    }
+
+    private func assistantStepChip(
+        title: String,
+        duration: String?,
+        status: AssistantStepStatus
+    ) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: stepIconName(for: title))
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(stepIconColor(status))
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            if let duration, !duration.isEmpty {
+                Text(duration)
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color(.secondarySystemBackground))
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .stroke(stepBorderColor(status), lineWidth: 1)
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func stepIconName(for title: String) -> String {
+        let lowered = title.lowercased()
+        if lowered.contains("安装") || lowered.contains("apk") || lowered.contains("pip") {
+            return "terminal.fill"
+        }
+        if lowered.contains("运行") || lowered.contains("执行") {
+            return "play.fill"
+        }
+        if lowered.contains("查看") || lowered.contains("检查") {
+            return "doc.text.magnifyingglass"
+        }
+        if lowered.contains("写入") || lowered.contains("保存") {
+            return "square.and.arrow.down.fill"
+        }
+        return "doc.fill"
+    }
+
+    private func stepIconColor(_ status: AssistantStepStatus) -> Color {
+        switch status {
+        case .neutral:
+            return Color.green
+        case .running:
+            return Color.orange
+        case .success:
+            return Color.green
+        case .error:
+            return Color.red
+        }
+    }
+
+    private func stepBorderColor(_ status: AssistantStepStatus) -> Color {
+        switch status {
+        case .neutral:
+            return Color.black.opacity(colorScheme == .dark ? 0.14 : 0.07)
+        case .running:
+            return Color.orange.opacity(0.45)
+        case .success:
+            return Color.green.opacity(0.42)
+        case .error:
+            return Color.red.opacity(0.42)
+        }
+    }
+
     private func selectableTextContent(_ text: String, streamingTextAnimated: Bool = false) -> some View {
         let displayText = streamingTextAnimated ? text : decoratedAssistantListText(text)
         return SelectableLinkTextView(
@@ -1216,6 +1424,16 @@ struct MessageBubbleView: View {
                     .tint(Color(red: 0.06, green: 0.36, blue: 0.86))
                     .foregroundStyle(.white)
                 }
+                Button("查看") {
+                    openCodeViewer(
+                        title: title,
+                        language: language,
+                        displayContent: content
+                    )
+                }
+                .font(.caption2)
+                .buttonStyle(.bordered)
+                .disabled(actionContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 Button(isCopied ? "已复制" : "复制代码") {
                     UIPasteboard.general.string = actionContent
                     UINotificationFeedbackGenerator().notificationOccurred(.success)
@@ -1346,6 +1564,229 @@ struct MessageBubbleView: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(codeCardBorderColor, lineWidth: 1)
         )
+    }
+
+    private func openCodeViewer(
+        title: String,
+        language: String?,
+        displayContent: String
+    ) {
+        let selectedContent = resolvedCodeActionContent(
+            title: title,
+            language: language,
+            displayContent: displayContent
+        )
+        let entries = buildCodeViewerEntries(
+            fallbackTitle: title,
+            fallbackLanguage: language,
+            fallbackContent: selectedContent
+        )
+        guard !entries.isEmpty else {
+            feedback(.light, "当前代码为空")
+            return
+        }
+
+        let initialIndex = codeViewerInitialIndex(
+            entries: entries,
+            title: title,
+            language: language,
+            selectedContent: selectedContent
+        )
+        activeCodeViewer = CodeViewerPayload(
+            title: "代码查看",
+            entries: entries,
+            initialIndex: initialIndex
+        )
+    }
+
+    private func buildCodeViewerEntries(
+        fallbackTitle: String,
+        fallbackLanguage: String?,
+        fallbackContent: String
+    ) -> [CodeViewerEntry] {
+        var entries: [CodeViewerEntry] = []
+        var snippetIndex = 1
+
+        for segment in actionMessageStructuredSegments() {
+            switch segment {
+            case .file(let name, let language, let content):
+                let normalized = removingPreviewTruncationMarkers(from: content)
+                guard !normalized.isEmpty else { continue }
+                entries.append(
+                    CodeViewerEntry(
+                        name: name,
+                        language: language,
+                        content: normalized
+                    )
+                )
+            case .code(let language, let content):
+                let normalized = removingPreviewTruncationMarkers(from: content)
+                guard !normalized.isEmpty else { continue }
+                entries.append(
+                    CodeViewerEntry(
+                        name: inferredSnippetFileName(language: language, index: snippetIndex),
+                        language: language,
+                        content: normalized
+                    )
+                )
+                snippetIndex += 1
+            default:
+                continue
+            }
+        }
+
+        let deduped = deduplicatedCodeViewerEntries(entries)
+        if !deduped.isEmpty {
+            return deduped
+        }
+
+        let normalizedFallback = removingPreviewTruncationMarkers(from: fallbackContent)
+        guard !normalizedFallback.isEmpty else { return [] }
+        return [
+            CodeViewerEntry(
+                name: codeViewerEntryName(
+                    fallbackTitle: fallbackTitle,
+                    fallbackLanguage: fallbackLanguage
+                ),
+                language: fallbackLanguage,
+                content: normalizedFallback
+            )
+        ]
+    }
+
+    private func deduplicatedCodeViewerEntries(_ entries: [CodeViewerEntry]) -> [CodeViewerEntry] {
+        var seen = Set<String>()
+        var deduped: [CodeViewerEntry] = []
+
+        for entry in entries {
+            let key = "\(entry.name.lowercased())|\((entry.language ?? "").lowercased())|\(entry.content)"
+            if seen.insert(key).inserted {
+                deduped.append(entry)
+            }
+        }
+        return deduped
+    }
+
+    private func codeViewerEntryName(
+        fallbackTitle: String,
+        fallbackLanguage: String?
+    ) -> String {
+        if let fileName = fileName(fromCodeTitle: fallbackTitle) {
+            return fileName
+        }
+
+        let cleanedTitle = fallbackTitle
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "FILE · ", with: "")
+        if !cleanedTitle.isEmpty {
+            return cleanedTitle.lowercased() == "code"
+                ? inferredSnippetFileName(language: fallbackLanguage, index: 1)
+                : cleanedTitle
+        }
+
+        return inferredSnippetFileName(language: fallbackLanguage, index: 1)
+    }
+
+    private func inferredSnippetFileName(language: String?, index: Int) -> String {
+        let baseName = "snippet-\(index)"
+        let normalizedLanguage = (language ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard let ext = snippetFileExtension(for: normalizedLanguage) else {
+            return baseName
+        }
+        return "\(baseName).\(ext)"
+    }
+
+    private func snippetFileExtension(for normalizedLanguage: String) -> String? {
+        switch normalizedLanguage {
+        case "swift":
+            return "swift"
+        case "python", "py":
+            return "py"
+        case "javascript", "js":
+            return "js"
+        case "typescript", "ts":
+            return "ts"
+        case "html", "htm", "xhtml":
+            return "html"
+        case "css":
+            return "css"
+        case "json":
+            return "json"
+        case "yaml", "yml":
+            return "yml"
+        case "xml":
+            return "xml"
+        case "java":
+            return "java"
+        case "kotlin":
+            return "kt"
+        case "go", "golang":
+            return "go"
+        case "rust", "rs":
+            return "rs"
+        case "c":
+            return "c"
+        case "cpp", "c++", "cxx":
+            return "cpp"
+        case "csharp", "c#", "cs":
+            return "cs"
+        case "php":
+            return "php"
+        case "ruby", "rb":
+            return "rb"
+        case "bash", "shell", "sh":
+            return "sh"
+        case "sql":
+            return "sql"
+        case "markdown", "md":
+            return "md"
+        default:
+            return nil
+        }
+    }
+
+    private func codeViewerInitialIndex(
+        entries: [CodeViewerEntry],
+        title: String,
+        language: String?,
+        selectedContent: String
+    ) -> Int {
+        guard !entries.isEmpty else { return 0 }
+
+        if let fileName = fileName(fromCodeTitle: title),
+           let index = entries.firstIndex(where: {
+               $0.name.caseInsensitiveCompare(fileName) == .orderedSame
+           }) {
+            return index
+        }
+
+        if let index = entries.firstIndex(where: { $0.content == selectedContent }) {
+            return index
+        }
+
+        let normalizedLanguage = (language ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        if !normalizedLanguage.isEmpty,
+           let index = entries.firstIndex(where: {
+               ($0.language ?? "")
+                   .trimmingCharacters(in: .whitespacesAndNewlines)
+                   .lowercased() == normalizedLanguage
+           }) {
+            return index
+        }
+
+        let prefix = String(selectedContent.prefix(180))
+        if !prefix.isEmpty,
+           let index = entries.firstIndex(where: {
+               $0.content.hasPrefix(prefix)
+           }) {
+            return index
+        }
+
+        return 0
     }
 
     private func estimatedCodeLineCount(_ text: String) -> Int {

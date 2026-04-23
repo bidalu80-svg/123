@@ -210,6 +210,51 @@ struct SettingsScreen: View {
                     Text("GitHub Light").tag(CodeThemeMode.githubLight)
                 }
                 .tint(colorScheme == .dark ? .white : .primary)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("内置技能（中文显示）")
+                        .font(.subheadline.weight(.semibold))
+                    Text("可按技能为 AI 注入默认提示词；每个技能都支持自定义内容。")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+
+                    ForEach(BuiltinAISkill.allCases, id: \.self) { skill in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Toggle(isOn: builtinSkillEnabledBinding(skill)) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(skill.displayName)
+                                        .font(.system(size: 15, weight: .semibold))
+                                    Text("\(skill.rawValue) · \(skill.descriptionCN)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .toggleStyle(.switch)
+
+                            if isBuiltinSkillEnabled(skill) {
+                                Text("提示词（可修改）")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                TextEditor(text: builtinSkillPromptBinding(skill))
+                                    .font(.system(size: 12.5, weight: .regular, design: .monospaced))
+                                    .frame(minHeight: 140)
+                                    .padding(8)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                            .fill(Color(.secondarySystemBackground))
+                                    )
+                                HStack {
+                                    Spacer()
+                                    Button("恢复默认") {
+                                        resetBuiltinSkillPrompt(skill)
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
             }
 
             Section("项目文件") {
@@ -319,6 +364,7 @@ struct SettingsScreen: View {
                     statusRow("朗读声线", value: viewModel.config.replySpeechVoicePreset.title)
                 }
                 statusRow("记忆模式", value: viewModel.config.memoryModeEnabled ? "开启" : "关闭")
+                statusRow("内置技能", value: "\(viewModel.config.enabledBuiltinSkillIDs.count) 个已启用")
             }
         }
         .navigationTitle("配置")
@@ -384,6 +430,49 @@ struct SettingsScreen: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
+    }
+
+    private func isBuiltinSkillEnabled(_ skill: BuiltinAISkill) -> Bool {
+        viewModel.config.enabledBuiltinSkillIDs.contains(skill.rawValue)
+    }
+
+    private func builtinSkillEnabledBinding(_ skill: BuiltinAISkill) -> Binding<Bool> {
+        Binding(
+            get: { isBuiltinSkillEnabled(skill) },
+            set: { enabled in
+                var enabledSet = Set(viewModel.config.enabledBuiltinSkillIDs)
+                if enabled {
+                    enabledSet.insert(skill.rawValue)
+                } else {
+                    enabledSet.remove(skill.rawValue)
+                }
+                viewModel.config.enabledBuiltinSkillIDs = BuiltinAISkill.allCases
+                    .map(\.rawValue)
+                    .filter { enabledSet.contains($0) }
+            }
+        )
+    }
+
+    private func builtinSkillPromptBinding(_ skill: BuiltinAISkill) -> Binding<String> {
+        Binding(
+            get: { viewModel.config.customBuiltinSkillPrompts[skill.rawValue] ?? skill.defaultPrompt },
+            set: { newValue in
+                var prompts = viewModel.config.customBuiltinSkillPrompts
+                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.isEmpty {
+                    prompts.removeValue(forKey: skill.rawValue)
+                } else {
+                    prompts[skill.rawValue] = newValue
+                }
+                viewModel.config.customBuiltinSkillPrompts = prompts
+            }
+        )
+    }
+
+    private func resetBuiltinSkillPrompt(_ skill: BuiltinAISkill) {
+        var prompts = viewModel.config.customBuiltinSkillPrompts
+        prompts[skill.rawValue] = skill.defaultPrompt
+        viewModel.config.customBuiltinSkillPrompts = prompts
     }
 
     private func openLatestProjectPreview() {

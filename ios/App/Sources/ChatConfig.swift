@@ -92,6 +92,159 @@ enum APIEndpointMode: String, Codable, CaseIterable {
     }
 }
 
+enum APIProviderMode: String, Codable, CaseIterable {
+    case auto
+    case openAICompatible
+    case azureOpenAI
+    case anthropic
+    case gemini
+    case xAI
+
+    var title: String {
+        switch self {
+        case .auto:
+            return "自动识别"
+        case .openAICompatible:
+            return "OpenAI 兼容"
+        case .azureOpenAI:
+            return "Azure OpenAI"
+        case .anthropic:
+            return "Anthropic"
+        case .gemini:
+            return "Google Gemini"
+        case .xAI:
+            return "xAI"
+        }
+    }
+
+    var supportsResponsesAPI: Bool {
+        switch self {
+        case .auto, .openAICompatible, .azureOpenAI, .xAI:
+            return true
+        case .anthropic, .gemini:
+            return false
+        }
+    }
+}
+
+enum BuiltinAISkill: String, Codable, CaseIterable {
+    case skillCreator = "skill-creator"
+
+    var displayName: String {
+        switch self {
+        case .skillCreator:
+            return "技能创建器"
+        }
+    }
+
+    var descriptionCN: String {
+        switch self {
+        case .skillCreator:
+            return "用于创建或更新 Skill。默认内置技能模板，可按需自行修改。"
+        }
+    }
+
+    var defaultPrompt: String {
+        switch self {
+        case .skillCreator:
+            return """
+            ---
+            name: skill-creator
+            version: 2.0.0
+            description: Guide for creating effective skills. This skill should be used when users want to create a new skill (or update an existing skill) that extends Claude's capabilities with specialized knowledge, workflows, or tool integrations.
+            ---
+
+            # Skill Creator
+
+            This skill provides guidance for creating effective skills.
+
+            ## About Skills
+
+            Skills are modular, self-contained packages that extend Claude's capabilities by providing
+            specialized knowledge, workflows, and tools. Think of them as "onboarding guides" for specific
+            domains or tasks—they transform Claude from a general-purpose agent into a specialized agent
+            equipped with procedural knowledge that no model can fully possess.
+
+            ### What Skills Provide
+
+            1. Specialized workflows - Multi-step procedures for specific domains
+            2. Tool integrations - Instructions for working with specific file formats or APIs
+            3. Domain expertise - Company-specific knowledge, schemas, business logic
+            4. Bundled resources - Scripts, references, and assets for complex and repetitive tasks
+
+            ## Core Principles
+
+            ### Concise is Key
+
+            The context window is a public good. Skills share the context window with everything else Claude needs: system prompt, conversation history, other Skills' metadata, and the actual user request.
+
+            **Default assumption: Claude is already very smart.** Only add context Claude doesn't already have. Challenge each piece of information: "Does Claude really need this explanation?" and "Does this paragraph justify its token cost?"
+
+            Prefer concise examples over verbose explanations.
+
+            ### Set Appropriate Degrees of Freedom
+
+            Match the level of specificity to the task's fragility and variability:
+
+            - **High freedom (text-based instructions)**: Use when multiple approaches are valid.
+            - **Medium freedom (pseudocode or scripts with parameters)**: Use when a preferred pattern exists.
+            - **Low freedom (specific scripts, few parameters)**: Use when operations are fragile, consistency is critical, or a specific sequence must be followed.
+
+            ### Anatomy of a Skill
+
+            Every skill consists of a required SKILL.md file and optional bundled resources:
+
+            ```
+            skill-name/
+            ├── SKILL.md (required)
+            │   ├── YAML frontmatter (name + description required)
+            │   └── Markdown instructions
+            └── Bundled Resources (optional)
+                ├── scripts/       - Executable code
+                ├── references/    - Documentation loaded as needed
+                └── assets/        - Files used in output (templates, icons, etc.)
+            ```
+
+            #### SKILL.md Frontmatter
+
+            - `name` (required): The skill name
+            - `description` (required): What the skill does and when to trigger it. Be comprehensive—this is the primary triggering mechanism.
+
+            #### SKILL.md Body
+
+            Instructions and guidance, loaded after the skill triggers. Keep under 500 lines; split into reference files when approaching this limit.
+
+            ### Progressive Disclosure
+
+            Skills use three loading levels:
+            1. **Metadata** - Always in context (~100 words)
+            2. **SKILL.md body** - When skill triggers (<5k words)
+            3. **Bundled resources** - As needed (unlimited)
+
+            ## Skill Creation Process
+
+            1. **Understand** the skill with concrete examples from the user
+            2. **Plan** reusable contents (scripts, references, assets)
+            3. **Create** the SKILL.md with proper frontmatter and instructions
+            4. **Test** by using the skill on real tasks
+            5. **Iterate** based on actual usage
+
+            ### Writing the SKILL.md
+
+            - Use imperative/infinitive form
+            - `description` field should include all "when to use" triggers (body is loaded after triggering)
+            - Only add context Claude doesn't already have
+            - Prefer concise examples over verbose explanations
+            - Keep essential workflow in SKILL.md; move detailed reference material to separate files
+
+            ### What NOT to Include
+
+            Do not create extraneous files: README.md, INSTALLATION_GUIDE.md, CHANGELOG.md, etc. The skill should only contain what an AI agent needs to do the job.
+            """
+        }
+    }
+}
+
 struct ChatConfig: Codable, Equatable {
     static let defaultChatCompletionsPath = "/v1/chat/completions"
     static let defaultResponsesPath = "/v1/responses"
@@ -104,6 +257,8 @@ struct ChatConfig: Codable, Equatable {
     var apiURL: String
     var apiKey: String
     var model: String
+    var providerMode: APIProviderMode
+    var providerAPIVersion: String
     var endpointMode: APIEndpointMode
     var chatCompletionsPath: String
     var responsesPath: String
@@ -129,11 +284,15 @@ struct ChatConfig: Codable, Equatable {
     var soundEffectsEnabled: Bool
     var replySpeechPlaybackEnabled: Bool
     var replySpeechVoicePreset: ReplySpeechVoicePreset
+    var enabledBuiltinSkillIDs: [String]
+    var customBuiltinSkillPrompts: [String: String]
 
     static let `default` = ChatConfig(
         apiURL: "https://xxx.com",
         apiKey: "",
         model: "gpt-5.4",
+        providerMode: .auto,
+        providerAPIVersion: "",
         endpointMode: .chatCompletions,
         chatCompletionsPath: ChatConfig.defaultChatCompletionsPath,
         responsesPath: ChatConfig.defaultResponsesPath,
@@ -158,13 +317,17 @@ struct ChatConfig: Codable, Equatable {
         memoryModeEnabled: false,
         soundEffectsEnabled: true,
         replySpeechPlaybackEnabled: false,
-        replySpeechVoicePreset: .systemNatural
+        replySpeechVoicePreset: .systemNatural,
+        enabledBuiltinSkillIDs: [],
+        customBuiltinSkillPrompts: [:]
     )
 
     init(
         apiURL: String,
         apiKey: String,
         model: String,
+        providerMode: APIProviderMode = .auto,
+        providerAPIVersion: String = "",
         endpointMode: APIEndpointMode = .chatCompletions,
         chatCompletionsPath: String = ChatConfig.defaultChatCompletionsPath,
         responsesPath: String = ChatConfig.defaultResponsesPath,
@@ -189,11 +352,15 @@ struct ChatConfig: Codable, Equatable {
         memoryModeEnabled: Bool = false,
         soundEffectsEnabled: Bool = true,
         replySpeechPlaybackEnabled: Bool = false,
-        replySpeechVoicePreset: ReplySpeechVoicePreset = .systemNatural
+        replySpeechVoicePreset: ReplySpeechVoicePreset = .systemNatural,
+        enabledBuiltinSkillIDs: [String] = [],
+        customBuiltinSkillPrompts: [String: String] = [:]
     ) {
         self.apiURL = apiURL
         self.apiKey = apiKey
         self.model = model
+        self.providerMode = providerMode
+        self.providerAPIVersion = providerAPIVersion
         self.endpointMode = endpointMode
         self.chatCompletionsPath = chatCompletionsPath
         self.responsesPath = responsesPath
@@ -219,6 +386,8 @@ struct ChatConfig: Codable, Equatable {
         self.soundEffectsEnabled = soundEffectsEnabled
         self.replySpeechPlaybackEnabled = replySpeechPlaybackEnabled
         self.replySpeechVoicePreset = replySpeechVoicePreset
+        self.enabledBuiltinSkillIDs = enabledBuiltinSkillIDs
+        self.customBuiltinSkillPrompts = customBuiltinSkillPrompts
     }
 
     init(from decoder: Decoder) throws {
@@ -226,6 +395,8 @@ struct ChatConfig: Codable, Equatable {
         apiURL = try c.decode(String.self, forKey: .apiURL)
         apiKey = try c.decode(String.self, forKey: .apiKey)
         model = try c.decode(String.self, forKey: .model)
+        providerMode = try c.decodeIfPresent(APIProviderMode.self, forKey: .providerMode) ?? .auto
+        providerAPIVersion = try c.decodeIfPresent(String.self, forKey: .providerAPIVersion) ?? ""
         endpointMode = try c.decodeIfPresent(APIEndpointMode.self, forKey: .endpointMode) ?? .chatCompletions
         chatCompletionsPath = try c.decodeIfPresent(String.self, forKey: .chatCompletionsPath) ?? ChatConfig.defaultChatCompletionsPath
         responsesPath = try c.decodeIfPresent(String.self, forKey: .responsesPath) ?? ChatConfig.defaultResponsesPath
@@ -251,10 +422,54 @@ struct ChatConfig: Codable, Equatable {
         soundEffectsEnabled = try c.decodeIfPresent(Bool.self, forKey: .soundEffectsEnabled) ?? true
         replySpeechPlaybackEnabled = try c.decodeIfPresent(Bool.self, forKey: .replySpeechPlaybackEnabled) ?? false
         replySpeechVoicePreset = try c.decodeIfPresent(ReplySpeechVoicePreset.self, forKey: .replySpeechVoicePreset) ?? .systemNatural
+        enabledBuiltinSkillIDs = try c.decodeIfPresent([String].self, forKey: .enabledBuiltinSkillIDs) ?? []
+        customBuiltinSkillPrompts = try c.decodeIfPresent([String: String].self, forKey: .customBuiltinSkillPrompts) ?? [:]
     }
 
     var normalizedBaseURL: String {
         ChatConfigStore.normalizedBaseURL(apiURL)
+    }
+
+    var resolvedProviderMode: APIProviderMode {
+        if providerMode != .auto {
+            return providerMode
+        }
+
+        let loweredURL = normalizedBaseURL.lowercased()
+        if loweredURL.contains(".openai.azure.com")
+            || loweredURL.contains("azure.com/openai")
+            || loweredURL.contains("/openai/") {
+            return .azureOpenAI
+        }
+        if loweredURL.contains("anthropic.com") {
+            return .anthropic
+        }
+        if loweredURL.contains("generativelanguage.googleapis.com")
+            || loweredURL.contains("googleapis.com/generativelanguage")
+            || loweredURL.contains("gemini.googleapis.com") {
+            return .gemini
+        }
+        if loweredURL.contains("x.ai") || loweredURL.contains("api.x.ai") {
+            return .xAI
+        }
+        return .openAICompatible
+    }
+
+    var normalizedProviderAPIVersion: String {
+        let trimmed = providerAPIVersion.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            return trimmed
+        }
+        switch resolvedProviderMode {
+        case .azureOpenAI:
+            return "2024-06-01"
+        case .anthropic:
+            return "2023-06-01"
+        case .gemini:
+            return "v1beta"
+        case .auto, .openAICompatible, .xAI:
+            return ""
+        }
     }
 
     var chatCompletionsURLString: String {
@@ -335,6 +550,8 @@ enum ChatConfigStore {
             apiURL: normalizedBaseURL(bundleURL),
             apiKey: "",
             model: bundleModel,
+            providerMode: ChatConfig.default.providerMode,
+            providerAPIVersion: ChatConfig.default.providerAPIVersion,
             endpointMode: ChatConfig.default.endpointMode,
             chatCompletionsPath: ChatConfig.default.chatCompletionsPath,
             responsesPath: ChatConfig.default.responsesPath,
@@ -359,7 +576,9 @@ enum ChatConfigStore {
             memoryModeEnabled: ChatConfig.default.memoryModeEnabled,
             soundEffectsEnabled: ChatConfig.default.soundEffectsEnabled,
             replySpeechPlaybackEnabled: ChatConfig.default.replySpeechPlaybackEnabled,
-            replySpeechVoicePreset: ChatConfig.default.replySpeechVoicePreset
+            replySpeechVoicePreset: ChatConfig.default.replySpeechVoicePreset,
+            enabledBuiltinSkillIDs: ChatConfig.default.enabledBuiltinSkillIDs,
+            customBuiltinSkillPrompts: ChatConfig.default.customBuiltinSkillPrompts
         )
     }
 
@@ -451,10 +670,23 @@ enum ChatConfigStore {
 
     private static func normalize(_ config: ChatConfig) -> ChatConfig {
         let normalizedModel = migratedModelNameIfNeeded(config.model)
+        let enabledSkillSet = Set(config.enabledBuiltinSkillIDs)
+        let normalizedSkillIDs = BuiltinAISkill.allCases
+            .map(\.rawValue)
+            .filter { enabledSkillSet.contains($0) }
+        let normalizedCustomSkillPrompts = config.customBuiltinSkillPrompts.reduce(into: [String: String]()) { partial, pair in
+            let key = pair.key.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard BuiltinAISkill(rawValue: key) != nil else { return }
+            let value = pair.value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !value.isEmpty else { return }
+            partial[key] = value
+        }
         return ChatConfig(
             apiURL: normalizedBaseURL(config.apiURL),
             apiKey: config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines),
             model: normalizedModel.trimmingCharacters(in: .whitespacesAndNewlines),
+            providerMode: config.providerMode,
+            providerAPIVersion: config.providerAPIVersion.trimmingCharacters(in: .whitespacesAndNewlines),
             endpointMode: config.endpointMode,
             chatCompletionsPath: normalizeEndpointPath(config.chatCompletionsPath, fallback: ChatConfig.defaultChatCompletionsPath),
             responsesPath: normalizeEndpointPath(config.responsesPath, fallback: ChatConfig.defaultResponsesPath),
@@ -481,7 +713,9 @@ enum ChatConfigStore {
             memoryModeEnabled: config.memoryModeEnabled,
             soundEffectsEnabled: config.soundEffectsEnabled,
             replySpeechPlaybackEnabled: config.replySpeechPlaybackEnabled,
-            replySpeechVoicePreset: config.replySpeechVoicePreset
+            replySpeechVoicePreset: config.replySpeechVoicePreset,
+            enabledBuiltinSkillIDs: normalizedSkillIDs,
+            customBuiltinSkillPrompts: normalizedCustomSkillPrompts
         )
     }
 

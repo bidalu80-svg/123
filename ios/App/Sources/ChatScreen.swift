@@ -16,6 +16,7 @@ struct ChatScreen: View {
     private let maxRenderedMessages = 72
     private let maxRenderedCharacters = 135_000
     private let maxSingleRenderedMessageChars = 52_000
+    private let maxSingleRenderedCodeMessageChars = 140_000
     private let maxRenderedFilePreviewChars = 10_000
     private let autoSessionRotateMessageCount = 60
     private let autoSessionRotateCharacterCount = 100_000
@@ -23,6 +24,8 @@ struct ChatScreen: View {
     private let autoSessionRotateSingleAssistantCharacterCount = 12_000
     private let autoSessionRotateViewportOverflowRatio: CGFloat = 4.0
     private let autoSessionRotateViewportOverflowAbsoluteGap: CGFloat = 180
+    private let autoSessionRotateViewportMinAssistantCharacters = 32_000
+    private let autoSessionRotateViewportMinMessageCount = 20
 
     private struct OutgoingEcho {
         let id: UUID
@@ -40,6 +43,18 @@ struct ChatScreen: View {
     private struct SessionRotateToast: Equatable {
         let trigger: Int
         let message: String
+    }
+
+    private struct FrontendBuildOverlayState: Equatable {
+        let messageID: UUID
+        let title: String
+        let subtitle: String
+        let stepIndex: Int
+        let stepTotal: Int
+        let fileCount: Int
+        let hasEntryPreview: Bool
+        let isCompleted: Bool
+        let codeEntries: [CodeViewerEntry]
     }
 
     private let starterPrompts: [(title: String, subtitle: String)] = [
@@ -80,6 +95,7 @@ struct ChatScreen: View {
     @State private var lastAutoBuiltAssistantMessageID: UUID?
     @State private var noFileDirectiveAssistantIDs: Set<UUID> = []
     @State private var autoBuildEligibleAssistantIDs: Set<UUID> = []
+    @State private var autoBuildInFlightAssistantIDs: Set<UUID> = []
     @State private var composerMeasuredHeight: CGFloat = 0
     @State private var composerStableHeight: CGFloat = 58
     @State private var keyboardOverlapHeight: CGFloat = 0
@@ -97,6 +113,10 @@ struct ChatScreen: View {
     @State private var sessionRotateToast: SessionRotateToast?
     @State private var sessionRotateToastTrigger: Int = 0
     @State private var sessionRotateHideTask: Task<Void, Never>?
+    @State private var frontendOverlayFileIndex: Int = 0
+    @State private var frontendOverlayMessageID: UUID?
+    @State private var frontendOverlayManualSelectionUntil: Date = .distantPast
+    @State private var activeFrontendCodeViewer: CodeViewerPayload?
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -176,12 +196,18 @@ struct ChatScreen: View {
         }
         .onChange(of: viewModel.currentSessionID) { _, _ in
             pendingOutgoingEcho = nil
+            frontendOverlayMessageID = nil
+            frontendOverlayFileIndex = 0
+            frontendOverlayManualSelectionUntil = .distantPast
             DispatchQueue.main.async {
                 seedAutoFrontendBuildCursor()
             }
         }
         .onChange(of: viewModel.isPrivateMode) { _, _ in
             pendingOutgoingEcho = nil
+            frontendOverlayMessageID = nil
+            frontendOverlayFileIndex = 0
+            frontendOverlayManualSelectionUntil = .distantPast
             DispatchQueue.main.async {
                 seedAutoFrontendBuildCursor()
             }
@@ -193,6 +219,7 @@ struct ChatScreen: View {
                 lastAutoBuiltAssistantMessageID = nil
                 noFileDirectiveAssistantIDs.removeAll()
                 autoBuildEligibleAssistantIDs.removeAll()
+                autoBuildInFlightAssistantIDs.removeAll()
             }
         }
         .onPreferenceChange(ComposerHeightPreferenceKey.self) { newValue in
@@ -316,6 +343,12 @@ struct ChatScreen: View {
                 entryFileURL: payload.entryFileURL
             )
         }
+        .sheet(item: $activeFrontendCodeViewer) { payload in
+            CodeViewerSheet(
+                payload: payload,
+                codeThemeMode: viewModel.config.codeThemeMode
+            )
+        }
     }
 
     private var mainContent: some View {
@@ -365,6 +398,14 @@ struct ChatScreen: View {
                 }
                 .padding(.top, 78)
                 .padding(.leading, 14)
+            }
+            .overlay(alignment: .bottomLeading) {
+                if let overlay = frontendBuildOverlayState {
+                    frontendBuildFloatingCard(overlay)
+                        .padding(.leading, 12)
+                        .padding(.bottom, max(10, transcriptBottomReservedInset + 10))
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
     }
 
@@ -441,75 +482,37 @@ struct ChatScreen: View {
     }
 
     private var headerModelSelector: some View {
-        Menu {
-            Section("接口模式") {
-                ForEach(APIEndpointMode.allCases, id: \.self) { mode in
-                    Button {
-                        viewModel.config.endpointMode = mode
-                    } label: {
-                        if viewModel.config.endpointMode == mode {
-                            Label(mode.title, systemImage: "checkmark")
-                        } else {
-                            Text(mode.title)
-                        }
-                    }
-                }
-            }
-
-            Divider()
-
-            Button(viewModel.isLoadingModels ? "拉取中…" : "拉取模型列表") {
-                Task { await viewModel.refreshAvailableModels() }
-            }
-            .disabled(viewModel.isLoadingModels)
-
-            Divider()
-
-            ForEach(modelMenuOptions, id: \.self) { model in
-                Button {
-                    viewModel.applySelectedModel(model)
-                } label: {
-                    if model == viewModel.config.model {
-                        Label(model, systemImage: "checkmark")
-                    } else {
-                        Text(model)
-                    }
-                }
-            }
-        } label: {
-            VStack(spacing: 2) {
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(viewModel.isCurrentModelAvailable ? Color.green : Color.red)
-                        .frame(width: 7, height: 7)
-                    Text(headerModelName)
-                        .font(.system(size: 12, weight: .semibold))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 10, weight: .semibold))
-                }
-                .foregroundStyle(.primary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(
-                    Capsule(style: .continuous)
-                        .fill(Color(.secondarySystemBackground))
-                )
-
-                Text(headerModelVendorName)
-                    .font(.system(size: 10.5, weight: .medium))
-                    .foregroundStyle(.secondary)
+        VStack(spacing: 2) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(viewModel.isCurrentModelAvailable ? Color.green : Color.red)
+                    .frame(width: 7, height: 7)
+                Text(headerModelName)
+                    .font(.system(size: 12, weight: .semibold))
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color(.secondarySystemBackground))
+            )
+
+            Text(headerModelVendorName)
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
         }
-        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("当前模型 \(headerModelName)，厂商 \(headerModelVendorName)")
     }
 
     private var headerModelName: String {
         let model = viewModel.config.model.trimmingCharacters(in: .whitespacesAndNewlines)
-        return model.isEmpty ? "未选择模型" : model
+        return model.isEmpty ? "未选择模型" : model.uppercased()
     }
 
     private var headerModelVendorName: String {
@@ -1022,15 +1025,45 @@ struct ChatScreen: View {
         })
         noFileDirectiveAssistantIDs.formIntersection(currentAssistantIDs)
         autoBuildEligibleAssistantIDs.formIntersection(currentAssistantIDs)
+        autoBuildInFlightAssistantIDs.formIntersection(currentAssistantIDs)
     }
 
     private func runAutoFrontendBuildIfNeeded(
         previousMessages: [ChatMessage],
         newMessages: [ChatMessage]
     ) {
-        guard shouldAutoBuildFrontendFromAssistantReply else { return }
+        guard shouldAutoBuildFrontendFromAssistantReply else {
+            autoBuildInFlightAssistantIDs.removeAll()
+            return
+        }
         guard let latestAssistant = newMessages.last(where: { $0.role == .assistant }) else { return }
-        guard !latestAssistant.isStreaming else { return }
+
+        if shouldSkipAutoProjectBuild(for: latestAssistant, in: newMessages) {
+            noFileDirectiveAssistantIDs.insert(latestAssistant.id)
+            autoBuildEligibleAssistantIDs.remove(latestAssistant.id)
+            autoBuildInFlightAssistantIDs.remove(latestAssistant.id)
+            autoFrontendPreview = nil
+            if !latestAssistant.isStreaming {
+                viewModel.statusMessage = "已按要求仅展示代码（未生成项目文件）"
+            }
+            return
+        }
+
+        let shouldAttemptBuild =
+            shouldAttemptAutoProjectBuild(for: latestAssistant, in: newMessages)
+            || assistantContainsExplicitProjectPayload(latestAssistant)
+
+        if latestAssistant.isStreaming {
+            if shouldAttemptBuild {
+                autoBuildInFlightAssistantIDs.insert(latestAssistant.id)
+                noFileDirectiveAssistantIDs.remove(latestAssistant.id)
+            } else {
+                autoBuildInFlightAssistantIDs.remove(latestAssistant.id)
+            }
+            return
+        }
+
+        autoBuildInFlightAssistantIDs.remove(latestAssistant.id)
         guard latestAssistant.id != lastAutoBuiltAssistantMessageID else { return }
 
         let previousVersion = previousMessages.first(where: { $0.id == latestAssistant.id })
@@ -1041,17 +1074,10 @@ struct ChatScreen: View {
 
         lastAutoBuiltAssistantMessageID = latestAssistant.id
 
-        if shouldSkipAutoProjectBuild(for: latestAssistant, in: newMessages) {
+        if !shouldAttemptBuild {
             noFileDirectiveAssistantIDs.insert(latestAssistant.id)
             autoBuildEligibleAssistantIDs.remove(latestAssistant.id)
-            autoFrontendPreview = nil
-            viewModel.statusMessage = "已按要求仅展示代码（未生成项目文件）"
-            return
-        }
-
-        if !shouldAttemptAutoProjectBuild(for: latestAssistant, in: newMessages) {
-            noFileDirectiveAssistantIDs.insert(latestAssistant.id)
-            autoBuildEligibleAssistantIDs.remove(latestAssistant.id)
+            autoBuildInFlightAssistantIDs.remove(latestAssistant.id)
             autoFrontendPreview = nil
             return
         }
@@ -1068,6 +1094,7 @@ struct ChatScreen: View {
                 mode: .overwriteLatestProject
             )
             autoBuildEligibleAssistantIDs.insert(latestAssistant.id)
+            autoBuildInFlightAssistantIDs.remove(latestAssistant.id)
             if result.shouldAutoOpenPreview {
                 autoFrontendPreview = AutoFrontendPreviewPayload(
                     title: "自动预览 · \(result.entryFileURL.lastPathComponent)",
@@ -1083,6 +1110,7 @@ struct ChatScreen: View {
         } catch {
             // Auto mode should stay non-blocking; report status but avoid interrupting chat.
             autoBuildEligibleAssistantIDs.remove(latestAssistant.id)
+            autoBuildInFlightAssistantIDs.remove(latestAssistant.id)
             let reason = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             viewModel.statusMessage = "项目自动落盘失败：\(reason)"
         }
@@ -1418,19 +1446,6 @@ struct ChatScreen: View {
         return starterPromptDeck
     }
 
-    private var modelMenuOptions: [String] {
-        let fromAPI = viewModel.availableModels
-        if !fromAPI.isEmpty {
-            return fromAPI
-        }
-        let fallback = ["gpt-5.4", "gpt-5.2", "gpt-4.1"]
-        var merged: [String] = [viewModel.config.model]
-        for model in fallback where !merged.contains(model) {
-            merged.append(model)
-        }
-        return merged
-    }
-
     private var shouldShowScrollJumpButtons: Bool {
         let assistantMessages = viewModel.messages.filter { $0.role == .assistant }
         let maxLength = assistantMessages.map { $0.content.count }.max() ?? 0
@@ -1696,9 +1711,16 @@ struct ChatScreen: View {
             safe = masked
         }
 
-        if safe.content.count > maxSingleRenderedMessageChars {
-            safe.content = String(safe.content.prefix(maxSingleRenderedMessageChars))
-                + "\n\n[该消息过长，已在聊天页截断显示。]"
+        let hasCodeLikePayload = safe.content.contains("```") || safe.content.contains("[[file:")
+        let singleMessageLimit = hasCodeLikePayload
+            ? maxSingleRenderedCodeMessageChars
+            : maxSingleRenderedMessageChars
+
+        if safe.content.count > singleMessageLimit {
+            safe.content = clippedContentForRender(
+                safe.content,
+                limit: singleMessageLimit
+            )
             if !preserveStreamingState {
                 safe.isStreaming = false
             }
@@ -1718,37 +1740,523 @@ struct ChatScreen: View {
         return safe
     }
 
+    private func clippedContentForRender(_ raw: String, limit: Int) -> String {
+        guard raw.count > limit else { return raw }
+
+        var clipped = String(raw.prefix(limit))
+        let fenceCount = clipped.components(separatedBy: "```").count - 1
+        if fenceCount % 2 == 1 {
+            clipped += "\n```"
+        }
+        return clipped + "\n\n[该消息过长，已在聊天页截断显示。]"
+    }
+
     private func frontendProgressDisplayMessage(for message: ChatMessage) -> ChatMessage? {
         guard shouldHideFrontendCodeInChat else { return nil }
         guard message.role == .assistant else { return nil }
-        guard autoBuildEligibleAssistantIDs.contains(message.id) else { return nil }
+        guard shouldMaskFrontendCode(for: message, in: viewModel.messages) else { return nil }
         guard !noFileDirectiveAssistantIDs.contains(message.id) else { return nil }
         guard !message.isImageGenerationPlaceholder, !message.isVideoGenerationPlaceholder else { return nil }
-        guard let snapshot = FrontendProjectBuilder.chatProgressSnapshot(from: message) else { return nil }
 
         var masked = message
         masked.fileAttachments = []
-        masked.content = frontendProgressText(snapshot: snapshot, isStreaming: message.isStreaming)
-        return masked
-    }
+        let stripped = stripFrontendProjectPayload(from: message.content)
+        let codeEntries = frontendOverlayCodeEntries(from: message)
+        let detectedCount = max(
+            codeEntries.count,
+            FrontendProjectBuilder.chatProgressSnapshot(from: message)?.detectedFileCount ?? 0
+        )
 
-    private func frontendProgressText(
-        snapshot: FrontendProjectBuilder.ChatProgressSnapshot,
-        isStreaming: Bool
-    ) -> String {
-        let state = isStreaming ? "streaming" : "completed"
-        let files = max(0, snapshot.detectedFileCount)
-        let entry = snapshot.hasEntryHTML ? 1 : 0
-        return """
-        [IEXA_PROJECT_PROGRESS]
-        state=\(state)
-        files=\(files)
-        entry=\(entry)
-        """
+        if !stripped.isEmpty {
+            masked.content = stripped
+        } else if message.isStreaming {
+            if let current = codeEntries.last {
+                masked.content = "正在后台生成网站文件（\(max(detectedCount, 1)) 个）· 当前：\(current.name)"
+            } else {
+                masked.content = "正在后台生成网站文件，请稍候…"
+            }
+        } else {
+            let hasPreview = FrontendProjectBuilder.latestEntryFileURL() != nil
+            if let current = codeEntries.last {
+                masked.content = hasPreview
+                    ? "网站文件已在后台写入完成（共 \(max(detectedCount, 1)) 个文件），最新文件：\(current.name)。可在左下角卡片继续预览或查看代码。"
+                    : "网站文件已在后台写入完成（共 \(max(detectedCount, 1)) 个文件），最新文件：\(current.name)。"
+            } else {
+                masked.content = hasPreview
+                    ? "网站文件已在后台写入完成，可在左下角卡片点击预览。"
+                    : "网站文件已在后台写入完成。"
+            }
+        }
+        return masked
     }
 
     private var shouldHideFrontendCodeInChat: Bool {
         viewModel.config.frontendAutoBuildEnabled
+    }
+
+    private func shouldMaskFrontendCode(for message: ChatMessage, in messages: [ChatMessage]) -> Bool {
+        guard shouldHideFrontendCodeInChat else { return false }
+        guard message.role == .assistant else { return false }
+        guard !noFileDirectiveAssistantIDs.contains(message.id) else { return false }
+
+        if assistantContainsExplicitProjectPayload(message) {
+            return true
+        }
+        if autoBuildEligibleAssistantIDs.contains(message.id) {
+            return true
+        }
+        if autoBuildInFlightAssistantIDs.contains(message.id) {
+            return true
+        }
+        return FrontendProjectBuilder.canGenerateProject(from: message)
+            && shouldAttemptAutoProjectBuild(for: message, in: messages)
+    }
+
+    private var frontendBuildOverlayState: FrontendBuildOverlayState? {
+        guard shouldHideFrontendCodeInChat else { return nil }
+        guard let assistant = viewModel.messages.last(where: { $0.role == .assistant }) else { return nil }
+        guard shouldMaskFrontendCode(for: assistant, in: viewModel.messages) else { return nil }
+        guard !assistant.isImageGenerationPlaceholder, !assistant.isVideoGenerationPlaceholder else { return nil }
+
+        let snapshot = FrontendProjectBuilder.chatProgressSnapshot(from: assistant)
+            ?? FrontendProjectBuilder.ChatProgressSnapshot(
+                detectedFileCount: 0,
+                hasEntryHTML: false
+            )
+        let codeEntries = frontendOverlayCodeEntries(from: assistant)
+        let detectedFileCount = max(snapshot.detectedFileCount, codeEntries.count)
+
+        let totalSteps = 4
+        let stepIndex: Int
+        let title: String
+        let subtitle: String
+        if assistant.isStreaming {
+            if detectedFileCount <= 0 {
+                stepIndex = 1
+                title = "解析文件结构"
+            } else if detectedFileCount <= 1 {
+                stepIndex = 2
+                title = "生成项目代码"
+            } else {
+                stepIndex = 3
+                title = "写入 latest 目录"
+            }
+            subtitle = "后台自动写入 · \(max(detectedFileCount, 1)) 个文件"
+        } else {
+            stepIndex = totalSteps
+            title = snapshot.hasEntryHTML ? "准备入口预览" : "整理项目索引"
+            subtitle = "后台写入完成 · \(max(detectedFileCount, 1)) 个文件"
+        }
+
+        return FrontendBuildOverlayState(
+            messageID: assistant.id,
+            title: title,
+            subtitle: subtitle,
+            stepIndex: stepIndex,
+            stepTotal: totalSteps,
+            fileCount: max(detectedFileCount, 1),
+            hasEntryPreview: snapshot.hasEntryHTML || FrontendProjectBuilder.latestEntryFileURL() != nil,
+            isCompleted: !assistant.isStreaming,
+            codeEntries: codeEntries
+        )
+    }
+
+    private func frontendBuildFloatingCard(_ overlay: FrontendBuildOverlayState) -> some View {
+        let selectedEntry = frontendOverlaySelectedEntry(for: overlay)
+        let safeFileIndex = frontendOverlaySafeFileIndex(for: overlay)
+        let totalFiles = max(overlay.codeEntries.count, 1)
+
+        HStack(alignment: .bottom, spacing: 10) {
+            Button {
+                openFrontendOverlayCodeViewer(overlay)
+            } label: {
+                frontendBuildMiniPreviewTile(entry: selectedEntry)
+            }
+            .buttonStyle(.plain)
+            .disabled(selectedEntry == nil)
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Image(systemName: overlay.isCompleted ? "checkmark.circle.fill" : "doc.badge.gearshape.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(overlay.isCompleted ? Color.green : Color.blue)
+                    Text(overlay.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    Button {
+                        moveFrontendOverlayFile(by: -1, overlay: overlay)
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(
+                                frontendOverlayCanMove(by: -1, overlay: overlay)
+                                    ? Color.secondary
+                                    : Color.secondary.opacity(0.45)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!frontendOverlayCanMove(by: -1, overlay: overlay))
+
+                    Text("\(safeFileIndex + 1)/\(totalFiles)")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+
+                    Button {
+                        moveFrontendOverlayFile(by: 1, overlay: overlay)
+                    } label: {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(
+                                frontendOverlayCanMove(by: 1, overlay: overlay)
+                                    ? Color.secondary
+                                    : Color.secondary.opacity(0.45)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!frontendOverlayCanMove(by: 1, overlay: overlay))
+                }
+
+                Text(frontendOverlaySubtitle(overlay: overlay, selectedEntry: selectedEntry))
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                ProgressView(value: Double(overlay.stepIndex), total: Double(overlay.stepTotal))
+                    .progressViewStyle(.linear)
+                    .tint(overlay.isCompleted ? Color.green : Color.blue)
+
+                HStack(spacing: 10) {
+                    if !overlay.codeEntries.isEmpty {
+                        Button {
+                            openFrontendOverlayCodeViewer(overlay)
+                        } label: {
+                            Text("查看代码")
+                                .font(.system(size: 12.5, weight: .semibold))
+                                .foregroundStyle(Color(red: 0.08, green: 0.45, blue: 0.90))
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    if overlay.isCompleted && overlay.hasEntryPreview {
+                        Button {
+                            openLatestProjectPreviewFromFloatingCard()
+                        } label: {
+                            HStack(spacing: 4) {
+                                Text("👉")
+                                Text("预览网站")
+                                    .underline()
+                            }
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundStyle(Color(red: 0.08, green: 0.45, blue: 0.90))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: 336, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(.ultraThinMaterial)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.white.opacity(colorScheme == .dark ? 0.2 : 0.45), lineWidth: 0.8)
+        )
+        .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.26 : 0.12), radius: 10, x: 0, y: 4)
+        .onAppear {
+            syncFrontendOverlayFileIndex(for: overlay)
+        }
+        .onChange(of: overlay.messageID) { _, _ in
+            syncFrontendOverlayFileIndex(for: overlay)
+        }
+        .onChange(of: overlay.codeEntries.count) { _, _ in
+            syncFrontendOverlayFileIndex(for: overlay)
+        }
+    }
+
+    private func frontendBuildMiniPreviewTile(entry: CodeViewerEntry?) -> some View {
+        let previewText = frontendOverlayPreviewSnippet(for: entry?.content ?? "")
+        let highlighted = CodeHighlighter.highlighted(
+            previewText,
+            language: entry?.language,
+            colorScheme: colorScheme,
+            codeThemeMode: viewModel.config.codeThemeMode
+        )
+
+        ZStack(alignment: .topLeading) {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.10, green: 0.12, blue: 0.22),
+                            Color(red: 0.05, green: 0.06, blue: 0.12)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry?.name ?? "准备中…")
+                    .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(Color.white.opacity(0.78))
+
+                if previewText.isEmpty {
+                    Text("正在读取项目代码…")
+                        .font(.system(size: 7.5, weight: .medium, design: .monospaced))
+                        .foregroundStyle(Color.cyan.opacity(0.92))
+                } else {
+                    Text(highlighted)
+                        .font(.system(size: 7.5, weight: .medium, design: .monospaced))
+                        .lineLimit(3)
+                        .multilineTextAlignment(.leading)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.top, 6)
+        }
+        .frame(width: 96, height: 76)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.white.opacity(0.2), lineWidth: 0.8)
+        )
+        .shadow(color: Color.black.opacity(0.22), radius: 5, x: 0, y: 2)
+    }
+
+    private func frontendOverlaySubtitle(
+        overlay: FrontendBuildOverlayState,
+        selectedEntry: CodeViewerEntry?
+    ) -> String {
+        if let selectedEntry {
+            return "\(overlay.subtitle) · \(selectedEntry.name)"
+        }
+        return overlay.subtitle
+    }
+
+    private func frontendOverlaySafeFileIndex(for overlay: FrontendBuildOverlayState) -> Int {
+        guard !overlay.codeEntries.isEmpty else { return 0 }
+        return min(max(frontendOverlayFileIndex, 0), overlay.codeEntries.count - 1)
+    }
+
+    private func frontendOverlaySelectedEntry(for overlay: FrontendBuildOverlayState) -> CodeViewerEntry? {
+        guard !overlay.codeEntries.isEmpty else { return nil }
+        return overlay.codeEntries[frontendOverlaySafeFileIndex(for: overlay)]
+    }
+
+    private func frontendOverlayCanMove(by delta: Int, overlay: FrontendBuildOverlayState) -> Bool {
+        guard !overlay.codeEntries.isEmpty else { return false }
+        let target = frontendOverlaySafeFileIndex(for: overlay) + delta
+        return target >= 0 && target < overlay.codeEntries.count
+    }
+
+    private func moveFrontendOverlayFile(by delta: Int, overlay: FrontendBuildOverlayState) {
+        guard frontendOverlayCanMove(by: delta, overlay: overlay) else { return }
+        let target = frontendOverlaySafeFileIndex(for: overlay) + delta
+        frontendOverlayFileIndex = min(max(target, 0), max(0, overlay.codeEntries.count - 1))
+        frontendOverlayManualSelectionUntil = Date().addingTimeInterval(8)
+    }
+
+    private func syncFrontendOverlayFileIndex(for overlay: FrontendBuildOverlayState) {
+        let maxIndex = max(0, overlay.codeEntries.count - 1)
+
+        if frontendOverlayMessageID != overlay.messageID {
+            frontendOverlayMessageID = overlay.messageID
+            frontendOverlayFileIndex = maxIndex
+            return
+        }
+
+        frontendOverlayFileIndex = min(max(frontendOverlayFileIndex, 0), maxIndex)
+
+        if overlay.isCompleted {
+            frontendOverlayManualSelectionUntil = .distantPast
+            return
+        }
+
+        if Date() >= frontendOverlayManualSelectionUntil {
+            frontendOverlayFileIndex = maxIndex
+        }
+    }
+
+    private func openFrontendOverlayCodeViewer(_ overlay: FrontendBuildOverlayState) {
+        guard !overlay.codeEntries.isEmpty else { return }
+        activeFrontendCodeViewer = CodeViewerPayload(
+            title: "项目代码",
+            entries: overlay.codeEntries,
+            initialIndex: frontendOverlaySafeFileIndex(for: overlay)
+        )
+    }
+
+    private func frontendOverlayPreviewSnippet(for content: String) -> String {
+        let normalized = content
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return "" }
+
+        var collected: [String] = []
+        for rawLine in normalized.components(separatedBy: "\n") {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty else { continue }
+            let clipped = line.count > 34 ? String(line.prefix(34)) + "…" : line
+            collected.append(clipped)
+            if collected.count >= 3 {
+                break
+            }
+        }
+
+        if collected.isEmpty {
+            return normalized.count > 80 ? String(normalized.prefix(80)) + "…" : normalized
+        }
+        return collected.joined(separator: "\n")
+    }
+
+    private func frontendOverlayCodeEntries(from message: ChatMessage) -> [CodeViewerEntry] {
+        let segments = MessageContentParser.parse(message)
+        var entries: [CodeViewerEntry] = []
+        var snippetIndex = 1
+
+        for segment in segments {
+            switch segment {
+            case .file(let name, let language, let content):
+                let normalized = removeRenderTruncationMarkers(from: content)
+                guard !normalized.isEmpty else { continue }
+                entries.append(
+                    CodeViewerEntry(
+                        name: name,
+                        language: language,
+                        content: normalized
+                    )
+                )
+            case .code(let language, let content):
+                let normalized = removeRenderTruncationMarkers(from: content)
+                guard !normalized.isEmpty else { continue }
+                entries.append(
+                    CodeViewerEntry(
+                        name: frontendOverlaySnippetName(language: language, index: snippetIndex),
+                        language: language,
+                        content: normalized
+                    )
+                )
+                snippetIndex += 1
+            default:
+                continue
+            }
+        }
+
+        var seen = Set<String>()
+        var deduped: [CodeViewerEntry] = []
+        for entry in entries {
+            let key = "\(entry.name.lowercased())|\((entry.language ?? "").lowercased())|\(entry.content)"
+            if seen.insert(key).inserted {
+                deduped.append(entry)
+            }
+        }
+        return deduped
+    }
+
+    private func removeRenderTruncationMarkers(from text: String) -> String {
+        text
+            .replacingOccurrences(of: "\n\n[附件预览过长，已截断显示。]", with: "")
+            .replacingOccurrences(of: "\n\n[该消息过长，已在聊天页截断显示。]", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func frontendOverlaySnippetName(language: String?, index: Int) -> String {
+        let base = "snippet-\(index)"
+        let normalized = (language ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard let ext = frontendOverlaySnippetExtension(for: normalized) else {
+            return base
+        }
+        return "\(base).\(ext)"
+    }
+
+    private func frontendOverlaySnippetExtension(for language: String) -> String? {
+        switch language {
+        case "python", "py":
+            return "py"
+        case "javascript", "js":
+            return "js"
+        case "typescript", "ts":
+            return "ts"
+        case "swift":
+            return "swift"
+        case "html", "htm", "xhtml":
+            return "html"
+        case "css":
+            return "css"
+        case "json":
+            return "json"
+        case "yaml", "yml":
+            return "yml"
+        case "xml":
+            return "xml"
+        case "bash", "shell", "sh":
+            return "sh"
+        case "go":
+            return "go"
+        case "rust", "rs":
+            return "rs"
+        case "java":
+            return "java"
+        case "kotlin":
+            return "kt"
+        case "php":
+            return "php"
+        case "ruby", "rb":
+            return "rb"
+        case "sql":
+            return "sql"
+        case "markdown", "md":
+            return "md"
+        default:
+            return nil
+        }
+    }
+
+    private func openLatestProjectPreviewFromFloatingCard() {
+        guard let payload = latestFrontendPreviewPayload() else {
+            viewModel.statusMessage = "latest 目录里还没有可预览入口文件。"
+            return
+        }
+        autoFrontendPreview = payload
+    }
+
+    private func latestFrontendPreviewPayload() -> AutoFrontendPreviewPayload? {
+        guard let entryFileURL = FrontendProjectBuilder.latestEntryFileURL() else {
+            return nil
+        }
+        guard let html = try? String(contentsOf: entryFileURL, encoding: .utf8) else {
+            return nil
+        }
+        return AutoFrontendPreviewPayload(
+            title: "网站预览 · \(entryFileURL.lastPathComponent)",
+            html: html,
+            baseURL: FrontendProjectBuilder.latestProjectURL() ?? entryFileURL.deletingLastPathComponent(),
+            entryFileURL: entryFileURL
+        )
+    }
+
+    private func stripFrontendProjectPayload(from raw: String) -> String {
+        var text = raw.replacingOccurrences(of: "\r\n", with: "\n")
+        text = text.replacingOccurrences(
+            of: #"(?is)\[\[file:[^\]]+\]\].*?(?:\[\[endfile\]\]|$)"#,
+            with: "",
+            options: .regularExpression
+        )
+        text = text.replacingOccurrences(
+            of: #"(?is)```.*?(?:```|$)"#,
+            with: "",
+            options: .regularExpression
+        )
+        text = text.replacingOccurrences(of: #"`{2,}"#, with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private var shouldAutoBuildFrontendFromAssistantReply: Bool {
@@ -2331,12 +2839,15 @@ struct ChatScreen: View {
         guard !viewModel.isSending else { return false }
         guard let sessionID = viewModel.currentSessionID else { return false }
 
+        let totalCharacters = totalMessageCharacterCount(viewModel.messages)
         let totalAssistantCharacters = totalAssistantCharacterCount(viewModel.messages)
-        let overflow = viewportOverflowState(
-            assistantCharacters: totalAssistantCharacters,
-            messageCount: viewModel.messages.count
-        )
-        guard overflow.exceeded else { return false }
+        let latestAssistantCharacters = viewModel.messages.last(where: { $0.role == .assistant })?.content.count ?? 0
+        let exceededHardLimit =
+            viewModel.messages.count >= autoSessionRotateMessageCount
+            || totalCharacters >= autoSessionRotateCharacterCount
+            || totalAssistantCharacters >= autoSessionRotateAssistantCharacterCount
+            || latestAssistantCharacters >= autoSessionRotateSingleAssistantCharacterCount
+        guard exceededHardLimit else { return false }
 
         autoRotatedSessionIDs.insert(sessionID)
         viewModel.createNewSession()
@@ -2345,8 +2856,7 @@ struct ChatScreen: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
             issueTranscriptCommand(.scrollToBottom(animated: false))
         }
-        let ratioText = String(format: "%.1f", overflow.ratio)
-        viewModel.statusMessage = "当前会话已超出窗口承载（约 \(ratioText)x），已切换到新会话；请再次点击发送。"
+        viewModel.statusMessage = "当前会话已达到长会话阈值，已切换到新会话；请再次点击发送。"
         presentSessionRotateToast()
         return true
     }
@@ -2359,10 +2869,14 @@ struct ChatScreen: View {
         let contentHeight = max(viewportHeight, transcriptMetrics.contentHeight)
         let gap = max(0, contentHeight - viewportHeight)
         let ratio = contentHeight / viewportHeight
-        let exceededByRatio = ratio >= autoSessionRotateViewportOverflowRatio
-        let exceededByGap = gap >= autoSessionRotateViewportOverflowAbsoluteGap
-            && assistantCharacters >= 24_000
-            && messageCount >= 16
+        let canTriggerByViewport =
+            assistantCharacters >= autoSessionRotateViewportMinAssistantCharacters
+            && messageCount >= autoSessionRotateViewportMinMessageCount
+        let exceededByRatio = canTriggerByViewport
+            && ratio >= autoSessionRotateViewportOverflowRatio
+            && gap >= autoSessionRotateViewportOverflowAbsoluteGap
+        let exceededByGap = canTriggerByViewport
+            && gap >= (autoSessionRotateViewportOverflowAbsoluteGap * 2)
         return (exceededByRatio || exceededByGap, ratio, gap)
     }
 

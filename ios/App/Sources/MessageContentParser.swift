@@ -73,6 +73,14 @@ enum MessageContentParser {
         "markdown": "markdown",
         "md": "markdown"
     ]
+    private static let weakLanguageLabels: Set<String> = [
+        "text", "txt", "plain", "plaintext", "markdown", "md"
+    ]
+    private static let strongLanguageLabels: Set<String> = [
+        "go", "python", "javascript", "typescript", "java", "kotlin", "swift",
+        "rust", "c", "cpp", "csharp", "php", "ruby", "sql", "bash",
+        "shell", "json", "yaml", "xml", "html", "css"
+    ]
     private static var parseCache: [String: [MessageSegment]] = [:]
     private static var parseCacheOrder: [String] = []
     private static var streamingSnapshots: [UUID: StreamingParseSnapshot] = [:]
@@ -146,7 +154,7 @@ enum MessageContentParser {
             segments.append(.file(name: file.fileName, language: file.codeLanguageHint, content: file.previewText))
         }
 
-        segments.append(contentsOf: parseTextContent(message.content))
+        segments.append(contentsOf: parseTextContent(message.content, allowUnclosedFencedCode: message.isStreaming))
         let merged = mergeAdjacentTextSegments(segments)
         let sectioned = sectionizeAssistantLongTextSegments(
             merged,
@@ -191,7 +199,7 @@ enum MessageContentParser {
         return dedupe(collected)
     }
 
-    private static func parseTextContent(_ raw: String) -> [MessageSegment] {
+    private static func parseTextContent(_ raw: String, allowUnclosedFencedCode: Bool) -> [MessageSegment] {
         guard !raw.isEmpty else { return [] }
         var segments: [MessageSegment] = []
         var cursor = raw.startIndex
@@ -218,7 +226,12 @@ enum MessageContentParser {
                     if let table = parseDelimitedTableFromCode(language: parsed.0, content: parsed.1) {
                         segments.append(.table(headers: table.headers, rows: table.rows))
                     } else if !parsed.1.isEmpty {
-                        segments.append(.code(language: inferCodeLanguage(language: parsed.0, content: parsed.1), content: parsed.1))
+                        let inferredLanguage = inferCodeLanguage(language: parsed.0, content: parsed.1)
+                        if isLikelyStructuredCodeContent(languageHint: inferredLanguage ?? parsed.0, content: parsed.1) {
+                            segments.append(.code(language: inferredLanguage, content: parsed.1))
+                        } else {
+                            segments.append(contentsOf: parseTablesAndInlineImages(in: parsed.1))
+                        }
                     }
                     cursor = fenceEnd.upperBound
                 } else {
@@ -227,8 +240,26 @@ enum MessageContentParser {
                     let parsed = parseCodeBlock(block)
                     if let table = parseDelimitedTableFromCode(language: parsed.0, content: parsed.1) {
                         segments.append(.table(headers: table.headers, rows: table.rows))
+                    } else if allowUnclosedFencedCode, !parsed.1.isEmpty {
+                        let inferredLanguage = inferCodeLanguage(language: parsed.0, content: parsed.1)
+                        if isLikelyStructuredCodeContent(languageHint: inferredLanguage ?? parsed.0, content: parsed.1) {
+                            segments.append(.code(language: inferredLanguage, content: parsed.1))
+                        } else {
+                            segments.append(contentsOf: parseTablesAndInlineImages(in: parsed.1))
+                        }
                     } else if !parsed.1.isEmpty {
-                        segments.append(.code(language: inferCodeLanguage(language: parsed.0, content: parsed.1), content: parsed.1))
+                        let inferredLanguage = inferCodeLanguage(language: parsed.0, content: parsed.1)
+                        let split = splitLikelyCodePrefix(
+                            from: parsed.1,
+                            languageHint: inferredLanguage ?? parsed.0
+                        )
+                        if !split.code.isEmpty,
+                           isLikelyStructuredCodeContent(languageHint: inferredLanguage ?? parsed.0, content: split.code) {
+                            segments.append(.code(language: inferredLanguage, content: split.code))
+                        }
+                        if !split.remainder.isEmpty {
+                            segments.append(contentsOf: parseTablesAndInlineImages(in: split.remainder))
+                        }
                     }
                     cursor = raw.endIndex
                 }
@@ -449,7 +480,8 @@ enum MessageContentParser {
 
         var cursor = start + 1
         var collected: [String] = []
-        var codeLikeCount = 0
+        var strongCodeLineCount = 0
+        var weakCodeLineCount = 0
         var nonEmptyCount = 0
 
         while cursor < lines.count {
@@ -487,8 +519,10 @@ enum MessageContentParser {
                 || isLikelyIndentedCodeContinuationLine(rawLine: rawLine, trimmed: trimmed) {
                 collected.append(rawLine)
                 nonEmptyCount += 1
-                if isLikelyCodeLine(trimmed) {
-                    codeLikeCount += 1
+                if isStrongCodeLine(trimmed) {
+                    strongCodeLineCount += 1
+                } else if isLikelyCodeLine(trimmed) {
+                    weakCodeLineCount += 1
                 }
                 cursor += 1
                 continue
@@ -498,8 +532,9 @@ enum MessageContentParser {
         }
 
         guard !collected.isEmpty else { return nil }
-        guard codeLikeCount >= 1 else { return nil }
-        if nonEmptyCount > 1, codeLikeCount < 2 {
+        let hasStrongLanguageHint = strongLanguageLabels.contains(language.lowercased())
+        guard strongCodeLineCount >= 1 || (hasStrongLanguageHint && weakCodeLineCount >= 2) else { return nil }
+        if nonEmptyCount > 1, strongCodeLineCount == 0, weakCodeLineCount < 3 {
             return nil
         }
 
@@ -507,6 +542,7 @@ enum MessageContentParser {
             .joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !content.isEmpty else { return nil }
+        guard isLikelyStructuredCodeContent(languageHint: language, content: content) else { return nil }
 
         return (language: language, content: content, nextIndex: cursor)
     }
@@ -527,7 +563,7 @@ enum MessageContentParser {
         guard !trimmed.isEmpty else { return false }
         let continuationTokens: Set<String> = ["{", "}", "(", ")", "[", "]", ">", "<", ":", "::", ","]
         if continuationTokens.contains(trimmed) { return true }
-        if trimmed.hasPrefix("\"") || trimmed.hasPrefix("'") || trimmed.hasPrefix("`") { return true }
+        if trimmed.hasPrefix("\"") || trimmed.hasPrefix("'") { return true }
         return false
     }
 
@@ -558,7 +594,8 @@ enum MessageContentParser {
     private static func isLikelyCodeLine(_ line: String) -> Bool {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
-        if trimmed.hasPrefix("•") || trimmed.hasPrefix("- ") { return false }
+        if isLikelyNaturalLanguageBullet(trimmed) { return false }
+        if looksLikeNaturalLanguageSentence(trimmed) { return false }
 
         if trimmed.range(
             of: #"^(package|import|func|type|var|const|class|interface|struct|enum|def|return|if|for|while|switch|case|let|public|private|protected|from|select|insert|update|delete)\b"#,
@@ -590,6 +627,48 @@ enum MessageContentParser {
 
         if trimmed.hasSuffix(","),
            trimmed.contains("\"") || trimmed.contains("'") || trimmed.contains(":") || trimmed.hasPrefix(".") {
+            return true
+        }
+
+        if trimmed.range(of: #"^</?[A-Za-z][A-Za-z0-9:-]*(\s+[^>]*)?>$"#, options: .regularExpression) != nil {
+            return true
+        }
+
+        return false
+    }
+
+    private static func isStrongCodeLine(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        if looksLikeNaturalLanguageSentence(trimmed) { return false }
+
+        if trimmed.range(
+            of: #"^(func|def|class|interface|struct|enum|import|from|package|public|private|protected|return|if|for|while|switch|case|try|catch|finally)\b"#,
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil {
+            return true
+        }
+
+        if trimmed.range(
+            of: #"^[A-Za-z_][A-Za-z0-9_]*\s*=\s*[^=]"#,
+            options: .regularExpression
+        ) != nil {
+            return true
+        }
+
+        if trimmed.contains("{") || trimmed.contains("}") || trimmed.contains("=>") || trimmed.contains(":=") {
+            return true
+        }
+
+        if trimmed.contains("(") && trimmed.contains(")") && trimmed.hasSuffix(":") {
+            return true
+        }
+
+        if trimmed.hasSuffix(";") {
+            return true
+        }
+
+        if trimmed.range(of: #"^</?[A-Za-z][A-Za-z0-9:-]*(\s+[^>]*)?>$"#, options: .regularExpression) != nil {
             return true
         }
 
@@ -670,15 +749,19 @@ enum MessageContentParser {
         guard let first = lines.first else { return (nil, "") }
 
         let maybeLanguage = first.trimmingCharacters(in: .whitespacesAndNewlines)
-        if maybeLanguage.contains(" ") {
-            return (nil, normalized.trimmingCharacters(in: .whitespacesAndNewlines))
+        let loweredLanguage = maybeLanguage.lowercased()
+        let isRecognizedLanguageTag = languageTagAliases[loweredLanguage] != nil
+            || weakLanguageLabels.contains(loweredLanguage)
+            || strongLanguageLabels.contains(loweredLanguage)
+        if maybeLanguage.contains(" ") || !isRecognizedLanguageTag {
+            return (nil, sanitizeCodeContent(normalized))
         }
 
         let body = lines.dropFirst().joined(separator: "\n")
         if body.isEmpty {
-            return (nil, normalized.trimmingCharacters(in: .whitespacesAndNewlines))
+            return (nil, sanitizeCodeContent(normalized))
         }
-        return (maybeLanguage.isEmpty ? nil : maybeLanguage, body)
+        return (maybeLanguage.isEmpty ? nil : maybeLanguage, sanitizeCodeContent(body))
     }
 
     private static func parseDelimitedTableFromCode(
@@ -764,9 +847,113 @@ enum MessageContentParser {
         return true
     }
 
+    private static func splitLikelyCodePrefix(
+        from raw: String,
+        languageHint: String?
+    ) -> (code: String, remainder: String) {
+        let normalized = raw.replacingOccurrences(of: "\r\n", with: "\n")
+        let lines = normalized.components(separatedBy: "\n")
+        guard !lines.isEmpty else { return ("", "") }
+
+        var codeLines: [String] = []
+        var cursor = 0
+        var seenStrongCodeLine = false
+        var weakCodeLineCount = 0
+        var naturalLanguageLineCount = 0
+
+        while cursor < lines.count {
+            let line = lines[cursor]
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if trimmed.isEmpty {
+                if codeLines.isEmpty {
+                    cursor += 1
+                    continue
+                }
+
+                if let next = nextNonEmptyLineIndex(in: lines, from: cursor + 1) {
+                    let nextLine = lines[next]
+                    let nextTrimmed = nextLine.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if isLikelyCodeLine(nextTrimmed)
+                        || isStrongCodeLine(nextTrimmed)
+                        || isLikelyCodeContinuationLine(nextTrimmed)
+                        || isLikelyIndentedCodeContinuationLine(rawLine: nextLine, trimmed: nextTrimmed) {
+                        codeLines.append(line)
+                        cursor += 1
+                        continue
+                    }
+                }
+                break
+            }
+
+            if isStrongCodeLine(trimmed) {
+                seenStrongCodeLine = true
+                codeLines.append(line)
+                cursor += 1
+                continue
+            }
+
+            if isLikelyCodeLine(trimmed)
+                || isLikelyCodeContinuationLine(trimmed)
+                || isLikelyIndentedCodeContinuationLine(rawLine: line, trimmed: trimmed) {
+                if isLikelyCodeLine(trimmed) {
+                    weakCodeLineCount += 1
+                }
+                codeLines.append(line)
+                cursor += 1
+                continue
+            }
+
+            if looksLikeNaturalLanguageSentence(trimmed) || isLikelyNaturalLanguageBullet(trimmed) {
+                naturalLanguageLineCount += 1
+            }
+            break
+        }
+
+        let normalizedHint = languageHint?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let hasStrongHint = {
+            guard let normalizedHint else { return false }
+            return strongLanguageLabels.contains(normalizedHint)
+        }()
+        let allowedByHint = hasStrongHint
+            && weakCodeLineCount >= 2
+            && naturalLanguageLineCount == 0
+
+        if !seenStrongCodeLine && !allowedByHint {
+            return ("", normalized.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+
+        let code = codeLines
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let remainder = lines.dropFirst(cursor)
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (code, remainder)
+    }
+
+    private static func sanitizeCodeContent(_ raw: String) -> String {
+        let normalized = raw.replacingOccurrences(of: "\r\n", with: "\n")
+        let filtered = normalized
+            .components(separatedBy: "\n")
+            .filter { line in
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.isEmpty { return true }
+                if trimmed.range(of: #"^`{2,}$"#, options: .regularExpression) != nil {
+                    return false
+                }
+                return true
+            }
+            .joined(separator: "\n")
+        return filtered.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private static func inferCodeLanguage(language: String?, content: String) -> String? {
-        let normalized = language?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = language?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if let normalized, !normalized.isEmpty {
+            if weakLanguageLabels.contains(normalized) {
+                return nil
+            }
             return normalized
         }
 
@@ -801,6 +988,93 @@ enum MessageContentParser {
             return "swift"
         }
         return nil
+    }
+
+    private static func isLikelyStructuredCodeContent(languageHint: String?, content: String) -> Bool {
+        let normalized = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return false }
+
+        let language = languageHint?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let language, weakLanguageLabels.contains(language), !strongLanguageLabels.contains(language) {
+            return false
+        }
+
+        let lines = normalized.components(separatedBy: "\n")
+        var strongCount = 0
+        var weakCount = 0
+        var nonEmptyCount = 0
+        var naturalLanguageCount = 0
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            nonEmptyCount += 1
+            if isStrongCodeLine(trimmed) {
+                strongCount += 1
+            } else if isLikelyCodeLine(trimmed) {
+                weakCount += 1
+            } else if looksLikeNaturalLanguageSentence(trimmed) || isLikelyNaturalLanguageBullet(trimmed) {
+                naturalLanguageCount += 1
+            }
+        }
+
+        if naturalLanguageCount >= max(2, nonEmptyCount / 2) {
+            return false
+        }
+
+        if nonEmptyCount == 1 {
+            return strongCount >= 1
+        }
+
+        if strongCount >= 2 {
+            return true
+        }
+
+        if strongCount >= 1 && weakCount >= 1 {
+            return true
+        }
+
+        if let language, strongLanguageLabels.contains(language), weakCount >= 2, naturalLanguageCount == 0 {
+            return true
+        }
+
+        return false
+    }
+
+    private static func isLikelyNaturalLanguageBullet(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+
+        let bulletPrefixes = ["•", "●", "○", "◦", "- ", "* ", "· ", "▪", "▫"]
+        if bulletPrefixes.contains(where: { trimmed.hasPrefix($0) }) {
+            return true
+        }
+
+        if trimmed.range(of: #"^\d+[\.)、]\s*"#, options: .regularExpression) != nil {
+            return true
+        }
+        return false
+    }
+
+    private static func looksLikeNaturalLanguageSentence(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        if isLikelyNaturalLanguageBullet(trimmed) { return true }
+        if trimmed.count < 8 { return false }
+        if trimmed.contains("：") || trimmed.contains("。") || trimmed.contains("，") {
+            return true
+        }
+        let letterCount = trimmed.unicodeScalars.filter { CharacterSet.letters.contains($0) }.count
+        let symbolCount = trimmed.filter { "{}[]();=<>:+-*/\\_".contains($0) }.count
+        let containsCJK = trimmed.unicodeScalars.contains { scalar in
+            (0x4E00...0x9FFF).contains(scalar.value)
+        }
+        if containsCJK && trimmed.count >= 4 && symbolCount <= 1 {
+            return true
+        }
+        if letterCount >= 12 && symbolCount <= 1 {
+            return true
+        }
+        return false
     }
 
     private static func parseInlineImages(in text: String) -> [MessageSegment] {
@@ -978,13 +1252,21 @@ enum MessageContentParser {
     private static func cleanMarkdownForDisplay(_ raw: String) -> String {
         var text = raw
         text = text.replacingOccurrences(of: "\r\n", with: "\n")
+        text = text.replacingOccurrences(of: "```", with: "")
+        text = text.replacingOccurrences(of: "``", with: "")
         text = text.replacingOccurrences(of: "(?m)^\\s{0,3}#{1,6}\\s*", with: "", options: .regularExpression)
         text = text.replacingOccurrences(of: "(?m)^\\s*[-*•]\\s+", with: "• ", options: .regularExpression)
         text = text.replacingOccurrences(of: "(?m)^\\s*\\d+[\\.)、]\\s+", with: "• ", options: .regularExpression)
         text = text.replacingOccurrences(of: "(?m)^\\s*>\\s?", with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"\[([^\]]+)\]\((https?://[^)\s]+)\)"#, with: "$1 ($2)", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"!\[[^\]]*\]\(([^)\s]+)\)"#, with: "$1", options: .regularExpression)
         text = text.replacingOccurrences(of: "(?<!`)`([^`\\n]+)`(?!`)", with: "$1", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"(?<!\*)\*([^\*\n]+)\*(?!\*)"#, with: "$1", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"(?<!_)_([^_\n]+)_(?!_)"#, with: "$1", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"~~([^~\n]+)~~"#, with: "$1", options: .regularExpression)
         text = text.replacingOccurrences(of: "**", with: "")
         text = text.replacingOccurrences(of: "__", with: "")
+        text = text.replacingOccurrences(of: #"\\([\\`*_{}\[\]()#+\-.!>~|])"#, with: "$1", options: .regularExpression)
         text = text.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
         text = expandGitHubRepositoryLinks(in: text)
         text = autoBulletizePlainLineGroups(text)
