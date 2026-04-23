@@ -20,20 +20,39 @@ struct CodeViewerPayload: Identifiable {
     let title: String
     let entries: [CodeViewerEntry]
     let initialIndex: Int
+    let preferredTerminalCommand: String?
+
+    init(
+        title: String,
+        entries: [CodeViewerEntry],
+        initialIndex: Int,
+        preferredTerminalCommand: String? = nil
+    ) {
+        self.title = title
+        self.entries = entries
+        self.initialIndex = initialIndex
+        self.preferredTerminalCommand = preferredTerminalCommand
+    }
 }
 
 struct CodeViewerSheet: View {
     let payload: CodeViewerPayload
     let codeThemeMode: CodeThemeMode
+    let onRunTerminalCommand: ((String) -> Void)?
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
     @State private var currentIndex: Int
     @State private var copiedEntryID: UUID?
 
-    init(payload: CodeViewerPayload, codeThemeMode: CodeThemeMode) {
+    init(
+        payload: CodeViewerPayload,
+        codeThemeMode: CodeThemeMode,
+        onRunTerminalCommand: ((String) -> Void)? = nil
+    ) {
         self.payload = payload
         self.codeThemeMode = codeThemeMode
+        self.onRunTerminalCommand = onRunTerminalCommand
         let maxIndex = max(0, payload.entries.count - 1)
         _currentIndex = State(initialValue: min(max(payload.initialIndex, 0), maxIndex))
     }
@@ -76,12 +95,24 @@ struct CodeViewerSheet: View {
 
             Spacer(minLength: 0)
 
-            toolbarCircleButton(
-                systemName: isCurrentEntryCopied ? "checkmark" : "doc.on.doc",
-                isEnabled: !payload.entries.isEmpty,
-                isHighlighted: isCurrentEntryCopied
-            ) {
-                copyCurrentEntryCode()
+            HStack(spacing: 10) {
+                if canRunTerminalCommand {
+                    toolbarCircleButton(
+                        systemName: "terminal",
+                        isEnabled: true,
+                        isHighlighted: false
+                    ) {
+                        runTerminalCommandFromPayload()
+                    }
+                }
+
+                toolbarCircleButton(
+                    systemName: isCurrentEntryCopied ? "checkmark" : "doc.on.doc",
+                    isEnabled: !payload.entries.isEmpty,
+                    isHighlighted: isCurrentEntryCopied
+                ) {
+                    copyCurrentEntryCode()
+                }
             }
         }
         .padding(.horizontal, 16)
@@ -204,6 +235,16 @@ struct CodeViewerSheet: View {
         return copiedEntryID == currentEntry.id
     }
 
+    private var normalizedPreferredTerminalCommand: String? {
+        guard let raw = payload.preferredTerminalCommand else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private var canRunTerminalCommand: Bool {
+        normalizedPreferredTerminalCommand != nil && onRunTerminalCommand != nil
+    }
+
     private func copyCurrentEntryCode() {
         guard !payload.entries.isEmpty else { return }
         let entry = currentEntry
@@ -215,6 +256,11 @@ struct CodeViewerSheet: View {
             guard copiedEntryID == entry.id else { return }
             copiedEntryID = nil
         }
+    }
+
+    private func runTerminalCommandFromPayload() {
+        guard let command = normalizedPreferredTerminalCommand else { return }
+        onRunTerminalCommand?(command)
     }
 
     private func toolbarCircleButton(

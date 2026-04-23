@@ -397,7 +397,10 @@ struct ChatScreen: View {
         .sheet(item: $activeFrontendCodeViewer) { payload in
             CodeViewerSheet(
                 payload: payload,
-                codeThemeMode: viewModel.config.codeThemeMode
+                codeThemeMode: viewModel.config.codeThemeMode,
+                onRunTerminalCommand: { command in
+                    runFrontendTerminalCommand(command, autoTriggered: false)
+                }
             )
         }
         .sheet(isPresented: $showFrontendTerminalSheet) {
@@ -1387,14 +1390,7 @@ struct ChatScreen: View {
         var cleanedLines: [String] = []
 
         for rawLine in normalized.components(separatedBy: "\n") {
-            var line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            if line.hasPrefix("$ ") {
-                line = String(line.dropFirst(2)).trimmingCharacters(in: .whitespacesAndNewlines)
-            } else if line.hasPrefix("PS "), let promptRange = line.range(of: ">") {
-                let commandPart = line[promptRange.upperBound...]
-                line = commandPart.trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-
+            let line = normalizedTerminalCommandLineForExecution(rawLine)
             if line.isEmpty { continue }
             cleanedLines.append(line)
         }
@@ -1402,6 +1398,66 @@ struct ChatScreen: View {
         return cleanedLines
             .joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func normalizedTerminalCommandLineForExecution(_ rawLine: String) -> String {
+        var line = rawLine
+            .replacingOccurrences(of: "\t", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !line.isEmpty else { return "" }
+
+        var strippedPrefix = true
+        while strippedPrefix {
+            strippedPrefix = false
+
+            if line.hasPrefix("> ") {
+                line = String(line.dropFirst(2)).trimmingCharacters(in: .whitespacesAndNewlines)
+                strippedPrefix = true
+            }
+
+            if let listPrefixRange = line.range(
+                of: #"^(?:[-*•]|\d+[.)、])\s+"#,
+                options: .regularExpression
+            ) {
+                line.removeSubrange(listPrefixRange)
+                line = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                strippedPrefix = true
+            }
+        }
+
+        line = line.replacingOccurrences(
+            of: #"^(?:终端运行|运行命令|执行命令|命令行|terminal run|run command|command)\s*[:：]\s*"#,
+            with: "",
+            options: [.regularExpression, .caseInsensitive]
+        )
+
+        if line.hasPrefix("`"), line.hasSuffix("`"), line.count >= 2 {
+            line.removeFirst()
+            line.removeLast()
+            line = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        if line.hasPrefix("$ ") {
+            line = String(line.dropFirst(2)).trimmingCharacters(in: .whitespacesAndNewlines)
+        } else if line.hasPrefix("PS "), let promptRange = line.range(of: ">") {
+            let commandPart = line[promptRange.upperBound...]
+            line = commandPart.trimmingCharacters(in: .whitespacesAndNewlines)
+        } else if let cmdPromptRange = line.range(
+            of: #"^[A-Za-z]:\\[^>]*>\s*"#,
+            options: .regularExpression
+        ) {
+            line.removeSubrange(cmdPromptRange)
+            line = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        if line.range(of: #"^`{3,}.*$"#, options: .regularExpression) != nil {
+            return ""
+        }
+        if line.range(of: #"^~{3,}.*$"#, options: .regularExpression) != nil {
+            return ""
+        }
+
+        return line.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func invalidatePendingAutoProjectBuild() {
@@ -2280,29 +2336,311 @@ struct ChatScreen: View {
 
     private func preferredTerminalCommandSnippet(from message: ChatMessage) -> (language: String, command: String)? {
         let segments = MessageContentParser.parse(message)
+        var testPreferredCandidate: (String, String)?
         var fallbackCandidate: (String, String)?
 
-        for segment in segments {
-            guard case let .code(language, content) = segment else { continue }
-            let normalizedCommand = normalizedTerminalCommandForExecution(content)
-            guard !normalizedCommand.isEmpty else { continue }
-
-            let normalizedLanguage = (language ?? "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .lowercased()
-
-            if isTerminalCommandLanguage(normalizedLanguage), looksLikeShellCommand(normalizedCommand) {
-                let safeLanguage = normalizedLanguage.isEmpty ? "bash" : normalizedLanguage
-                return (safeLanguage, normalizedCommand)
-            }
-
-            if fallbackCandidate == nil, looksLikeShellCommand(normalizedCommand) {
-                let safeLanguage = normalizedLanguage.isEmpty ? "bash" : normalizedLanguage
-                fallbackCandidate = (safeLanguage, normalizedCommand)
+        func registerCandidate(_ candidate: (language: String, command: String)?) {
+            guard let candidate else { return }
+            if containsLikelyTestCommand(candidate.command) {
+                if testPreferredCandidate == nil {
+                    testPreferredCandidate = candidate
+                }
+            } else if fallbackCandidate == nil {
+                fallbackCandidate = candidate
             }
         }
 
-        return fallbackCandidate
+        for segment in segments {
+            switch segment {
+            case .code(let language, let content):
+                registerCandidate(
+                    terminalCommandSnippetCandidate(
+                        language: language,
+                        content: content
+                    )
+                )
+            case .file(let name, let language, let content):
+                registerCandidate(
+                    preferredTerminalCommandSnippetFromFile(
+                        name: name,
+                        language: language,
+                        content: content
+                    )
+                )
+            default:
+                continue
+            }
+        }
+
+        if testPreferredCandidate == nil {
+            let markdownBlocks = extractMarkdownCommandBlocks(from: message.content)
+            for block in markdownBlocks {
+                registerCandidate(
+                    terminalCommandSnippetCandidate(
+                        language: block.language,
+                        content: block.content
+                    )
+                )
+            }
+        }
+
+        if testPreferredCandidate == nil {
+            let lineRuns = extractLikelyShellLineRuns(from: message.content)
+            for run in lineRuns {
+                registerCandidate(
+                    terminalCommandSnippetCandidate(
+                        language: nil,
+                        content: run
+                    )
+                )
+            }
+        }
+
+        return testPreferredCandidate ?? fallbackCandidate
+    }
+
+    private func terminalCommandSnippetCandidate(
+        language: String?,
+        content: String
+    ) -> (language: String, command: String)? {
+        let normalizedCommand = normalizedTerminalCommandForExecution(content)
+        guard !normalizedCommand.isEmpty else { return nil }
+
+        let normalizedLanguage = (language ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+
+        if isTerminalCommandLanguage(normalizedLanguage), looksLikeShellCommand(normalizedCommand) {
+            let safeLanguage = normalizedLanguage.isEmpty ? "bash" : normalizedLanguage
+            return (safeLanguage, normalizedCommand)
+        }
+
+        if looksLikeShellCommand(normalizedCommand) {
+            let safeLanguage = normalizedLanguage.isEmpty ? "bash" : normalizedLanguage
+            return (safeLanguage, normalizedCommand)
+        }
+
+        return nil
+    }
+
+    private func preferredTerminalCommandSnippetFromFile(
+        name: String,
+        language: String?,
+        content: String
+    ) -> (language: String, command: String)? {
+        let loweredName = name
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        var testPreferredCandidate: (String, String)?
+        var fallbackCandidate: (String, String)?
+
+        func registerCandidate(_ candidate: (language: String, command: String)?) {
+            guard let candidate else { return }
+            if containsLikelyTestCommand(candidate.command) {
+                if testPreferredCandidate == nil {
+                    testPreferredCandidate = candidate
+                }
+            } else if fallbackCandidate == nil {
+                fallbackCandidate = candidate
+            }
+        }
+
+        let markdownBlocks = extractMarkdownCommandBlocks(from: content)
+        for block in markdownBlocks {
+            let blockLanguage = block.language ?? language ?? inferredShellLanguageFromFileName(loweredName)
+            registerCandidate(
+                terminalCommandSnippetCandidate(
+                    language: blockLanguage,
+                    content: block.content
+                )
+            )
+        }
+
+        if testPreferredCandidate == nil {
+            let lineRuns = extractLikelyShellLineRuns(from: content)
+            for run in lineRuns {
+                registerCandidate(
+                    terminalCommandSnippetCandidate(
+                        language: language ?? inferredShellLanguageFromFileName(loweredName),
+                        content: run
+                    )
+                )
+            }
+        }
+
+        if let result = testPreferredCandidate ?? fallbackCandidate {
+            return result
+        }
+
+        if isTerminalScriptFileName(loweredName) {
+            return terminalCommandSnippetCandidate(
+                language: language ?? inferredShellLanguageFromFileName(loweredName),
+                content: content
+            )
+        }
+
+        return nil
+    }
+
+    private func extractMarkdownCommandBlocks(from raw: String) -> [(language: String?, content: String)] {
+        let text = raw.replacingOccurrences(of: "\r\n", with: "\n")
+        let lines = text.components(separatedBy: "\n")
+        guard !lines.isEmpty else { return [] }
+
+        var results: [(language: String?, content: String)] = []
+        var index = 0
+
+        while index < lines.count {
+            let line = lines[index].trimmingCharacters(in: .whitespacesAndNewlines)
+            let isTickFence = line.hasPrefix("```")
+            let isWaveFence = line.hasPrefix("~~~")
+            guard isTickFence || isWaveFence else {
+                index += 1
+                continue
+            }
+
+            let fencePrefix = isTickFence ? "```" : "~~~"
+            var descriptor = line
+            if descriptor.hasPrefix(fencePrefix) {
+                descriptor.removeFirst(fencePrefix.count)
+            }
+            descriptor = descriptor.trimmingCharacters(in: .whitespacesAndNewlines)
+            let languageToken = descriptor
+                .split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+                .first
+                .map(String.init)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let language = languageToken?.isEmpty == false ? languageToken : nil
+
+            var blockLines: [String] = []
+            var cursor = index + 1
+            var foundClosingFence = false
+            while cursor < lines.count {
+                let candidate = lines[cursor].trimmingCharacters(in: .whitespacesAndNewlines)
+                let isClosingFence =
+                    candidate.hasPrefix(fencePrefix)
+                    || candidate.range(of: #"^`{3,}\s*$"#, options: .regularExpression) != nil
+                    || candidate.range(of: #"^~{3,}\s*$"#, options: .regularExpression) != nil
+                if isClosingFence {
+                    foundClosingFence = true
+                    cursor += 1
+                    break
+                }
+                blockLines.append(lines[cursor])
+                cursor += 1
+            }
+
+            if !blockLines.isEmpty {
+                let blockContent = blockLines.joined(separator: "\n")
+                results.append((language: language, content: blockContent))
+            }
+
+            if foundClosingFence {
+                index = cursor
+            } else {
+                break
+            }
+        }
+
+        return results
+    }
+
+    private func extractLikelyShellLineRuns(from raw: String) -> [String] {
+        let lines = raw
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .components(separatedBy: "\n")
+        guard !lines.isEmpty else { return [] }
+
+        var runs: [String] = []
+        var buffer: [String] = []
+
+        func flushBuffer() {
+            guard !buffer.isEmpty else { return }
+            let joined = buffer.joined(separator: "\n")
+            let normalized = normalizedTerminalCommandForExecution(joined)
+            if !normalized.isEmpty && looksLikeShellCommand(normalized) {
+                runs.append(normalized)
+            }
+            buffer.removeAll(keepingCapacity: true)
+        }
+
+        for rawLine in lines {
+            let line = normalizedTerminalCommandLineForExecution(rawLine)
+            if line.isEmpty {
+                flushBuffer()
+                continue
+            }
+
+            if isLikelyShellLine(line) {
+                buffer.append(line)
+            } else {
+                flushBuffer()
+            }
+        }
+
+        flushBuffer()
+        return runs
+    }
+
+    private func isLikelyShellLine(_ line: String) -> Bool {
+        let normalized = normalizedTerminalCommandLineForExecution(line)
+        guard !normalized.isEmpty else { return false }
+        if normalized.hasPrefix("#") { return false }
+        if normalized.hasPrefix("```") || normalized.hasPrefix("~~~") { return false }
+        if normalized.hasPrefix("[") && normalized.hasSuffix("]") {
+            return false
+        }
+        return looksLikeShellCommand(normalized)
+    }
+
+    private func containsLikelyTestCommand(_ command: String) -> Bool {
+        let lowered = " " + command.lowercased() + " "
+        let markers = [
+            " ctest",
+            " test ",
+            " go test",
+            " npm test",
+            " pnpm test",
+            " yarn test",
+            " pytest",
+            " cargo test",
+            " swift test",
+            " dotnet test",
+            " xcodebuild test",
+            " mvn test",
+            " gradle test",
+            " ./gradlew test",
+            " python -m unittest",
+            " python -m pytest",
+            " jest",
+            " vitest",
+            " flutter test"
+        ]
+        return markers.contains(where: { lowered.contains($0) })
+    }
+
+    private func inferredShellLanguageFromFileName(_ loweredName: String) -> String? {
+        if loweredName.hasSuffix(".ps1") {
+            return "powershell"
+        }
+        if loweredName.hasSuffix(".cmd") || loweredName.hasSuffix(".bat") {
+            return "cmd"
+        }
+        if loweredName.hasSuffix(".sh")
+            || loweredName.hasSuffix("makefile")
+            || loweredName.hasSuffix("dockerfile") {
+            return "bash"
+        }
+        return nil
+    }
+
+    private func isTerminalScriptFileName(_ loweredName: String) -> Bool {
+        loweredName.hasSuffix(".sh")
+            || loweredName.hasSuffix(".zsh")
+            || loweredName.hasSuffix(".bash")
+            || loweredName.hasSuffix(".ps1")
+            || loweredName.hasSuffix(".cmd")
+            || loweredName.hasSuffix(".bat")
     }
 
     private func isTerminalCommandLanguage(_ language: String) -> Bool {
@@ -2320,12 +2658,35 @@ struct ChatScreen: View {
     }
 
     private func looksLikeShellCommand(_ text: String) -> Bool {
-        let lowered = text.lowercased()
+        let lowered = text
+            .lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if lowered.isEmpty { return false }
+
+        if lowered == "make"
+            || lowered == "ctest"
+            || lowered == "pytest"
+            || lowered == "npm test"
+            || lowered == "pnpm test"
+            || lowered == "yarn test"
+            || lowered == "go test"
+            || lowered == "cargo test"
+            || lowered == "swift test"
+            || lowered == "dotnet test"
+            || lowered == "xcodebuild test"
+            || lowered == "jest"
+            || lowered == "vitest"
+            || lowered == "flutter test" {
+            return true
+        }
+
         let markers = [
             "npm ", "pnpm ", "yarn ", "pip ", "python ", "python3 ",
             "cmake", "ctest", "cargo ", "go test", "go build", "make ",
-            "gradle ", "mvn ", "swift test", "swift build",
+            "gradle ", "mvn ", "swift test", "swift build", "dotnet ",
+            "xcodebuild ", "jest", "vitest", "flutter test",
             "./", "chmod ", "node ", "deno ", "php ", "composer ",
+            "npx ", "bun ", "uv ", "poetry ",
             "cd ", "mkdir ", "rm ", "cp ", "mv ", "git "
         ]
         return markers.contains(where: { lowered.contains($0) })
@@ -2654,10 +3015,12 @@ struct ChatScreen: View {
 
     private func openFrontendOverlayCodeViewer(_ overlay: FrontendBuildOverlayState) {
         guard !overlay.codeEntries.isEmpty else { return }
+        let terminalSnippet = frontendOverlayTerminalSnippet(for: overlay)
         activeFrontendCodeViewer = CodeViewerPayload(
             title: "项目代码",
             entries: overlay.codeEntries,
-            initialIndex: frontendOverlaySafeFileIndex(for: overlay)
+            initialIndex: frontendOverlaySafeFileIndex(for: overlay),
+            preferredTerminalCommand: terminalSnippet?.command
         )
     }
 
@@ -2781,10 +3144,30 @@ struct ChatScreen: View {
     }
 
     private func removeRenderTruncationMarkers(from text: String) -> String {
-        text
-            .replacingOccurrences(of: "\n\n[附件预览过长，已截断显示。]", with: "")
-            .replacingOccurrences(of: "\n\n[该消息过长，已在聊天页截断显示。]", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        var normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
+        let hadTruncationMarker = normalized.contains("[附件预览过长，已截断显示。]")
+            || normalized.contains("[该消息过长，已在聊天页截断显示。]")
+
+        normalized = normalized.replacingOccurrences(
+            of: #"\s*\[(?:附件预览过长，已截断显示。|该消息过长，已在聊天页截断显示。)\]\s*"#,
+            with: "\n",
+            options: .regularExpression
+        )
+        normalized = normalized.replacingOccurrences(
+            of: #"\n{3,}"#,
+            with: "\n\n",
+            options: .regularExpression
+        )
+
+        if hadTruncationMarker {
+            normalized = normalized.replacingOccurrences(
+                of: #"\n(?:`{3,}|~{3,})\s*$"#,
+                with: "",
+                options: .regularExpression
+            )
+        }
+
+        return normalized.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func frontendOverlaySnippetName(language: String?, index: Int) -> String {

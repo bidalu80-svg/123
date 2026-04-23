@@ -3020,10 +3020,30 @@ struct MessageBubbleView: View {
     }
 
     private func removingPreviewTruncationMarkers(from text: String) -> String {
-        text
-            .replacingOccurrences(of: "\n\n[附件预览过长，已截断显示。]", with: "")
-            .replacingOccurrences(of: "\n\n[该消息过长，已在聊天页截断显示。]", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        var normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
+        let hadTruncationMarker = normalized.contains("[附件预览过长，已截断显示。]")
+            || normalized.contains("[该消息过长，已在聊天页截断显示。]")
+
+        normalized = normalized.replacingOccurrences(
+            of: #"\s*\[(?:附件预览过长，已截断显示。|该消息过长，已在聊天页截断显示。)\]\s*"#,
+            with: "\n",
+            options: .regularExpression
+        )
+        normalized = normalized.replacingOccurrences(
+            of: #"\n{3,}"#,
+            with: "\n\n",
+            options: .regularExpression
+        )
+
+        if hadTruncationMarker {
+            normalized = normalized.replacingOccurrences(
+                of: #"\n(?:`{3,}|~{3,})\s*$"#,
+                with: "",
+                options: .regularExpression
+            )
+        }
+
+        return normalized.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func hasPreviewTruncationMarker(in text: String) -> Bool {
