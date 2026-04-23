@@ -544,25 +544,13 @@ struct MessageBubbleView: View {
             if message.isImageGenerationPlaceholder && message.imageAttachments.isEmpty {
                 imageGenerationProgressCard
             } else if message.isVideoGenerationPlaceholder && message.videoAttachments.isEmpty {
-                videoGenerationProgressContainer(streamingTextAnimated: true)
+                videoGenerationProgressContainer(streamingTextAnimated: false)
             } else {
-                let segments = shouldRenderStreamingTextDirectly(displayText)
-                    ? (displayText.isEmpty ? [] : [.text(displayText)])
-                    : parsedStreamingSegments(for: displayText)
+                let hasStreamingMedia = !message.imageAttachments.isEmpty || !message.videoAttachments.isEmpty
+                let hasStreamingText = !displayText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
-                if segments.isEmpty {
-                    if !message.imageAttachments.isEmpty || !message.videoAttachments.isEmpty {
-                        VStack(alignment: .leading, spacing: 10) {
-                            ForEach(message.imageAttachments) { attachment in
-                                messageImage(attachment)
-                            }
-                            ForEach(message.videoAttachments) { attachment in
-                                messageVideo(attachment)
-                            }
-                        }
-                    } else {
-                        streamingWaitingDot
-                    }
+                if !hasStreamingText && !hasStreamingMedia {
+                    streamingWaitingDot
                 } else {
                     VStack(alignment: .leading, spacing: 10) {
                         if streamingSlice.isTruncated {
@@ -571,8 +559,14 @@ struct MessageBubbleView: View {
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
-                        ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
-                            segmentView(segment, streamingTextAnimated: true)
+                        if hasStreamingText {
+                            selectableTextContent(displayText, streamingTextAnimated: false)
+                        }
+                        ForEach(message.imageAttachments) { attachment in
+                            messageImage(attachment)
+                        }
+                        ForEach(message.videoAttachments) { attachment in
+                            messageVideo(attachment)
                         }
                     }
                 }
@@ -791,8 +785,9 @@ struct MessageBubbleView: View {
 
     private func streamingDisplaySlice(from raw: String) -> (text: String, isTruncated: Bool) {
         let normalized = normalizedStreamingText(raw)
-        let hardLimit = 16_000
-        let tailLimit = 8_000
+        let isCodeLikePayload = normalized.contains("```") || normalized.contains("[[file:")
+        let hardLimit = isCodeLikePayload ? 6_000 : 8_000
+        let tailLimit = isCodeLikePayload ? 2_400 : 3_600
         guard normalized.count > hardLimit else {
             return (normalized, false)
         }
@@ -1492,23 +1487,19 @@ struct MessageBubbleView: View {
 
     private func selectableTextContent(_ text: String, streamingTextAnimated: Bool = false) -> some View {
         let displayText: String
-        if streamingTextAnimated || text.count > 9_000 {
+        if message.isStreaming || streamingTextAnimated || text.count > 6_000 {
             // Skip list decoration when text is too long to reduce layout cost.
             displayText = text
         } else {
             displayText = decoratedAssistantListText(text)
         }
-        let enableStreamingAnimation =
-            streamingTextAnimated
-            && displayText.count <= 3_500
-            && !ProcessInfo.processInfo.isLowPowerModeEnabled
         return SelectableLinkTextView(
             text: displayText,
             textColor: UIColor.label,
             linkColor: UIColor.secondaryLabel,
             font: chatUIFont,
             renderMarkdown: false,
-            streamingAnimated: enableStreamingAnimation,
+            streamingAnimated: false,
             onFileLinkTap: { path in
                 openCodeViewerForLinkedPath(path)
             }

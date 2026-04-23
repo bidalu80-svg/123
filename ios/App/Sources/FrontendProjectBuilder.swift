@@ -133,6 +133,10 @@ enum FrontendProjectBuilder {
             }
         }
 
+        if message.isStreaming {
+            return fastStreamingChatProgressSnapshot(from: message)
+        }
+
         let text = message.content.replacingOccurrences(of: "\r\n", with: "\n")
         let parsed = extractProjectFiles(from: message)
         let normalizedPaths = parsed.map { $0.path.lowercased() }
@@ -172,6 +176,45 @@ enum FrontendProjectBuilder {
             storeProgressSnapshotCache(snapshot, for: message.id)
         }
         return snapshot
+    }
+
+    private static func fastStreamingChatProgressSnapshot(from message: ChatMessage) -> ChatProgressSnapshot? {
+        let text = message.content.replacingOccurrences(of: "\r\n", with: "\n")
+        let lowered = text.lowercased()
+        let taggedFileCount = max(0, text.components(separatedBy: "[[file:").count - 1)
+        let pathHintCount = countProjectPathHints(in: text)
+        let attachmentCount = message.fileAttachments.count
+        let detectedFileCount = max(taggedFileCount, pathHintCount, attachmentCount)
+
+        let hasTaggedFile = taggedFileCount > 0
+        let hasFencedProjectBlock = containsLikelyProjectFencedBlock(in: text)
+        let hasHTMLText = looksLikeHTML(text)
+        let hasPHPText = looksLikePHP(text)
+        let hasProjectAttachment = message.fileAttachments.contains(where: {
+            $0.binaryBase64 == nil
+                && sanitizeRelativePath($0.fileName) != nil
+                && !$0.textContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        })
+
+        let shouldRenderProgress = detectedFileCount > 0
+            || hasTaggedFile
+            || hasFencedProjectBlock
+            || hasHTMLText
+            || hasPHPText
+            || hasProjectAttachment
+
+        guard shouldRenderProgress else { return nil }
+
+        let hasEntryHTML =
+            lowered.contains("index.html")
+            || lowered.contains("index.php")
+            || hasHTMLText
+            || hasPHPText
+
+        return ChatProgressSnapshot(
+            detectedFileCount: max(detectedFileCount, 1),
+            hasEntryHTML: hasEntryHTML
+        )
     }
 
     static func projectsRootURL() -> URL? {
@@ -419,6 +462,16 @@ enum FrontendProjectBuilder {
             storeParsedFilesCache(merged, for: message.id)
         }
         return merged
+    }
+
+    private static func countProjectPathHints(in text: String) -> Int {
+        let pattern = #"(?im)^(?:src|app|public|assets|components|pages|views|styles|scripts|lib|utils|server|client|api|cmd|internal|pkg)?/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:html|css|scss|sass|js|mjs|cjs|ts|tsx|jsx|vue|svelte|json|php|py|swift|go|rs|java|kt|sql|md|txt)$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return 0
+        }
+
+        let nsRange = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.numberOfMatches(in: text, range: nsRange)
     }
 
     private static func extractProjectFilesWithoutCache(from message: ChatMessage) -> [ParsedWebFile] {
