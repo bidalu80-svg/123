@@ -1121,6 +1121,10 @@ struct ChatScreen: View {
             return
         }
 
+        if isLikelyPendingAssistantPlaceholder(latestAssistant) {
+            return
+        }
+
         autoBuildInFlightAssistantIDs.remove(latestAssistant.id)
         guard latestAssistant.id != lastAutoBuiltAssistantMessageID else { return }
 
@@ -1151,6 +1155,11 @@ struct ChatScreen: View {
                     projectFormatRetryAttemptedUserIDs.insert(latestUserID)
                     viewModel.statusMessage = "检测到项目回复未按文件格式输出，正在自动纠正重试…"
                     Task {
+                        var spinCount = 0
+                        while viewModel.isSending && spinCount < 120 {
+                            try? await Task.sleep(nanoseconds: 100_000_000)
+                            spinCount += 1
+                        }
                         await viewModel.regenerateLastAssistantReply(forceProjectFileFormat: true)
                     }
                 } else {
@@ -1240,6 +1249,17 @@ struct ChatScreen: View {
         return messages[..<index].last(where: { $0.role == .user })?.id
     }
 
+    private func isLikelyPendingAssistantPlaceholder(_ message: ChatMessage) -> Bool {
+        guard viewModel.isSending else { return false }
+        guard message.role == .assistant else { return false }
+        let hasText = !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasAttachments =
+            !message.fileAttachments.isEmpty
+            || !message.imageAttachments.isEmpty
+            || !message.videoAttachments.isEmpty
+        return !hasText && !hasAttachments
+    }
+
     private func shouldSkipAutoProjectBuild(for assistant: ChatMessage, in messages: [ChatMessage]) -> Bool {
         guard let index = messages.firstIndex(where: { $0.id == assistant.id }), index > 0 else {
             return false
@@ -1263,7 +1283,17 @@ struct ChatScreen: View {
         guard let latestUser = prefix.last(where: { $0.role == .user }) else {
             return false
         }
-        return containsProjectBuildIntent(latestUser.content)
+
+        if containsProjectBuildIntent(latestUser.content) {
+            return true
+        }
+
+        if recentConversationContainsProjectContext(in: prefix),
+           looksLikeProjectFollowupEdit(latestUser.content) {
+            return true
+        }
+
+        return false
     }
 
     private func assistantContainsExplicitProjectPayload(_ assistant: ChatMessage) -> Bool {
@@ -1362,6 +1392,58 @@ struct ChatScreen: View {
         }
 
         return false
+    }
+
+    private func recentConversationContainsProjectContext(in messages: ArraySlice<ChatMessage>) -> Bool {
+        guard !messages.isEmpty else { return false }
+        var inspected = 0
+        for message in messages.reversed() {
+            guard message.role == .assistant else { continue }
+            inspected += 1
+            if FrontendProjectBuilder.canGenerateProject(from: message) {
+                return true
+            }
+            if inspected >= 6 {
+                break
+            }
+        }
+        return false
+    }
+
+    private func looksLikeProjectFollowupEdit(_ raw: String) -> Bool {
+        let normalized = raw
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard !normalized.isEmpty else { return false }
+
+        let followupMarkers = [
+            "继续改", "继续修改", "继续完善", "继续优化", "继续修复",
+            "再改", "再修", "再优化", "再调整", "改一下", "修一下",
+            "优化一下", "调整一下", "完善一下", "重构一下", "补一下",
+            "把这个", "这个排版", "这个样式", "这个报错", "这个问题",
+            "继续", "接着", "然后", "顺便",
+            "continue", "modify", "update", "refine", "improve", "fix",
+            "polish", "adjust", "tweak", "iterate", "revise"
+        ]
+        if followupMarkers.contains(where: { normalized.contains($0) }) {
+            return true
+        }
+
+        if normalized.range(
+            of: #"(继续|再|然后|接着|顺便|把).{0,12}(改|修改|修复|优化|完善|调整|重构|补充|增加|删除)"#,
+            options: .regularExpression
+        ) != nil {
+            return true
+        }
+        if normalized.range(
+            of: #"(fix|update|modify|improve|refactor|adjust|tweak).{0,20}(project|code|layout|style|ui|bug|error|file)"#,
+            options: .regularExpression
+        ) != nil {
+            return true
+        }
+
+        return normalized == "继续" || normalized == "continue"
     }
 
     private func containsLanguageProjectIntent(_ raw: String) -> Bool {
@@ -2303,9 +2385,6 @@ struct ChatScreen: View {
     }
 
     private func frontendOverlayCodeEntriesForOverlay(from message: ChatMessage) -> [CodeViewerEntry] {
-        if message.isStreaming {
-            return Self.frontendOverlayCodeEntriesCache[message.id]?.entries ?? []
-        }
         return frontendOverlayCodeEntries(from: message)
     }
 
@@ -2374,11 +2453,26 @@ struct ChatScreen: View {
 
     private func frontendOverlayCodeEntriesSignature(for message: ChatMessage) -> String {
         let content = message.content
+        if message.isStreaming {
+            let normalized = content.replacingOccurrences(of: "\r\n", with: "\n").lowercased()
+            let lengthBucket = normalized.count / 96
+            let taggedFileCount = max(0, normalized.components(separatedBy: "[[file:").count - 1)
+            let fenceCount = max(0, normalized.components(separatedBy: "```").count - 1)
+            return [
+                message.id.uuidString,
+                "1",
+                String(lengthBucket),
+                String(taggedFileCount),
+                String(fenceCount),
+                String(message.fileAttachments.count)
+            ].joined(separator: "|")
+        }
+
         let prefixHash = String(content.prefix(240)).hashValue
         let suffixHash = String(content.suffix(240)).hashValue
         return [
             message.id.uuidString,
-            message.isStreaming ? "1" : "0",
+            "0",
             String(content.count),
             String(prefixHash),
             String(suffixHash),

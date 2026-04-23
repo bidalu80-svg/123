@@ -337,15 +337,24 @@ enum FrontendProjectBuilder {
             merged["index.html"] = synthesized
         }
 
-        guard let entryRelativePath = preferredEntryPath(from: orderedPaths),
-              let entryHTML = merged[entryRelativePath] else {
+        guard let entryRelativePath = preferredEntryPath(from: orderedPaths) else {
             throw BuildError.missingEntryFile
         }
 
         if isHTMLPath(entryRelativePath) {
+            let currentEntryHTML = merged[entryRelativePath] ?? ""
+            merged[entryRelativePath] = normalizedEntryHTMLIfNeeded(
+                currentEntryHTML,
+                stylePaths: stylePaths,
+                scriptPaths: scriptPaths
+            )
+        }
+
+        if isHTMLPath(entryRelativePath) {
+            let currentEntryHTML = merged[entryRelativePath] ?? ""
             resolveReferencedAssetAliases(
                 entryRelativePath: entryRelativePath,
-                entryHTML: entryHTML,
+                entryHTML: currentEntryHTML,
                 merged: &merged,
                 orderedPaths: &orderedPaths
             )
@@ -805,10 +814,6 @@ enum FrontendProjectBuilder {
             return "Main.scala"
         case "dart":
             return "lib/main.dart"
-        case "bash", "sh", "zsh", "shell":
-            return "main.sh"
-        case "powershell", "ps1":
-            return "main.ps1"
         case "json":
             return "data.json"
         case "yaml", "yml":
@@ -937,6 +942,58 @@ enum FrontendProjectBuilder {
         }
 
         merged[entryRelativePath] = entryHTML
+    }
+
+    private static func normalizedEntryHTMLIfNeeded(
+        _ rawEntryHTML: String,
+        stylePaths: [String],
+        scriptPaths: [String]
+    ) -> String {
+        let normalized = rawEntryHTML.replacingOccurrences(of: "\r\n", with: "\n")
+        let trimmed = normalized.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if trimmed.isEmpty {
+            return synthesizedIndexHTML(
+                stylePaths: stylePaths,
+                scriptPaths: scriptPaths,
+                projectPaths: []
+            )
+        }
+
+        let lowered = trimmed.lowercased()
+        let hasDocumentStructure = lowered.contains("<!doctype html")
+            || lowered.contains("<html")
+            || lowered.contains("<body")
+
+        guard !hasDocumentStructure else {
+            return normalized
+        }
+
+        // Model may output a fragment (or plain text) as index.html; wrap it to avoid blank preview.
+        let styleLines = stylePaths.map { "    <link rel=\"stylesheet\" href=\"\($0)\">" }
+        let scriptLines = scriptPaths.map { "    <script src=\"\($0)\"></script>" }
+        let styleBlock = styleLines.isEmpty ? "" : (styleLines.joined(separator: "\n") + "\n")
+        let scriptBlock = scriptLines.isEmpty ? "" : ("\n" + scriptLines.joined(separator: "\n"))
+        let bodyContent: String
+        if trimmed.contains("<") && trimmed.contains(">") {
+            bodyContent = trimmed
+        } else {
+            bodyContent = "<main><pre>\(htmlEscaped(trimmed))</pre></main>"
+        }
+
+        return """
+        <!doctype html>
+        <html lang="zh-CN">
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>IEXA Project</title>
+        \(styleBlock)</head>
+        <body>
+        \(bodyContent)\(scriptBlock)
+        </body>
+        </html>
+        """
     }
 
     private static func referencedLocalAssetPaths(

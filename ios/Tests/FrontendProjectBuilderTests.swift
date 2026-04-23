@@ -363,4 +363,50 @@ final class FrontendProjectBuilderTests: XCTestCase {
         XCTAssertTrue(entryText.contains("<link rel=\"stylesheet\" href=\"../assets/main.css\">"))
         XCTAssertTrue(entryText.contains("<script src=\"../scripts/app.js\"></script>"))
     }
+
+    func testBuildProjectRepairsEmptyIndexHtmlAndLinksAssets() throws {
+        let message = ChatMessage(
+            role: .assistant,
+            content: "",
+            fileAttachments: [
+                ChatFileAttachment(
+                    fileName: "index.html",
+                    mimeType: "text/html",
+                    textContent: "   "
+                ),
+                ChatFileAttachment(
+                    fileName: "styles.css",
+                    mimeType: "text/css",
+                    textContent: "body { background: #fafafa; }"
+                ),
+                ChatFileAttachment(
+                    fileName: "script.js",
+                    mimeType: "application/javascript",
+                    textContent: "console.log('ui ok');"
+                )
+            ]
+        )
+
+        let result = try FrontendProjectBuilder.buildProject(from: message, mode: .overwriteLatestProject)
+        let entryText = try String(contentsOf: result.entryFileURL, encoding: .utf8).lowercased()
+
+        XCTAssertTrue(entryText.contains("<!doctype html>"))
+        XCTAssertTrue(entryText.contains("<link rel=\"stylesheet\" href=\"styles.css\">"))
+        XCTAssertTrue(entryText.contains("<script src=\"script.js\"></script>"))
+    }
+
+    func testCanGenerateProjectIgnoresTerminalOnlyBashFenceWithoutPath() {
+        let message = ChatMessage(
+            role: .assistant,
+            content: """
+            终端运行
+            ```bash
+            npm install
+            npm run dev
+            ```
+            """
+        )
+
+        XCTAssertFalse(FrontendProjectBuilder.canGenerateProject(from: message))
+    }
 }
