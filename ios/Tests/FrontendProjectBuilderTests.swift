@@ -285,4 +285,82 @@ final class FrontendProjectBuilderTests: XCTestCase {
         XCTAssertFalse(entryText.contains("```"))
         XCTAssertTrue(entryText.contains("<body>Hello</body>"))
     }
+
+    func testBuildProjectAutoWiresStylesheetAndScriptForNaturalHtmlEntry() throws {
+        let message = ChatMessage(
+            role: .assistant,
+            content: "",
+            fileAttachments: [
+                ChatFileAttachment(
+                    fileName: "index.html",
+                    mimeType: "text/html",
+                    textContent: """
+                    <!doctype html>
+                    <html>
+                    <head>
+                      <meta charset="utf-8">
+                    </head>
+                    <body>
+                      <h1>Hello</h1>
+                    </body>
+                    </html>
+                    """
+                ),
+                ChatFileAttachment(
+                    fileName: "styles.css",
+                    mimeType: "text/css",
+                    textContent: "body { color: #111; }"
+                ),
+                ChatFileAttachment(
+                    fileName: "script.js",
+                    mimeType: "application/javascript",
+                    textContent: "console.log('ready');"
+                )
+            ]
+        )
+
+        let result = try FrontendProjectBuilder.buildProject(from: message, mode: .overwriteLatestProject)
+        let entryText = try String(contentsOf: result.entryFileURL, encoding: .utf8)
+
+        XCTAssertEqual(result.entryFileURL.lastPathComponent.lowercased(), "index.html")
+        XCTAssertTrue(entryText.contains("<link rel=\"stylesheet\" href=\"styles.css\">"))
+        XCTAssertTrue(entryText.contains("<script src=\"script.js\"></script>"))
+    }
+
+    func testBuildProjectAutoWiresRelativeAssetPathsForNestedEntry() throws {
+        let message = ChatMessage(
+            role: .assistant,
+            content: "",
+            fileAttachments: [
+                ChatFileAttachment(
+                    fileName: "web/index.html",
+                    mimeType: "text/html",
+                    textContent: """
+                    <!doctype html>
+                    <html>
+                    <head><meta charset="utf-8"></head>
+                    <body><div id="app"></div></body>
+                    </html>
+                    """
+                ),
+                ChatFileAttachment(
+                    fileName: "assets/main.css",
+                    mimeType: "text/css",
+                    textContent: "body { margin: 0; }"
+                ),
+                ChatFileAttachment(
+                    fileName: "scripts/app.js",
+                    mimeType: "application/javascript",
+                    textContent: "document.getElementById('app').textContent = 'ok';"
+                )
+            ]
+        )
+
+        let result = try FrontendProjectBuilder.buildProject(from: message, mode: .overwriteLatestProject)
+        let entryText = try String(contentsOf: result.entryFileURL, encoding: .utf8)
+
+        XCTAssertTrue(result.entryFileURL.path.lowercased().hasSuffix("web/index.html"))
+        XCTAssertTrue(entryText.contains("<link rel=\"stylesheet\" href=\"../assets/main.css\">"))
+        XCTAssertTrue(entryText.contains("<script src=\"../scripts/app.js\"></script>"))
+    }
 }

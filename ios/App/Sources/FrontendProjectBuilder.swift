@@ -349,6 +349,11 @@ enum FrontendProjectBuilder {
                 merged: &merged,
                 orderedPaths: &orderedPaths
             )
+            autoWireEntryAssetReferencesIfNeeded(
+                entryRelativePath: entryRelativePath,
+                merged: &merged,
+                orderedPaths: orderedPaths
+            )
         }
 
         let projectDirectoryURL = try prepareProjectDirectory(mode: mode)
@@ -893,6 +898,47 @@ enum FrontendProjectBuilder {
         }
     }
 
+    private static func autoWireEntryAssetReferencesIfNeeded(
+        entryRelativePath: String,
+        merged: inout [String: String],
+        orderedPaths: [String]
+    ) {
+        guard var entryHTML = merged[entryRelativePath] else { return }
+        let referencedPaths = referencedLocalAssetPaths(in: entryHTML, entryRelativePath: entryRelativePath)
+        let hasLinkedStylesheet = referencedPaths.contains(where: { isBrowserStylePath($0) })
+        let hasLinkedScript = referencedPaths.contains(where: { isBrowserScriptPath($0) })
+
+        if !hasLinkedStylesheet {
+            let styleCandidates = orderedPaths.filter { path in
+                path != entryRelativePath && isBrowserStylePath(path)
+            }
+            if let stylePath = pickPreferredAutoLinkedAssetPath(
+                entryRelativePath: entryRelativePath,
+                candidatePaths: styleCandidates,
+                preferredBasenames: ["styles.css", "style.css", "main.css", "app.css"]
+            ) {
+                let href = relativeReferencePath(from: entryRelativePath, to: stylePath)
+                entryHTML = injectStylesheetReference(href: href, into: entryHTML)
+            }
+        }
+
+        if !hasLinkedScript {
+            let scriptCandidates = orderedPaths.filter { path in
+                path != entryRelativePath && isBrowserScriptPath(path)
+            }
+            if let scriptPath = pickPreferredAutoLinkedAssetPath(
+                entryRelativePath: entryRelativePath,
+                candidatePaths: scriptCandidates,
+                preferredBasenames: ["script.js", "app.js", "main.js", "index.js"]
+            ) {
+                let src = relativeReferencePath(from: entryRelativePath, to: scriptPath)
+                entryHTML = injectScriptReference(src: src, into: entryHTML)
+            }
+        }
+
+        merged[entryRelativePath] = entryHTML
+    }
+
     private static func referencedLocalAssetPaths(
         in html: String,
         entryRelativePath: String
@@ -917,6 +963,114 @@ enum FrontendProjectBuilder {
             }
         }
         return result
+    }
+
+    private static func pickPreferredAutoLinkedAssetPath(
+        entryRelativePath: String,
+        candidatePaths: [String],
+        preferredBasenames: [String]
+    ) -> String? {
+        guard !candidatePaths.isEmpty else { return nil }
+
+        let entryDirectory = (entryRelativePath as NSString).deletingLastPathComponent.lowercased()
+        for preferredBase in preferredBasenames {
+            if let sameDirectory = candidatePaths.first(where: { path in
+                let base = (path as NSString).lastPathComponent.lowercased()
+                let directory = (path as NSString).deletingLastPathComponent.lowercased()
+                return base == preferredBase && directory == entryDirectory
+            }) {
+                return sameDirectory
+            }
+        }
+
+        if let sameDirectoryAny = candidatePaths.first(where: {
+            ($0 as NSString).deletingLastPathComponent.lowercased() == entryDirectory
+        }) {
+            return sameDirectoryAny
+        }
+
+        for preferredBase in preferredBasenames {
+            if let preferredAny = candidatePaths.first(where: {
+                ($0 as NSString).lastPathComponent.lowercased() == preferredBase
+            }) {
+                return preferredAny
+            }
+        }
+
+        return candidatePaths.first
+    }
+
+    private static func relativeReferencePath(from entryRelativePath: String, to targetRelativePath: String) -> String {
+        let baseDirectory = (entryRelativePath as NSString)
+            .deletingLastPathComponent
+            .replacingOccurrences(of: "\\", with: "/")
+        let baseComponents = baseDirectory
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .map(String.init)
+        let targetComponents = targetRelativePath
+            .replacingOccurrences(of: "\\", with: "/")
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .map(String.init)
+        guard !targetComponents.isEmpty else { return targetRelativePath }
+
+        var commonCount = 0
+        let limit = min(baseComponents.count, targetComponents.count)
+        while commonCount < limit && baseComponents[commonCount] == targetComponents[commonCount] {
+            commonCount += 1
+        }
+
+        var parts = Array(repeating: "..", count: max(0, baseComponents.count - commonCount))
+        parts.append(contentsOf: targetComponents.dropFirst(commonCount))
+
+        if parts.isEmpty {
+            return targetComponents.last ?? targetRelativePath
+        }
+        return parts.joined(separator: "/")
+    }
+
+    private static func injectStylesheetReference(href: String, into html: String) -> String {
+        let normalizedHref = href.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedHref.isEmpty else { return html }
+        let loweredHTML = html.lowercased()
+        let loweredHref = normalizedHref.lowercased()
+        if loweredHTML.contains("href=\"\(loweredHref)\"") || loweredHTML.contains("href='\(loweredHref)'") {
+            return html
+        }
+
+        let tagLine = "    <link rel=\"stylesheet\" href=\"\(normalizedHref)\">"
+        if let headCloseRange = firstRegexRange(of: #"(?i)</head\s*>"#, in: html) {
+            return html.replacingCharacters(in: headCloseRange.lowerBound..<headCloseRange.lowerBound, with: "\(tagLine)\n")
+        }
+        if let bodyOpenRange = firstRegexRange(of: #"(?i)<body[^>]*>"#, in: html) {
+            return html.replacingCharacters(in: bodyOpenRange.upperBound..<bodyOpenRange.upperBound, with: "\n\(tagLine)")
+        }
+        return "\(tagLine)\n\(html)"
+    }
+
+    private static func injectScriptReference(src: String, into html: String) -> String {
+        let normalizedSrc = src.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedSrc.isEmpty else { return html }
+        let loweredHTML = html.lowercased()
+        let loweredSrc = normalizedSrc.lowercased()
+        if loweredHTML.contains("src=\"\(loweredSrc)\"") || loweredHTML.contains("src='\(loweredSrc)'") {
+            return html
+        }
+
+        let tagLine = "    <script src=\"\(normalizedSrc)\"></script>"
+        if let bodyCloseRange = firstRegexRange(of: #"(?i)</body\s*>"#, in: html) {
+            return html.replacingCharacters(in: bodyCloseRange.lowerBound..<bodyCloseRange.lowerBound, with: "\(tagLine)\n")
+        }
+        if let htmlCloseRange = firstRegexRange(of: #"(?i)</html\s*>"#, in: html) {
+            return html.replacingCharacters(in: htmlCloseRange.lowerBound..<htmlCloseRange.lowerBound, with: "\(tagLine)\n")
+        }
+        return "\(html)\n\(tagLine)"
+    }
+
+    private static func firstRegexRange(of pattern: String, in text: String) -> Range<String.Index>? {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let nsRange = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard let match = regex.firstMatch(in: text, range: nsRange) else { return nil }
+        return Range(match.range, in: text)
     }
 
     private static func normalizeLocalReferencePath(
@@ -1339,12 +1493,23 @@ enum FrontendProjectBuilder {
             || lowered.hasSuffix(".less")
     }
 
+    private static func isBrowserStylePath(_ path: String) -> Bool {
+        path.lowercased().hasSuffix(".css")
+    }
+
     private static func isScriptPath(_ path: String) -> Bool {
         let lowered = path.lowercased()
         return lowered.hasSuffix(".js")
             || lowered.hasSuffix(".mjs")
             || lowered.hasSuffix(".cjs")
             || lowered.hasSuffix(".ts")
+    }
+
+    private static func isBrowserScriptPath(_ path: String) -> Bool {
+        let lowered = path.lowercased()
+        return lowered.hasSuffix(".js")
+            || lowered.hasSuffix(".mjs")
+            || lowered.hasSuffix(".cjs")
     }
 
     private static func synthesizedIndexHTML(

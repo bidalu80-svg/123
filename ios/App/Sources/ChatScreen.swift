@@ -105,6 +105,7 @@ struct ChatScreen: View {
     @State private var noFileDirectiveAssistantIDs: Set<UUID> = []
     @State private var autoBuildEligibleAssistantIDs: Set<UUID> = []
     @State private var autoBuildInFlightAssistantIDs: Set<UUID> = []
+    @State private var projectFormatRetryAttemptedUserIDs: Set<UUID> = []
     @State private var composerMeasuredHeight: CGFloat = 0
     @State private var composerStableHeight: CGFloat = 58
     @State private var keyboardOverlapHeight: CGFloat = 0
@@ -214,6 +215,7 @@ struct ChatScreen: View {
             frontendOverlayMessageID = nil
             frontendOverlayFileIndex = 0
             frontendOverlayManualSelectionUntil = .distantPast
+            projectFormatRetryAttemptedUserIDs.removeAll()
             Self.frontendOverlayCodeEntriesCache.removeAll()
             Self.frontendOverlayCodeEntriesCacheOrder.removeAll()
             DispatchQueue.main.async {
@@ -228,6 +230,7 @@ struct ChatScreen: View {
             frontendOverlayMessageID = nil
             frontendOverlayFileIndex = 0
             frontendOverlayManualSelectionUntil = .distantPast
+            projectFormatRetryAttemptedUserIDs.removeAll()
             Self.frontendOverlayCodeEntriesCache.removeAll()
             Self.frontendOverlayCodeEntriesCacheOrder.removeAll()
             DispatchQueue.main.async {
@@ -1071,9 +1074,13 @@ struct ChatScreen: View {
         let currentAssistantIDs = Set(viewModel.messages.compactMap { message in
             message.role == .assistant ? message.id : nil
         })
+        let currentUserIDs = Set(viewModel.messages.compactMap { message in
+            message.role == .user ? message.id : nil
+        })
         noFileDirectiveAssistantIDs.formIntersection(currentAssistantIDs)
         autoBuildEligibleAssistantIDs.formIntersection(currentAssistantIDs)
         autoBuildInFlightAssistantIDs.formIntersection(currentAssistantIDs)
+        projectFormatRetryAttemptedUserIDs.formIntersection(currentUserIDs)
     }
 
     private func runAutoFrontendBuildIfNeeded(
@@ -1139,7 +1146,16 @@ struct ChatScreen: View {
             autoBuildEligibleAssistantIDs.remove(latestAssistant.id)
             cancelPendingAutoProjectBuild(for: latestAssistant.id)
             if shouldAttemptBuild {
-                viewModel.statusMessage = "未识别到可写入的项目文件。可让模型按 [[file:路径]] ... [[endfile]] 格式输出。"
+                if let latestUserID = latestUserMessageID(before: latestAssistant, in: newMessages),
+                   !projectFormatRetryAttemptedUserIDs.contains(latestUserID) {
+                    projectFormatRetryAttemptedUserIDs.insert(latestUserID)
+                    viewModel.statusMessage = "检测到项目回复未按文件格式输出，正在自动纠正重试…"
+                    Task {
+                        await viewModel.regenerateLastAssistantReply(forceProjectFileFormat: true)
+                    }
+                } else {
+                    viewModel.statusMessage = "未识别到可写入的项目文件。可让模型按 [[file:路径]] ... [[endfile]] 格式输出。"
+                }
             }
             return
         }
@@ -1215,6 +1231,13 @@ struct ChatScreen: View {
 
     private func refreshLatestProjectPreviewEntryFlag() {
         latestProjectHasPreviewEntry = FrontendProjectBuilder.latestEntryFileURL() != nil
+    }
+
+    private func latestUserMessageID(before assistant: ChatMessage, in messages: [ChatMessage]) -> UUID? {
+        guard let index = messages.firstIndex(where: { $0.id == assistant.id }), index > 0 else {
+            return nil
+        }
+        return messages[..<index].last(where: { $0.role == .user })?.id
     }
 
     private func shouldSkipAutoProjectBuild(for assistant: ChatMessage, in messages: [ChatMessage]) -> Bool {

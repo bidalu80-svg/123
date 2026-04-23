@@ -349,7 +349,7 @@ final class ChatViewModel: ObservableObject {
         chatState = .idle
     }
 
-    func regenerateLastAssistantReply() async {
+    func regenerateLastAssistantReply(forceProjectFileFormat: Bool = false) async {
         guard !isPrivateMode else { return }
         guard !isSending, isNetworkReachable, let index = currentSessionIndex else { return }
         let targetContext = StreamTargetContext(isPrivateMode: false, sessionID: sessions[index].id)
@@ -359,13 +359,18 @@ final class ChatViewModel: ObservableObject {
         guard let lastUserIndex = sessionMessages.lastIndex(where: { $0.role == .user }) else { return }
         let userMessage = sessionMessages[lastUserIndex]
         let historyBeforeSend = Array(sessionMessages[..<lastUserIndex])
+        let requestMessage = forceProjectFileFormat
+            ? makeProjectFormatCorrectionMessage(from: userMessage)
+            : userMessage
 
         sessions[index].messages.removeAll { $0.role == .assistant && $0.createdAt >= userMessage.createdAt }
         messages = sessions[index].messages
         persistSessions()
 
         errorMessage = ""
-        statusMessage = "正在重新生成…"
+        statusMessage = forceProjectFileFormat
+            ? "检测到项目输出格式不完整，正在自动纠正重试…"
+            : "正在重新生成…"
         chatState = .sending
         isSending = true
         if config.soundEffectsEnabled {
@@ -399,7 +404,7 @@ final class ChatViewModel: ObservableObject {
             try await service.sendMessage(
                 config: config,
                 history: historyBeforeSend,
-                message: userMessage,
+                message: requestMessage,
                 onEvent: { [weak self] chunk in
                     Task { @MainActor in
                         self?.appendStreamingChunk(chunk, to: placeholderID, target: targetContext)
@@ -413,9 +418,9 @@ final class ChatViewModel: ObservableObject {
             let reply = try await task.value
             flushAndStopActiveStreamingSession(applyRemaining: true)
             finishStreamingMessage(id: placeholderID, reply: reply, target: targetContext)
-            statusMessage = "重新生成成功"
+            statusMessage = forceProjectFileFormat ? "格式纠正重试成功" : "重新生成成功"
             chatState = .idle
-            appendLog("聊天测试：已重新生成上一条回复。")
+            appendLog(forceProjectFileFormat ? "聊天测试：已完成项目格式纠正重试。" : "聊天测试：已重新生成上一条回复。")
         } catch is CancellationError {
             flushAndStopActiveStreamingSession(applyRemaining: true)
             finishCancellation(id: placeholderID, target: targetContext)
@@ -427,9 +432,9 @@ final class ChatViewModel: ObservableObject {
             } else {
                 removeMessage(id: placeholderID, target: targetContext)
                 errorMessage = error.localizedDescription
-                statusMessage = "重新生成失败"
+                statusMessage = forceProjectFileFormat ? "格式纠正重试失败" : "重新生成失败"
                 chatState = .error(error.localizedDescription)
-                appendLog("重新生成失败：\(error.localizedDescription)")
+                appendLog(forceProjectFileFormat ? "项目格式纠正重试失败：\(error.localizedDescription)" : "重新生成失败：\(error.localizedDescription)")
             }
         }
     }
@@ -1081,6 +1086,41 @@ final class ChatViewModel: ObservableObject {
         text = text.replacingOccurrences(of: "__", with: "")
         text = text.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
         return text
+    }
+
+    private func makeProjectFormatCorrectionMessage(from message: ChatMessage) -> ChatMessage {
+        let correctionInstruction = """
+        [系统自动纠正重试]
+        你上一条回复没有按可落盘项目格式输出。请直接重答并严格遵守：
+        1) 不要解释，不要写“先查看目录/先做步骤”，直接输出完整文件。
+        2) 所有文件都必须使用：
+           [[file:relative/path.ext]]
+           <完整文件内容>
+           [[endfile]]
+        3) 路径必须是相对路径，禁止绝对路径和 `..`。
+        4) 文件内容必须可运行，且相互引用路径正确。
+        5) 回复最后补“终端运行”小节，给出最小命令链（安装依赖 -> 构建 -> 运行 -> 测试）。
+        """
+
+        let original = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        let mergedContent: String
+        if original.isEmpty {
+            mergedContent = correctionInstruction
+        } else {
+            mergedContent = """
+            \(message.content)
+
+            \(correctionInstruction)
+            """
+        }
+
+        return ChatMessage(
+            role: message.role,
+            content: mergedContent,
+            imageAttachments: message.imageAttachments,
+            videoAttachments: message.videoAttachments,
+            fileAttachments: message.fileAttachments
+        )
     }
 
     private func finalizedAssistantContent(existingContent: String, fallbackReplyText: String) -> String {
