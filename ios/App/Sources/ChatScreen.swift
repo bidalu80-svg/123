@@ -21,8 +21,8 @@ struct ChatScreen: View {
     private let autoSessionRotateCharacterCount = 100_000
     private let autoSessionRotateAssistantCharacterCount = 70_000
     private let autoSessionRotateSingleAssistantCharacterCount = 12_000
-    private let autoSessionRotateViewportOverflowRatio: CGFloat = 7.0
-    private let autoSessionRotateViewportOverflowAbsoluteGap: CGFloat = 220
+    private let autoSessionRotateViewportOverflowRatio: CGFloat = 4.0
+    private let autoSessionRotateViewportOverflowAbsoluteGap: CGFloat = 180
 
     private struct OutgoingEcho {
         let id: UUID
@@ -590,17 +590,25 @@ struct ChatScreen: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(Color.primary.opacity(0.84))
 
-            Text("输 \(compactTokenCount(toast.usage.inputTokens))")
+            Text("Token消耗")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.primary.opacity(0.88))
 
-            Text("出 \(compactTokenCount(toast.usage.outputTokens))")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.primary.opacity(0.88))
-
-            Text("缓存 \(compactTokenCount(toast.usage.cachedTokens))")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.primary.opacity(0.72))
+            tokenMetricBadge(
+                symbol: "arrow.up",
+                value: toast.usage.inputTokens,
+                tint: .primary.opacity(0.86)
+            )
+            tokenMetricBadge(
+                symbol: "arrow.down",
+                value: toast.usage.outputTokens,
+                tint: .primary.opacity(0.86)
+            )
+            tokenMetricBadge(
+                symbol: "arrow.up.arrow.down",
+                value: toast.usage.cachedTokens,
+                tint: .primary.opacity(0.72)
+            )
 
             Button {
                 dismissTokenUsageToast()
@@ -624,6 +632,16 @@ struct ChatScreen: View {
                 .stroke(Color.white.opacity(colorScheme == .dark ? 0.18 : 0.46), lineWidth: 0.8)
         )
         .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.18 : 0.08), radius: 9, x: 0, y: 4)
+    }
+
+    private func tokenMetricBadge(symbol: String, value: Int, tint: Color) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: symbol)
+                .font(.system(size: 10, weight: .bold))
+            Text(compactTokenCount(value))
+                .font(.system(size: 11, weight: .semibold))
+        }
+        .foregroundStyle(tint)
     }
 
     private func compactTokenCount(_ value: Int) -> String {
@@ -2113,6 +2131,9 @@ struct ChatScreen: View {
 
     private func sendCurrentComposerMessage() {
         guard viewModel.canSend else { return }
+        if rotateSessionBeforeSendIfNeeded() {
+            return
+        }
         stagePendingOutgoingEchoIfNeeded()
         isPinnedToBottom = true
         issueTranscriptCommand(.scrollToBottom(animated: false))
@@ -2194,15 +2215,11 @@ struct ChatScreen: View {
         let exceededByTotalCharacters = totalCharacters >= autoSessionRotateCharacterCount
         let exceededByAssistantCharacters = totalAssistantCharacters >= autoSessionRotateAssistantCharacterCount
         let exceededBySingleAssistantReply = latestAssistantCharacters >= autoSessionRotateSingleAssistantCharacterCount
-        let viewportHeight = max(1, transcriptMetrics.viewportHeight)
-        let contentHeight = max(viewportHeight, transcriptMetrics.contentHeight)
-        let viewportOverflowGap = max(0, contentHeight - viewportHeight)
-        let viewportOverflowRatio = contentHeight / viewportHeight
-        let exceededByViewportRatio = viewportOverflowRatio >= autoSessionRotateViewportOverflowRatio
-        let exceededByViewportGap = viewportOverflowGap >= autoSessionRotateViewportOverflowAbsoluteGap
-            && totalAssistantCharacters >= 30_000
-            && messages.count >= 24
-        let exceededByViewportOverflow = exceededByViewportRatio || exceededByViewportGap
+        let viewportOverflow = viewportOverflowState(
+            assistantCharacters: totalAssistantCharacters,
+            messageCount: messages.count
+        )
+        let exceededByViewportOverflow = viewportOverflow.exceeded
 
         guard exceededByMessageCount
             || exceededByTotalCharacters
@@ -2221,13 +2238,53 @@ struct ChatScreen: View {
         } else if exceededByTotalCharacters {
             viewModel.statusMessage = "当前会话总内容过长，已自动开启新会话以保持流畅。旧会话仍可在侧栏查看。"
         } else if exceededByViewportOverflow {
-            let ratioText = String(format: "%.1f", viewportOverflowRatio)
+            let ratioText = String(format: "%.1f", viewportOverflow.ratio)
             viewModel.statusMessage = "当前窗口内容高度约为视口 \(ratioText)x，已自动开启新会话以保证完整显示与流畅滑动。旧会话仍可在侧栏查看。"
         } else {
             viewModel.statusMessage = "当前会话超过 \(autoSessionRotateMessageCount) 条，已自动开启新会话以保持流畅。旧会话仍可在侧栏查看。"
         }
         isPinnedToBottom = true
         issueTranscriptCommand(.scrollToBottom(animated: false))
+    }
+
+    private func rotateSessionBeforeSendIfNeeded() -> Bool {
+        guard !viewModel.isPrivateMode else { return false }
+        guard !viewModel.messages.isEmpty else { return false }
+        guard !viewModel.isSending else { return false }
+        guard let sessionID = viewModel.currentSessionID else { return false }
+
+        let totalAssistantCharacters = totalAssistantCharacterCount(viewModel.messages)
+        let overflow = viewportOverflowState(
+            assistantCharacters: totalAssistantCharacters,
+            messageCount: viewModel.messages.count
+        )
+        guard overflow.exceeded else { return false }
+
+        autoRotatedSessionIDs.insert(sessionID)
+        viewModel.createNewSession()
+        isPinnedToBottom = true
+        issueTranscriptCommand(.scrollToBottom(animated: false))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+            issueTranscriptCommand(.scrollToBottom(animated: false))
+        }
+        let ratioText = String(format: "%.1f", overflow.ratio)
+        viewModel.statusMessage = "当前会话已超出窗口承载（约 \(ratioText)x），已切换到新会话；请再次点击发送。"
+        return true
+    }
+
+    private func viewportOverflowState(
+        assistantCharacters: Int,
+        messageCount: Int
+    ) -> (exceeded: Bool, ratio: CGFloat, gap: CGFloat) {
+        let viewportHeight = max(1, transcriptMetrics.viewportHeight)
+        let contentHeight = max(viewportHeight, transcriptMetrics.contentHeight)
+        let gap = max(0, contentHeight - viewportHeight)
+        let ratio = contentHeight / viewportHeight
+        let exceededByRatio = ratio >= autoSessionRotateViewportOverflowRatio
+        let exceededByGap = gap >= autoSessionRotateViewportOverflowAbsoluteGap
+            && assistantCharacters >= 24_000
+            && messageCount >= 16
+        return (exceededByRatio || exceededByGap, ratio, gap)
     }
 
     private func totalMessageCharacterCount(_ messages: [ChatMessage]) -> Int {

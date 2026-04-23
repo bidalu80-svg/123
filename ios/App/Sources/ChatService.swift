@@ -40,6 +40,13 @@ struct ChatRequestBuilder {
     6) 若用户明确要求网页/前端项目，继续按网页最佳实践输出（例如 `index.html`、`styles.css`、`script.js` 或框架结构）。
     7) 除非用户明确要求解释，尽量以“简短说明 + 完整文件输出”为主。
     """
+    private static let strictCodeOnlySystemPrompt = """
+    当用户明确提出“只输出代码、不输出解释、保持逻辑不变、自动修复格式”时，必须严格执行：
+    1) 仅输出一个 markdown 代码块。
+    2) 代码块外不允许出现任何字符（包括标题、解释、注释、列表、提示语）。
+    3) 保持原逻辑不变，只修复缩进、括号、换行与格式问题。
+    4) 不要补充额外功能、不要删减核心语句。
+    """
     private static let maxHistoryMessages = 22
     private static let maxHistoryCharacters = 42_000
     private static let maxSingleHistoryMessageChars = 7_000
@@ -121,6 +128,13 @@ struct ChatRequestBuilder {
             prefix.append([
                 "role": "system",
                 "content": frontendAutoBuildSystemPrompt
+            ])
+        }
+
+        if shouldInjectStrictCodeOnlyPrompt(message: message) {
+            prefix.append([
+                "role": "system",
+                "content": strictCodeOnlySystemPrompt
             ])
         }
 
@@ -224,6 +238,36 @@ struct ChatRequestBuilder {
         ]
 
         return directiveMarkers.contains { raw.contains($0) }
+    }
+
+    private static func shouldInjectStrictCodeOnlyPrompt(message: ChatMessage) -> Bool {
+        guard message.role == .user else { return false }
+        let raw = message.copyableText
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard !raw.isEmpty else { return false }
+
+        let markers = [
+            "只输出代码",
+            "不要输出任何文字",
+            "保持原逻辑不变",
+            "自动修复缩进",
+            "确保全部内容都在同一个代码块",
+            "如果输出了代码块之外",
+            "only code",
+            "single code block",
+            "no explanation",
+            "keep logic unchanged",
+            "fix indentation",
+            "outside code block"
+        ]
+        let matched = markers.reduce(into: 0) { partial, marker in
+            if raw.contains(marker) {
+                partial += 1
+            }
+        }
+        return matched >= 2
     }
 
     private static func compactHistoryForRequest(_ history: [ChatMessage]) -> [ChatMessage] {
@@ -440,7 +484,11 @@ struct ChatRequestBuilder {
         return request
     }
 
-    static func makeImagesGenerationRequest(config: ChatConfig, prompt: String) throws -> URLRequest {
+    static func makeImagesGenerationRequest(
+        config: ChatConfig,
+        prompt: String,
+        forceMinimalPayload: Bool = false
+    ) throws -> URLRequest {
         let endpoint = config.imagesGenerationsURLString
         guard let url = URL(string: endpoint), !endpoint.isEmpty else {
             throw ChatServiceError.invalidURL
@@ -455,7 +503,11 @@ struct ChatRequestBuilder {
             request.setValue("Bearer \(trimmedAPIKey)", forHTTPHeaderField: "Authorization")
         }
 
-        let payload = makeImageGenerationPayload(config: config, prompt: prompt)
+        let payload = makeImageGenerationPayload(
+            config: config,
+            prompt: prompt,
+            forceMinimalPayload: forceMinimalPayload
+        )
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
         return request
     }
@@ -549,7 +601,11 @@ struct ChatRequestBuilder {
         body.append("\(value)\r\n".data(using: .utf8) ?? Data())
     }
 
-    private static func makeImageGenerationPayload(config: ChatConfig, prompt: String) -> [String: Any] {
+    private static func makeImageGenerationPayload(
+        config: ChatConfig,
+        prompt: String,
+        forceMinimalPayload: Bool
+    ) -> [String: Any] {
         let size = config.imageGenerationSize.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? ChatConfig.default.imageGenerationSize
             : config.imageGenerationSize.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -570,6 +626,13 @@ struct ChatRequestBuilder {
                 payload["resolution"] = resolution
             }
             return payload
+        }
+
+        if forceMinimalPayload {
+            return [
+                "model": config.model,
+                "prompt": prompt
+            ]
         }
 
         return [
@@ -1296,43 +1359,160 @@ final class ChatService {
             throw ChatServiceError.invalidInput("生图模式需要输入图片描述（prompt）。")
         }
 
-        let request = try ChatRequestBuilder.makeImagesGenerationRequest(config: config, prompt: prompt)
-        let (data, response) = try await withRetry { [self] in
-            try await session.data(for: request)
+        let attempts = buildImageGenerationAttempts(config: config)
+        var lastError: Error = ChatServiceError.noData
+
+        for (index, attempt) in attempts.enumerated() {
+            do {
+                let request = try ChatRequestBuilder.makeImagesGenerationRequest(
+                    config: attempt.config,
+                    prompt: prompt,
+                    forceMinimalPayload: attempt.forceMinimalPayload
+                )
+                let (data, response) = try await withRetry { [self] in
+                    try await session.data(for: request)
+                }
+
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    throw ChatServiceError.invalidResponse
+                }
+                guard (200...299).contains(httpResponse.statusCode) else {
+                    throw ChatServiceError.httpError(httpResponse.statusCode)
+                }
+
+                guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    throw ChatServiceError.noData
+                }
+
+                let parsed = StreamParser.extractPayload(from: object)
+                let images = deduplicateImages(
+                    parsed.imageURLs.map { ChatImageAttachment(dataURL: $0, mimeType: "image/*", remoteURL: $0) }
+                )
+                guard !images.isEmpty else {
+                    throw ChatServiceError.noData
+                }
+
+                let revisedPrompt = object["revised_prompt"] as? String
+                let parsedText = parsed.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let text: String
+                if !parsedText.isEmpty {
+                    text = parsedText
+                } else if let revisedPrompt, !revisedPrompt.isEmpty {
+                    text = "优化提示词：\(revisedPrompt)"
+                } else {
+                    text = ""
+                }
+
+                onEvent(
+                    StreamChunk(
+                        rawLine: "",
+                        deltaText: text,
+                        imageURLs: images.map(\.requestURLString),
+                        isDone: false
+                    )
+                )
+                return ChatReply(text: text, imageAttachments: images)
+            } catch let error as ChatServiceError {
+                let hasNext = index + 1 < attempts.count
+                if hasNext, shouldRetryImageGenerationAttempt(for: error) {
+                    lastError = error
+                    continue
+                }
+                throw error
+            } catch {
+                let hasNext = index + 1 < attempts.count
+                if hasNext {
+                    lastError = error
+                    continue
+                }
+                throw error
+            }
         }
 
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw ChatServiceError.invalidResponse
-        }
-        guard (200...299).contains(httpResponse.statusCode) else {
-            throw ChatServiceError.httpError(httpResponse.statusCode)
+        throw lastError
+    }
+
+    private func buildImageGenerationAttempts(
+        config: ChatConfig
+    ) -> [(config: ChatConfig, forceMinimalPayload: Bool)] {
+        var attempts: [(config: ChatConfig, forceMinimalPayload: Bool)] = []
+        var seen: Set<String> = []
+
+        func append(_ candidate: ChatConfig, forceMinimalPayload: Bool) {
+            let normalizedPath = ChatConfigStore.normalizeEndpointPath(
+                candidate.imagesGenerationsPath,
+                fallback: ChatConfig.defaultImagesGenerationsPath
+            ).lowercased()
+            let key = "\(normalizedPath)|\(candidate.model.lowercased())|\(forceMinimalPayload ? "1" : "0")"
+            guard seen.insert(key).inserted else { return }
+            attempts.append((candidate, forceMinimalPayload))
         }
 
-        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw ChatServiceError.noData
-        }
+        append(config, forceMinimalPayload: false)
 
-        let parsed = StreamParser.extractPayload(from: object)
-        let images = deduplicateImages(
-            parsed.imageURLs.map { ChatImageAttachment(dataURL: $0, mimeType: "image/*", remoteURL: $0) }
+        let normalizedPath = ChatConfigStore.normalizeEndpointPath(
+            config.imagesGenerationsPath,
+            fallback: ChatConfig.defaultImagesGenerationsPath
         )
-        guard !images.isEmpty else {
-            throw ChatServiceError.noData
+        let loweredPath = normalizedPath.lowercased()
+        if loweredPath.hasPrefix("/v1/") {
+            var withoutV1 = config
+            let stripped = String(normalizedPath.dropFirst(3))
+            withoutV1.imagesGenerationsPath = stripped.hasPrefix("/") ? stripped : "/\(stripped)"
+            append(withoutV1, forceMinimalPayload: false)
+        } else if loweredPath.hasPrefix("/images/") {
+            var withV1 = config
+            withV1.imagesGenerationsPath = "/v1" + normalizedPath
+            append(withV1, forceMinimalPayload: false)
         }
 
-        let revisedPrompt = object["revised_prompt"] as? String
-        let parsedText = parsed.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let text: String
-        if !parsedText.isEmpty {
-            text = parsedText
-        } else if let revisedPrompt, !revisedPrompt.isEmpty {
-            text = "优化提示词：\(revisedPrompt)"
-        } else {
-            text = ""
+        if isLikelyNonImageModel(config.model) {
+            var imageModel = config
+            imageModel.model = "gpt-image-1"
+            append(imageModel, forceMinimalPayload: false)
+
+            if loweredPath.hasPrefix("/v1/") {
+                var imageModelWithoutV1 = imageModel
+                let stripped = String(normalizedPath.dropFirst(3))
+                imageModelWithoutV1.imagesGenerationsPath = stripped.hasPrefix("/") ? stripped : "/\(stripped)"
+                append(imageModelWithoutV1, forceMinimalPayload: false)
+            }
         }
 
-        onEvent(StreamChunk(rawLine: "", deltaText: text, imageURLs: images.map(\.requestURLString), isDone: false))
-        return ChatReply(text: text, imageAttachments: images)
+        let standardAttempts = attempts
+        for attempt in standardAttempts {
+            append(attempt.config, forceMinimalPayload: true)
+        }
+
+        return attempts
+    }
+
+    private func shouldRetryImageGenerationAttempt(for error: ChatServiceError) -> Bool {
+        switch error {
+        case .invalidResponse, .noData:
+            return true
+        case .httpError(let status):
+            return [400, 404, 405, 415, 422, 429, 500, 501, 502, 503, 504].contains(status)
+        case .invalidInput, .invalidURL, .unsupported:
+            return false
+        }
+    }
+
+    private func isLikelyNonImageModel(_ rawModel: String) -> Bool {
+        let model = rawModel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !model.isEmpty else { return false }
+
+        let imageMarkers = [
+            "image", "dall", "flux", "stable-diffusion", "sdxl",
+            "grok-imagine", "grok-image", "midjourney", "janus", "recraft"
+        ]
+        if imageMarkers.contains(where: { model.contains($0) }) {
+            return false
+        }
+        if model.contains("video") {
+            return false
+        }
+        return true
     }
 
     private func sendVideoGeneration(
@@ -2169,8 +2349,29 @@ final class ChatService {
 
         let cachedTokens =
             extractInt(for: ["cached_tokens", "input_cached_tokens", "cache_read_input_tokens"], in: usage)
-            ?? extractInt(for: ["cached_tokens"], in: usage["input_tokens_details"])
-            ?? extractInt(for: ["cached_tokens"], in: usage["prompt_tokens_details"])
+            ?? extractInt(for: ["cached_tokens", "cache_read_tokens"], in: usage["input_tokens_details"])
+            ?? extractInt(for: ["cached_tokens", "cache_read_tokens"], in: usage["prompt_tokens_details"])
+            ?? extractInt(for: ["cached_tokens", "cache_read_tokens"], in: usage["input_token_details"])
+            ?? extractInt(for: ["cached_tokens", "cache_read_tokens"], in: usage["prompt_token_details"])
+            ?? sumIntValues(
+                for: [
+                    "cache_read_input_tokens",
+                    "input_cached_tokens",
+                    "prompt_cache_hit_tokens",
+                    "cache_read_tokens"
+                ],
+                in: usage
+            )
+            ?? extractIntRecursively(
+                for: [
+                    "cached_tokens",
+                    "cache_read_input_tokens",
+                    "input_cached_tokens",
+                    "prompt_cache_hit_tokens",
+                    "cache_read_tokens"
+                ],
+                in: usage
+            )
 
         guard inputTokens != nil || outputTokens != nil || totalTokens != nil || cachedTokens != nil else {
             return nil
@@ -2198,6 +2399,46 @@ final class ChatService {
             if let value = dict[key] {
                 if let parsed = parseInt(value) {
                     return parsed
+                }
+            }
+        }
+        return nil
+    }
+
+    private func sumIntValues(for keys: [String], in node: Any?) -> Int? {
+        guard let dict = node as? [String: Any] else { return nil }
+        var total = 0
+        var hit = false
+        for key in keys {
+            guard let raw = dict[key], let parsed = parseInt(raw) else { continue }
+            total += parsed
+            hit = true
+        }
+        return hit ? total : nil
+    }
+
+    private func extractIntRecursively(for keys: [String], in node: Any?) -> Int? {
+        let wanted = Set(keys.map { $0.lowercased() })
+        return extractIntRecursively(in: node, wantedKeys: wanted)
+    }
+
+    private func extractIntRecursively(in node: Any?, wantedKeys: Set<String>) -> Int? {
+        if let dict = node as? [String: Any] {
+            for (key, value) in dict {
+                if wantedKeys.contains(key.lowercased()), let parsed = parseInt(value) {
+                    return parsed
+                }
+                if let nested = extractIntRecursively(in: value, wantedKeys: wantedKeys) {
+                    return nested
+                }
+            }
+            return nil
+        }
+
+        if let array = node as? [Any] {
+            for value in array {
+                if let nested = extractIntRecursively(in: value, wantedKeys: wantedKeys) {
+                    return nested
                 }
             }
         }
