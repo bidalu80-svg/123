@@ -82,7 +82,11 @@ final class RemoteShellExecutionService {
         }
 
         if !(200...299).contains(http.statusCode) {
-            let message = parsedErrorMessage(from: data)
+            let message = parsedErrorMessage(
+                from: data,
+                endpoint: endpointText,
+                status: http.statusCode
+            )
             throw RemoteShellExecutionError.httpError(status: http.statusCode, message: message)
         }
 
@@ -165,8 +169,17 @@ final class RemoteShellExecutionService {
         return fb
     }
 
-    private func parsedErrorMessage(from data: Data) -> String {
+    private func parsedErrorMessage(from data: Data, endpoint: String, status: Int) -> String {
         if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let errorObject = object["error"] as? [String: Any] {
+                let nestedMessage = firstString(
+                    keys: ["message", "detail", "reason", "error_description"],
+                    in: errorObject
+                )
+                if !nestedMessage.isEmpty {
+                    return clipErrorMessage(nestedMessage)
+                }
+            }
             let message = firstString(
                 keys: ["message", "error", "detail", "reason"],
                 in: object
@@ -180,11 +193,21 @@ final class RemoteShellExecutionService {
             .trimmingCharacters(in: .whitespacesAndNewlines),
            !text.isEmpty {
             if looksLikeHTMLResponse(text) {
-                return "接口返回了 HTML 页面（常见于 404 Not Found）。请检查“终端执行接口”是否指向可用的 shell 路由（例如 /v1/shell/execute）。"
+                return buildNotFoundGuidance(endpoint: endpoint, status: status)
             }
             return clipErrorMessage(text)
         }
+        if status == 404 {
+            return buildNotFoundGuidance(endpoint: endpoint, status: status)
+        }
         return ""
+    }
+
+    private func buildNotFoundGuidance(endpoint: String, status: Int) -> String {
+        if status != 404 {
+            return "接口请求失败（HTTP \(status)）。"
+        }
+        return "终端接口返回 404，当前地址为 \(endpoint)。请在设置中把“终端执行接口”改成你服务器真实可用的 shell 路由（例如 http://<server-ip>:8787/v1/shell/execute）。"
     }
 
     private func looksLikeHTMLResponse(_ text: String) -> Bool {

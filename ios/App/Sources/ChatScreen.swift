@@ -2410,12 +2410,13 @@ struct ChatScreen: View {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
 
-        if isTerminalCommandLanguage(normalizedLanguage), looksLikeShellCommand(normalizedCommand) {
+        if isTerminalCommandLanguage(normalizedLanguage),
+            looksLikeExecutableShellBlock(normalizedCommand, language: normalizedLanguage) {
             let safeLanguage = normalizedLanguage.isEmpty ? "bash" : normalizedLanguage
             return (safeLanguage, normalizedCommand)
         }
 
-        if looksLikeShellCommand(normalizedCommand) {
+        if looksLikeExecutableShellBlock(normalizedCommand, language: normalizedLanguage) {
             let safeLanguage = normalizedLanguage.isEmpty ? "bash" : normalizedLanguage
             return (safeLanguage, normalizedCommand)
         }
@@ -2558,7 +2559,7 @@ struct ChatScreen: View {
             guard !buffer.isEmpty else { return }
             let joined = buffer.joined(separator: "\n")
             let normalized = normalizedTerminalCommandForExecution(joined)
-            if !normalized.isEmpty && looksLikeShellCommand(normalized) {
+            if !normalized.isEmpty && looksLikeExecutableShellBlock(normalized, language: nil) {
                 runs.append(normalized)
             }
             buffer.removeAll(keepingCapacity: true)
@@ -2590,7 +2591,118 @@ struct ChatScreen: View {
         if normalized.hasPrefix("[") && normalized.hasSuffix("]") {
             return false
         }
-        return looksLikeShellCommand(normalized)
+        return looksLikeExecutableShellLine(normalized)
+    }
+
+    private func looksLikeExecutableShellBlock(_ text: String, language: String?) -> Bool {
+        let normalized = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return false }
+
+        let lines = normalized.components(separatedBy: "\n")
+            .map { normalizedTerminalCommandLineForExecution($0) }
+            .filter {
+                let trimmed = $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                return !trimmed.isEmpty && !trimmed.hasPrefix("#")
+            }
+        guard !lines.isEmpty else { return false }
+
+        let commandLikeCount = lines.reduce(into: 0) { count, line in
+            if looksLikeExecutableShellLine(line) {
+                count += 1
+            }
+        }
+        guard commandLikeCount > 0 else { return false }
+
+        if lines.count == 1 {
+            return commandLikeCount == 1
+        }
+
+        let normalizedLanguage = (language ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        if isTerminalCommandLanguage(normalizedLanguage) {
+            return commandLikeCount >= max(1, lines.count / 2)
+        }
+        return commandLikeCount >= max(1, Int(ceil(Double(lines.count) * 0.65)))
+    }
+
+    private func looksLikeExecutableShellLine(_ line: String) -> Bool {
+        var normalized = normalizedTerminalCommandLineForExecution(line)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return false }
+
+        if normalized.hasPrefix("|") { return false }
+        if normalized.range(of: #"^[A-Za-z_][A-Za-z0-9_]*\("#, options: .regularExpression) != nil {
+            return false
+        }
+
+        let lower = normalized.lowercased()
+        if lower.hasPrefix("export ") {
+            normalized = String(normalized.dropFirst(7)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        while true {
+            guard let assignmentRange = normalized.range(
+                of: #"^[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+"#,
+                options: .regularExpression
+            ) else {
+                break
+            }
+            normalized.removeSubrange(assignmentRange)
+            normalized = normalized.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard !normalized.isEmpty else { return false }
+
+        var tokens = normalized.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        guard !tokens.isEmpty else { return false }
+
+        if tokens[0].lowercased() == "sudo" {
+            tokens.removeFirst()
+        }
+        guard let token = tokens.first?.lowercased(), !token.isEmpty else { return false }
+
+        if token.hasPrefix("./") || token.hasPrefix("../") || token.hasPrefix("/") {
+            return true
+        }
+        if token.hasSuffix(".sh")
+            || token.hasSuffix(".bash")
+            || token.hasSuffix(".zsh")
+            || token.hasSuffix(".ps1")
+            || token.hasSuffix(".cmd")
+            || token.hasSuffix(".bat") {
+            return true
+        }
+        if token.range(of: #"^[a-z]:\\.*"#, options: .regularExpression) != nil {
+            return true
+        }
+        if token.range(of: #"^[a-z0-9._-]+\.(exe|cmd|bat)$"#, options: .regularExpression) != nil {
+            return true
+        }
+
+        let knownCommands: Set<String> = [
+            "bash", "sh", "zsh", "pwsh", "powershell", "cmd",
+            "python", "python3", "pip", "pip3", "uv", "poetry",
+            "node", "npm", "npx", "pnpm", "yarn", "bun", "deno",
+            "go", "cargo", "rustc",
+            "cmake", "ctest", "make", "ninja",
+            "gradle", "mvn", "xcodebuild", "swift", "dotnet", "flutter",
+            "clang", "clang++", "g++", "gcc", "javac", "java",
+            "git", "docker", "kubectl", "helm",
+            "ls", "dir", "cd", "pwd", "cat", "echo", "cp", "mv", "rm", "mkdir", "chmod", "chown",
+            "tar", "zip", "unzip", "curl", "wget",
+            "pytest", "jest", "vitest"
+        ]
+        if knownCommands.contains(token) {
+            return true
+        }
+
+        if token.hasPrefix("python") || token.hasPrefix("pip") {
+            return true
+        }
+
+        return false
     }
 
     private func containsLikelyTestCommand(_ command: String) -> Bool {
@@ -3064,7 +3176,7 @@ struct ChatScreen: View {
         for segment in segments {
             switch segment {
             case .file(let name, let language, let content):
-                let normalized = removeRenderTruncationMarkers(from: content)
+                let normalized = normalizeRenderableCodeContent(content)
                 guard !normalized.isEmpty else { continue }
                 entries.append(
                     CodeViewerEntry(
@@ -3074,7 +3186,7 @@ struct ChatScreen: View {
                     )
                 )
             case .code(let language, let content):
-                let normalized = removeRenderTruncationMarkers(from: content)
+                let normalized = normalizeRenderableCodeContent(content)
                 guard !normalized.isEmpty else { continue }
                 entries.append(
                     CodeViewerEntry(
@@ -3112,6 +3224,52 @@ struct ChatScreen: View {
         }
 
         return deduped
+    }
+
+    private func normalizeRenderableCodeContent(_ text: String) -> String {
+        let cleaned = removeRenderTruncationMarkers(from: text)
+        return unwrapSingleFencedCodeContentIfNeeded(cleaned)
+    }
+
+    private func unwrapSingleFencedCodeContentIfNeeded(_ raw: String) -> String {
+        let normalized = raw
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return "" }
+
+        let lines = normalized.components(separatedBy: "\n")
+        guard !lines.isEmpty else { return normalized }
+
+        let firstLine = lines[0].trimmingCharacters(in: .whitespacesAndNewlines)
+        let isTickFence = firstLine.hasPrefix("```")
+        let isWaveFence = firstLine.hasPrefix("~~~")
+        guard isTickFence || isWaveFence else { return normalized }
+
+        let closingPattern = isTickFence
+            ? #"^`{3,}\s*$"#
+            : #"^~{3,}\s*$"#
+        var closingIndex: Int?
+        if lines.count > 1 {
+            for index in stride(from: lines.count - 1, through: 1, by: -1) {
+                let candidate = lines[index].trimmingCharacters(in: .whitespacesAndNewlines)
+                if candidate.range(of: closingPattern, options: .regularExpression) != nil {
+                    closingIndex = index
+                    break
+                }
+            }
+        }
+
+        let contentLines: [String]
+        if let closingIndex, closingIndex > 0 {
+            contentLines = Array(lines[1..<closingIndex])
+        } else {
+            contentLines = Array(lines.dropFirst())
+        }
+
+        let content = contentLines
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return content.isEmpty ? normalized : content
     }
 
     private func frontendOverlayCodeEntriesSignature(for message: ChatMessage) -> String {

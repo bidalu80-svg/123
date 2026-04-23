@@ -596,6 +596,9 @@ enum MessageContentParser {
         guard !trimmed.isEmpty else { return false }
         if isLikelyNaturalLanguageBullet(trimmed) { return false }
         if looksLikeNaturalLanguageSentence(trimmed) { return false }
+        if trimmed.range(of: #"[。！？；，]$"#, options: .regularExpression) != nil {
+            return false
+        }
 
         if trimmed.range(
             of: #"^(package|import|func|type|var|const|class|interface|struct|enum|def|return|if|for|while|switch|case|let|public|private|protected|from|select|insert|update|delete)\b"#,
@@ -617,11 +620,17 @@ enum MessageContentParser {
             return true
         }
 
-        if trimmed.contains("(") && trimmed.contains(")") {
+        if trimmed.range(
+            of: #"^[A-Za-z_][A-Za-z0-9_\.]*\s*\([^)]*\)\s*(?:\{|;|:)?$"#,
+            options: .regularExpression
+        ) != nil {
             return true
         }
 
-        if trimmed.contains("=") && !trimmed.contains("==") {
+        if trimmed.range(
+            of: #"^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]+\])?\s*=\s*.+$"#,
+            options: .regularExpression
+        ) != nil, !trimmed.contains("==") {
             return true
         }
 
@@ -893,6 +902,11 @@ enum MessageContentParser {
                 continue
             }
 
+            if codeLines.isEmpty && isLikelyCodeLeadInLine(trimmed) {
+                cursor += 1
+                continue
+            }
+
             if isLikelyCodeLine(trimmed)
                 || isLikelyCodeContinuationLine(trimmed)
                 || isLikelyIndentedCodeContinuationLine(rawLine: line, trimmed: trimmed) {
@@ -930,6 +944,25 @@ enum MessageContentParser {
             .joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return (code, remainder)
+    }
+
+    private static func isLikelyCodeLeadInLine(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+
+        let lowered = trimmed.lowercased()
+        let markers = [
+            "下面是代码", "以下是代码", "代码如下", "示例代码", "完整代码",
+            "here is the code", "code below", "example code", "source code"
+        ]
+        if markers.contains(where: { lowered.contains($0) }) {
+            return true
+        }
+
+        if trimmed.hasSuffix(":") || trimmed.hasSuffix("：") {
+            return true
+        }
+        return false
     }
 
     private static func sanitizeCodeContent(_ raw: String) -> String {
