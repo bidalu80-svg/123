@@ -786,8 +786,8 @@ struct MessageBubbleView: View {
     private func streamingDisplaySlice(from raw: String) -> (text: String, isTruncated: Bool) {
         let normalized = normalizedStreamingText(raw)
         let isCodeLikePayload = normalized.contains("```") || normalized.contains("[[file:")
-        let hardLimit = isCodeLikePayload ? 6_000 : 8_000
-        let tailLimit = isCodeLikePayload ? 2_400 : 3_600
+        let hardLimit = isCodeLikePayload ? 10_000 : 16_000
+        let tailLimit = isCodeLikePayload ? 4_800 : 9_000
         guard normalized.count > hardLimit else {
             return (normalized, false)
         }
@@ -1493,17 +1493,28 @@ struct MessageBubbleView: View {
         } else {
             displayText = decoratedAssistantListText(text)
         }
-        return SelectableLinkTextView(
-            text: displayText,
-            textColor: UIColor.label,
-            linkColor: UIColor.secondaryLabel,
-            font: chatUIFont,
-            renderMarkdown: false,
-            streamingAnimated: false,
-            onFileLinkTap: { path in
-                openCodeViewerForLinkedPath(path)
+        return Group {
+            if message.isStreaming {
+                StreamingMarkdownTextView(
+                    text: displayText,
+                    textColor: UIColor.label,
+                    linkColor: UIColor.secondaryLabel,
+                    font: chatUIFont
+                )
+            } else {
+                SelectableLinkTextView(
+                    text: displayText,
+                    textColor: UIColor.label,
+                    linkColor: UIColor.secondaryLabel,
+                    font: chatUIFont,
+                    renderMarkdown: false,
+                    streamingAnimated: false,
+                    onFileLinkTap: { path in
+                        openCodeViewerForLinkedPath(path)
+                    }
+                )
             }
-        )
+        }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 

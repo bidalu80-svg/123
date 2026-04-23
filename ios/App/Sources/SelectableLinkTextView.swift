@@ -1,6 +1,369 @@
 import SwiftUI
 import UIKit
 
+struct StreamingMarkdownTextView: UIViewRepresentable {
+    let text: String
+    var textColor: UIColor = .label
+    var linkColor: UIColor = .secondaryLabel
+    var font: UIFont = UIFont(name: "PingFangSC-Regular", size: 15.5) ?? .systemFont(ofSize: 15.5, weight: .regular)
+
+    private static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeUIView(context: Context) -> UITextView {
+        let view = UITextView()
+        view.isEditable = false
+        view.isScrollEnabled = false
+        view.isSelectable = true
+        view.backgroundColor = .clear
+        view.textContainerInset = .zero
+        view.textContainer.lineFragmentPadding = 0
+        view.textContainer.widthTracksTextView = true
+        view.layoutManager.allowsNonContiguousLayout = false
+        view.adjustsFontForContentSizeCategory = true
+        view.setContentCompressionResistancePriority(.required, for: .vertical)
+        view.setContentHuggingPriority(.required, for: .vertical)
+        view.dataDetectorTypes = []
+        view.linkTextAttributes = [
+            .foregroundColor: linkColor,
+            .underlineStyle: 0
+        ]
+        return view
+    }
+
+    func updateUIView(_ uiView: UITextView, context: Context) {
+        let coordinator = context.coordinator
+        guard coordinator.shouldRender(
+            text: text,
+            font: font,
+            textColor: textColor,
+            linkColor: linkColor
+        ) else {
+            return
+        }
+
+        let rendered = Self.liveMarkdownAttributedText(
+            text: text,
+            textColor: textColor,
+            linkColor: linkColor,
+            font: font
+        )
+        UIView.performWithoutAnimation {
+            uiView.attributedText = rendered
+            uiView.linkTextAttributes = [
+                .foregroundColor: linkColor,
+                .underlineStyle: 0
+            ]
+            uiView.invalidateIntrinsicContentSize()
+            uiView.setNeedsLayout()
+        }
+        coordinator.record(
+            text: text,
+            font: font,
+            textColor: textColor,
+            linkColor: linkColor
+        )
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
+        guard let width = proposal.width, width > 1 else { return nil }
+        let lineBreakCount = text.reduce(into: 0) { count, character in
+            if character == "\n" {
+                count += 1
+            }
+        }
+        if let cached = context.coordinator.cachedSizeIfAvailable(
+            forWidth: width,
+            textCount: text.count,
+            lineBreakCount: lineBreakCount
+        ) {
+            return cached
+        }
+        let target = CGSize(width: width, height: .greatestFiniteMagnitude)
+        let size = uiView.sizeThatFits(target)
+        let fitted = CGSize(width: width, height: ceil(size.height))
+        context.coordinator.recordMeasuredSize(
+            fitted,
+            width: width,
+            textCount: text.count,
+            lineBreakCount: lineBreakCount
+        )
+        return fitted
+    }
+
+    final class Coordinator {
+        private var lastText = ""
+        private var lastFontPointSize: CGFloat = 0
+        private var lastTextColor: UIColor = .clear
+        private var lastLinkColor: UIColor = .clear
+        private var lastMeasuredWidth: CGFloat = 0
+        private var lastMeasuredHeight: CGFloat = 0
+        private var lastMeasuredTextCount: Int = 0
+        private var lastMeasuredLineBreakCount: Int = 0
+
+        func shouldRender(text: String, font: UIFont, textColor: UIColor, linkColor: UIColor) -> Bool {
+            lastText != text
+                || lastFontPointSize != font.pointSize
+                || !lastTextColor.isEqual(textColor)
+                || !lastLinkColor.isEqual(linkColor)
+        }
+
+        func record(text: String, font: UIFont, textColor: UIColor, linkColor: UIColor) {
+            lastText = text
+            lastFontPointSize = font.pointSize
+            lastTextColor = textColor
+            lastLinkColor = linkColor
+        }
+
+        func cachedSizeIfAvailable(forWidth width: CGFloat, textCount: Int, lineBreakCount: Int) -> CGSize? {
+            guard lastMeasuredHeight > 0 else { return nil }
+            guard abs(width - lastMeasuredWidth) < 0.5 else { return nil }
+            guard textCount >= lastMeasuredTextCount else { return nil }
+            guard lineBreakCount >= lastMeasuredLineBreakCount else { return nil }
+
+            let delta = textCount - lastMeasuredTextCount
+            let lineDelta = lineBreakCount - lastMeasuredLineBreakCount
+            if delta < 160 && lineDelta == 0 {
+                return CGSize(width: width, height: lastMeasuredHeight)
+            }
+            return nil
+        }
+
+        func recordMeasuredSize(_ size: CGSize, width: CGFloat, textCount: Int, lineBreakCount: Int) {
+            lastMeasuredWidth = width
+            lastMeasuredHeight = size.height
+            lastMeasuredTextCount = textCount
+            lastMeasuredLineBreakCount = lineBreakCount
+        }
+    }
+
+    private static func liveMarkdownAttributedText(
+        text: String,
+        textColor: UIColor,
+        linkColor: UIColor,
+        font: UIFont
+    ) -> NSAttributedString {
+        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = 4.6
+        paragraph.paragraphSpacing = 6
+
+        let baseAttributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: textColor,
+            .paragraphStyle: paragraph
+        ]
+        let output = NSMutableAttributedString()
+        var inCodeFence = false
+        let lines = normalized.components(separatedBy: "\n")
+
+        for (index, rawLine) in lines.enumerated() {
+            let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
+                inCodeFence.toggle()
+                if index < lines.count - 1 {
+                    output.append(NSAttributedString(string: "\n", attributes: baseAttributes))
+                }
+                continue
+            }
+
+            let lineAttributes: [NSAttributedString.Key: Any]
+
+            if inCodeFence {
+                var codeParagraph = paragraph
+                codeParagraph.lineSpacing = 3.2
+                lineAttributes = [
+                    .font: UIFont.monospacedSystemFont(ofSize: max(13.2, font.pointSize - 1.2), weight: .regular),
+                    .foregroundColor: textColor,
+                    .paragraphStyle: codeParagraph,
+                    .backgroundColor: UIColor.secondarySystemBackground.withAlphaComponent(0.55)
+                ]
+                output.append(NSAttributedString(string: rawLine, attributes: lineAttributes))
+            } else {
+                let parsed = parseLinePrefix(rawLine, baseFont: font)
+                lineAttributes = [
+                    .font: parsed.font,
+                    .foregroundColor: parsed.color ?? textColor,
+                    .paragraphStyle: parsed.paragraph ?? paragraph
+                ]
+                appendInlineMarkdown(
+                    parsed.text,
+                    to: output,
+                    baseAttributes: lineAttributes,
+                    baseFont: parsed.font,
+                    linkColor: linkColor
+                )
+            }
+
+            if index < lines.count - 1 {
+                output.append(NSAttributedString(string: "\n", attributes: baseAttributes))
+            }
+        }
+
+        addDetectedLinks(to: output, text: output.string, linkColor: linkColor)
+        return output
+    }
+
+    private static func parseLinePrefix(
+        _ rawLine: String,
+        baseFont: UIFont
+    ) -> (text: String, font: UIFont, color: UIColor?, paragraph: NSMutableParagraphStyle?) {
+        let leadingWhitespace = rawLine.prefix { $0 == " " || $0 == "\t" }
+        let leading = String(leadingWhitespace)
+        let trimmedStart = String(rawLine.dropFirst(leading.count))
+
+        if let markerEnd = trimmedStart.firstIndex(where: { $0 != "#" }) {
+            let hashes = trimmedStart[..<markerEnd]
+            if (1...6).contains(hashes.count), trimmedStart[markerEnd] == " " {
+                let title = String(trimmedStart[trimmedStart.index(after: markerEnd)...])
+                let sizeBoost = max(0, 7 - hashes.count)
+                let headingFont = UIFont.systemFont(ofSize: baseFont.pointSize + CGFloat(sizeBoost), weight: .semibold)
+                let paragraph = NSMutableParagraphStyle()
+                paragraph.lineSpacing = 3.8
+                paragraph.paragraphSpacing = hashes.count <= 2 ? 10 : 7
+                return (leading + title, headingFont, nil, paragraph)
+            }
+        }
+
+        if trimmedStart.hasPrefix(">") {
+            let stripped = trimmedStart.dropFirst().trimmingCharacters(in: .whitespaces)
+            return (leading + String(stripped), baseFont, UIColor.secondaryLabel, nil)
+        }
+
+        for marker in ["- ", "* ", "+ "] where trimmedStart.hasPrefix(marker) {
+            return (leading + "• " + String(trimmedStart.dropFirst(marker.count)), baseFont, nil, nil)
+        }
+
+        return (rawLine, baseFont, nil, nil)
+    }
+
+    private static func appendInlineMarkdown(
+        _ text: String,
+        to output: NSMutableAttributedString,
+        baseAttributes: [NSAttributedString.Key: Any],
+        baseFont: UIFont,
+        linkColor: UIColor
+    ) {
+        var cursor = text.startIndex
+
+        func append(_ value: String, attributes: [NSAttributedString.Key: Any]) {
+            guard !value.isEmpty else { return }
+            output.append(NSAttributedString(string: value, attributes: attributes))
+        }
+
+        while cursor < text.endIndex {
+            if text[cursor] == "`",
+               let close = text[text.index(after: cursor)...].firstIndex(of: "`") {
+                let code = String(text[text.index(after: cursor)..<close])
+                var attributes = baseAttributes
+                attributes[.font] = UIFont.monospacedSystemFont(ofSize: max(13.0, baseFont.pointSize - 0.8), weight: .regular)
+                attributes[.backgroundColor] = UIColor.secondarySystemBackground.withAlphaComponent(0.72)
+                append(code, attributes: attributes)
+                cursor = text.index(after: close)
+                continue
+            }
+
+            if let parsed = parseDelimitedInline(
+                in: text,
+                from: cursor,
+                marker: "**",
+                baseAttributes: baseAttributes,
+                baseFont: baseFont
+            ) {
+                append(parsed.value, attributes: parsed.attributes)
+                cursor = parsed.next
+                continue
+            }
+
+            if let parsed = parseDelimitedInline(
+                in: text,
+                from: cursor,
+                marker: "__",
+                baseAttributes: baseAttributes,
+                baseFont: baseFont
+            ) {
+                append(parsed.value, attributes: parsed.attributes)
+                cursor = parsed.next
+                continue
+            }
+
+            if text[cursor] == "[",
+               let labelEnd = text[cursor...].firstIndex(of: "]"),
+               labelEnd < text.index(before: text.endIndex),
+               text[text.index(after: labelEnd)] == "(",
+               let urlEnd = text[text.index(labelEnd, offsetBy: 2)...].firstIndex(of: ")") {
+                let label = String(text[text.index(after: cursor)..<labelEnd])
+                let rawURL = String(text[text.index(labelEnd, offsetBy: 2)..<urlEnd])
+                var attributes = baseAttributes
+                if let url = URL(string: rawURL) {
+                    attributes[.link] = url
+                    attributes[.foregroundColor] = linkColor
+                    attributes[.underlineStyle] = 0
+                }
+                append(label, attributes: attributes)
+                cursor = text.index(after: urlEnd)
+                continue
+            }
+
+            let nextMarker = nextInlineMarker(in: text, from: text.index(after: cursor)) ?? text.endIndex
+            append(String(text[cursor..<nextMarker]), attributes: baseAttributes)
+            cursor = nextMarker
+        }
+    }
+
+    private static func parseDelimitedInline(
+        in text: String,
+        from cursor: String.Index,
+        marker: String,
+        baseAttributes: [NSAttributedString.Key: Any],
+        baseFont: UIFont
+    ) -> (value: String, attributes: [NSAttributedString.Key: Any], next: String.Index)? {
+        guard text[cursor...].hasPrefix(marker) else { return nil }
+        let contentStart = text.index(cursor, offsetBy: marker.count)
+        guard let close = text[contentStart...].range(of: marker)?.lowerBound else { return nil }
+        let value = String(text[contentStart..<close])
+        var attributes = baseAttributes
+        attributes[.font] = UIFont.systemFont(ofSize: baseFont.pointSize, weight: .semibold)
+        return (value, attributes, text.index(close, offsetBy: marker.count))
+    }
+
+    private static func nextInlineMarker(in text: String, from cursor: String.Index) -> String.Index? {
+        var nearest: String.Index?
+        for marker in ["`", "**", "__", "["] {
+            if let range = text[cursor...].range(of: marker) {
+                if nearest == nil || range.lowerBound < nearest! {
+                    nearest = range.lowerBound
+                }
+            }
+        }
+        return nearest
+    }
+
+    private static func addDetectedLinks(
+        to output: NSMutableAttributedString,
+        text: String,
+        linkColor: UIColor
+    ) {
+        guard text.count <= 9_000, let detector = linkDetector else { return }
+        let nsText = text as NSString
+        let range = NSRange(location: 0, length: nsText.length)
+        detector.enumerateMatches(in: text, options: [], range: range) { match, _, _ in
+            guard let match, let url = match.url else { return }
+            output.addAttributes(
+                [
+                    .link: url,
+                    .foregroundColor: linkColor,
+                    .underlineStyle: 0
+                ],
+                range: match.range
+            )
+        }
+    }
+}
+
 struct SelectableLinkTextView: UIViewRepresentable {
     let text: String
     var textColor: UIColor = .label
