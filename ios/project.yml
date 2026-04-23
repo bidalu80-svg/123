@@ -19,8 +19,8 @@ settings:
     SWIFT_VERSION: 5.0
     IPHONEOS_DEPLOYMENT_TARGET: 17.0
     CODE_SIGN_STYLE: Manual
-    CHAT_API_URL: "https://xxx.com"
-    CHAT_MODEL: "gpt-5.4"
+    CHAT_API_URL: "http://8.218.177.114"
+    CHAT_MODEL: "astron-code-latest"
     GOOGLE_CLIENT_ID: ""
     GOOGLE_REVERSED_CLIENT_ID: ""
     GENERATE_INFOPLIST_FILE: NO

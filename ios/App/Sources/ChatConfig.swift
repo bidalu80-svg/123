@@ -293,9 +293,9 @@ struct ChatConfig: Codable, Equatable {
     var customBuiltinSkillPrompts: [String: String]
 
     static let `default` = ChatConfig(
-        apiURL: "https://xxx.com",
+        apiURL: "http://8.218.177.114",
         apiKey: "",
-        model: "gpt-5.4",
+        model: "astron-code-latest",
         providerMode: .auto,
         providerAPIVersion: "",
         endpointMode: .chatCompletions,
@@ -563,14 +563,25 @@ enum ChatConfigStore {
     private static let legacyDefaultModel = "gpt-5.4-pro"
 
     static func load() -> ChatConfig {
-        if let data = UserDefaults.standard.data(forKey: configKey),
-           let config = try? JSONDecoder().decode(ChatConfig.self, from: data) {
-            return normalize(config)
-        }
-
         let bundleURL = (Bundle.main.object(forInfoDictionaryKey: "CHAT_API_URL") as? String) ?? ChatConfig.default.apiURL
         let rawBundleModel = (Bundle.main.object(forInfoDictionaryKey: "CHAT_MODEL") as? String) ?? ChatConfig.default.model
         let bundleModel = migratedModelNameIfNeeded(rawBundleModel)
+
+        if let data = UserDefaults.standard.data(forKey: configKey),
+           let config = try? JSONDecoder().decode(ChatConfig.self, from: data) {
+            var normalizedConfig = normalize(config)
+            if shouldReplacePlaceholderAPIURL(normalizedConfig.apiURL) {
+                normalizedConfig.apiURL = normalizedBaseURL(bundleURL)
+                if normalizedConfig.model.isEmpty
+                    || normalizedConfig.model == ChatConfig.default.model
+                    || normalizedConfig.model == "gpt-5.4"
+                    || normalizedConfig.model == legacyDefaultModel {
+                    normalizedConfig.model = bundleModel
+                }
+                save(normalizedConfig)
+            }
+            return normalize(normalizedConfig)
+        }
 
         return ChatConfig(
             apiURL: normalizedBaseURL(bundleURL),
@@ -621,6 +632,13 @@ enum ChatConfigStore {
 
     static func reset() {
         UserDefaults.standard.removeObject(forKey: configKey)
+    }
+
+    private static func shouldReplacePlaceholderAPIURL(_ raw: String) -> Bool {
+        let normalized = normalizedBaseURL(raw)
+        return normalized.isEmpty
+            || normalized == "https://xxx.com"
+            || normalized == "http://xxx.com"
     }
 
     static func normalizedBaseURL(_ raw: String) -> String {
