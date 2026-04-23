@@ -12,6 +12,8 @@ struct SelectableLinkTextView: UIViewRepresentable {
     private static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
     private static let markdownRenderQueue = DispatchQueue(label: "chatapp.markdown.render", qos: .userInitiated)
     private static let fileLinkScheme = "iexa-file"
+    private static let maxURLLinkDetectionCharacters = 9_000
+    private static let maxProjectPathLinkDetectionCharacters = 5_500
     private static let projectPathRegex = try? NSRegularExpression(
         pattern: #"(?:^|[\s\(\[<"'`])((?:[A-Za-z0-9._\-]+/)*[A-Za-z0-9._\-]+\.[A-Za-z0-9_+\-]{1,12})(?=$|[\s\)\]>,:;"'`])"#
     )
@@ -158,7 +160,8 @@ struct SelectableLinkTextView: UIViewRepresentable {
                     coordinator.queueStreamingSuffix(text)
                 } else {
                     let attributed = NSMutableAttributedString(string: text, attributes: attrs)
-                    if let detector = Self.linkDetector {
+                    if Self.shouldRunURLLinkDetection(for: text),
+                       let detector = Self.linkDetector {
                         let nsText = text as NSString
                         let fullRange = NSRange(location: 0, length: nsText.length)
                         detector.enumerateMatches(in: text, options: [], range: fullRange) { match, _, _ in
@@ -173,11 +176,13 @@ struct SelectableLinkTextView: UIViewRepresentable {
                             )
                         }
                     }
-                    Self.addProjectPathLinks(
-                        to: attributed,
-                        sourceText: text,
-                        linkColor: linkColor
-                    )
+                    if Self.shouldRunProjectPathLinkDetection(for: text) {
+                        Self.addProjectPathLinks(
+                            to: attributed,
+                            sourceText: text,
+                            linkColor: linkColor
+                        )
+                    }
                     uiView.attributedText = attributed
                 }
             } else {
@@ -187,7 +192,8 @@ struct SelectableLinkTextView: UIViewRepresentable {
                         coordinator.queueStreamingSuffix(suffix)
                     } else {
                         let appended = NSMutableAttributedString(string: suffix, attributes: attrs)
-                        if let detector = Self.linkDetector {
+                        if Self.shouldRunURLLinkDetection(for: suffix),
+                           let detector = Self.linkDetector {
                             let nsText = suffix as NSString
                             let fullRange = NSRange(location: 0, length: nsText.length)
                             detector.enumerateMatches(in: suffix, options: [], range: fullRange) { match, _, _ in
@@ -202,11 +208,13 @@ struct SelectableLinkTextView: UIViewRepresentable {
                                 )
                             }
                         }
-                        Self.addProjectPathLinks(
-                            to: appended,
-                            sourceText: suffix,
-                            linkColor: linkColor
-                        )
+                        if Self.shouldRunProjectPathLinkDetection(for: suffix) {
+                            Self.addProjectPathLinks(
+                                to: appended,
+                                sourceText: suffix,
+                                linkColor: linkColor
+                            )
+                        }
                         uiView.textStorage.append(appended)
                     }
                 }
@@ -554,8 +562,9 @@ struct SelectableLinkTextView: UIViewRepresentable {
                 // Keep all assistant text in a unified regular weight.
                 output.addAttribute(.font, value: font, range: fullRange)
 
-                if let detector = Self.linkDetector {
-                    let renderedText = output.string
+                let renderedText = output.string
+                if Self.shouldRunURLLinkDetection(for: renderedText),
+                   let detector = Self.linkDetector {
                     let nsRendered = renderedText as NSString
                     let detectRange = NSRange(location: 0, length: nsRendered.length)
                     detector.enumerateMatches(in: renderedText, options: [], range: detectRange) { match, _, _ in
@@ -570,31 +579,57 @@ struct SelectableLinkTextView: UIViewRepresentable {
                         )
                     }
                 }
-                Self.addProjectPathLinks(
-                    to: output,
-                    sourceText: output.string,
-                    linkColor: linkColor
-                )
+                if Self.shouldRunProjectPathLinkDetection(for: output.string) {
+                    Self.addProjectPathLinks(
+                        to: output,
+                        sourceText: output.string,
+                        linkColor: linkColor
+                    )
+                }
 
                 return output
             } catch {
                 let fallback = NSMutableAttributedString(string: trimmed, attributes: fallbackAttributes)
-                Self.addProjectPathLinks(
-                    to: fallback,
-                    sourceText: trimmed,
-                    linkColor: linkColor
-                )
+                if Self.shouldRunProjectPathLinkDetection(for: trimmed) {
+                    Self.addProjectPathLinks(
+                        to: fallback,
+                        sourceText: trimmed,
+                        linkColor: linkColor
+                    )
+                }
                 return fallback
             }
         }
 
         let fallback = NSMutableAttributedString(string: trimmed, attributes: fallbackAttributes)
-        Self.addProjectPathLinks(
-            to: fallback,
-            sourceText: trimmed,
-            linkColor: linkColor
-        )
+        if Self.shouldRunProjectPathLinkDetection(for: trimmed) {
+            Self.addProjectPathLinks(
+                to: fallback,
+                sourceText: trimmed,
+                linkColor: linkColor
+            )
+        }
         return fallback
+    }
+
+    private static func shouldRunURLLinkDetection(for text: String) -> Bool {
+        text.count <= maxURLLinkDetectionCharacters
+    }
+
+    private static func shouldRunProjectPathLinkDetection(for text: String) -> Bool {
+        guard text.count <= maxProjectPathLinkDetectionCharacters else { return false }
+        let lowered = text.lowercased()
+        if lowered.contains("/") {
+            return true
+        }
+        let hints = [
+            ".swift", ".py", ".js", ".ts", ".tsx", ".jsx",
+            ".c", ".h", ".hpp", ".cpp", ".go", ".rs", ".java", ".kt",
+            ".php", ".rb", ".lua", ".sql", ".md", ".txt",
+            "cmakelists", "dockerfile", "makefile",
+            "package.json", "requirements.txt", "cargo.toml", "go.mod", "readme"
+        ]
+        return hints.contains(where: { lowered.contains($0) })
     }
 
     private static func addProjectPathLinks(

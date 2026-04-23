@@ -1150,6 +1150,10 @@ struct MessageBubbleView: View {
         guard !streamingTextAnimated else {
             return [.plain(text)]
         }
+        // Avoid expensive per-line step parsing for very long responses.
+        if text.count > 9_000 {
+            return [.plain(text)]
+        }
 
         let lines = text.components(separatedBy: "\n")
         guard lines.count >= 2 else { return [.plain(text)] }
@@ -1426,7 +1430,13 @@ struct MessageBubbleView: View {
     }
 
     private func selectableTextContent(_ text: String, streamingTextAnimated: Bool = false) -> some View {
-        let displayText = streamingTextAnimated ? text : decoratedAssistantListText(text)
+        let displayText: String
+        if streamingTextAnimated || text.count > 9_000 {
+            // Skip list decoration when text is too long to reduce layout cost.
+            displayText = text
+        } else {
+            displayText = decoratedAssistantListText(text)
+        }
         return SelectableLinkTextView(
             text: displayText,
             textColor: UIColor.label,

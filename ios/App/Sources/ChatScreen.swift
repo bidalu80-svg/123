@@ -13,11 +13,11 @@ struct ChatScreen: View {
     private let sidebarWidth: CGFloat = 286
     private let edgeDragActivationWidth: CGFloat = 28
     private let headerCenterMinHorizontalInset: CGFloat = 76
-    private let maxRenderedMessages = 72
-    private let maxRenderedCharacters = 135_000
-    private let maxSingleRenderedMessageChars = 52_000
-    private let maxSingleRenderedCodeMessageChars = 140_000
-    private let maxRenderedFilePreviewChars = 10_000
+    private let maxRenderedMessages = 56
+    private let maxRenderedCharacters = 90_000
+    private let maxSingleRenderedMessageChars = 28_000
+    private let maxSingleRenderedCodeMessageChars = 65_000
+    private let maxRenderedFilePreviewChars = 4_000
     private let autoSessionRotateMessageCount = 60
     private let autoSessionRotateCharacterCount = 100_000
     private let autoSessionRotateAssistantCharacterCount = 70_000
