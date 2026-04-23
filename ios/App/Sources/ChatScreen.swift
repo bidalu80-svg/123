@@ -337,7 +337,6 @@ struct ChatScreen: View {
                         .padding(.top, 78)
                         .padding(.leading, 14)
                         .transition(.move(edge: .top).combined(with: .opacity))
-                        .allowsHitTesting(false)
                 }
             }
     }
@@ -591,6 +590,17 @@ struct ChatScreen: View {
             Text("缓存 \(compactTokenCount(toast.usage.cachedTokens))")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.primary.opacity(0.72))
+
+            Button {
+                dismissTokenUsageToast()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.primary.opacity(0.55))
+                    .padding(.leading, 2)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("关闭 Token 提示")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
@@ -625,12 +635,17 @@ struct ChatScreen: View {
         }
 
         tokenUsageHideTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
             guard !Task.isCancelled else { return }
-            withAnimation(.easeOut(duration: 0.22)) {
-                tokenUsageToast = nil
-            }
-            tokenUsageHideTask = nil
+            dismissTokenUsageToast()
+        }
+    }
+
+    private func dismissTokenUsageToast() {
+        tokenUsageHideTask?.cancel()
+        tokenUsageHideTask = nil
+        withAnimation(.easeOut(duration: 0.22)) {
+            tokenUsageToast = nil
         }
     }
 
