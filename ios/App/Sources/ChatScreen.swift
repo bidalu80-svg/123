@@ -2499,11 +2499,6 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             stackView.translatesAutoresizingMaskIntoConstraints = false
             scrollView.addSubview(stackView)
 
-            spacerView.backgroundColor = .clear
-            spacerView.setContentHuggingPriority(.defaultLow, for: .vertical)
-            spacerView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
-            stackView.addArrangedSubview(spacerView)
-
             historyHostingController.sizingOptions = [.intrinsicContentSize]
             historyHostingController.view.backgroundColor = .clear
             historyHostingController.view.translatesAutoresizingMaskIntoConstraints = false
@@ -2527,6 +2522,11 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             addChild(streamingRichHostingController)
             stackView.addArrangedSubview(streamingRichHostingController.view)
             streamingRichHostingController.didMove(toParent: self)
+
+            spacerView.backgroundColor = .clear
+            spacerView.setContentHuggingPriority(.defaultLow, for: .vertical)
+            spacerView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+            stackView.addArrangedSubview(spacerView)
 
             NSLayoutConstraint.activate([
                 stackView.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor),
