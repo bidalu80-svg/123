@@ -298,8 +298,10 @@ struct SelectableLinkTextView: UIViewRepresentable {
             startStreamingAnimationIfNeeded()
         }
 
-        func stopStreamingAnimation(clearPending: Bool) {
-            normalizeStreamingTailAppearance()
+        func stopStreamingAnimation(clearPending: Bool, normalizeTail: Bool = true) {
+            if normalizeTail {
+                normalizeStreamingTailAppearance()
+            }
             streamTimer?.invalidate()
             streamTimer = nil
             streamLastTimestamp = 0
@@ -325,15 +327,16 @@ struct SelectableLinkTextView: UIViewRepresentable {
         @objc
         private func handleStreamAnimationTick(_ timer: CADisplayLink) {
             guard streamAnimationEnabled else {
-                stopStreamingAnimation(clearPending: false)
+                stopStreamingAnimation(clearPending: false, normalizeTail: true)
                 return
             }
             guard let textView = activeTextView else {
-                stopStreamingAnimation(clearPending: false)
+                stopStreamingAnimation(clearPending: false, normalizeTail: false)
                 return
             }
             guard !pendingStreamingSuffix.isEmpty else {
-                stopStreamingAnimation(clearPending: false)
+                // Keep current tail fade while waiting for the next chunk to avoid flashing.
+                stopStreamingAnimation(clearPending: false, normalizeTail: false)
                 return
             }
 
@@ -344,7 +347,7 @@ struct SelectableLinkTextView: UIViewRepresentable {
 
             streamCharacterBudget += elapsed * streamingCharactersPerSecond(for: pendingStreamingSuffix.count)
             let budgetStep = Int(streamCharacterBudget.rounded(.down))
-            let step = max(1, min(12, budgetStep))
+            let step = max(1, min(6, budgetStep))
             streamCharacterBudget = max(0, streamCharacterBudget - Double(step))
             let chunk = consumeStreamingPrefix(maxCharacters: step)
             guard !chunk.isEmpty else { return }
@@ -352,10 +355,9 @@ struct SelectableLinkTextView: UIViewRepresentable {
             autoreleasepool {
                 let storage = textView.textStorage
                 let appended = NSMutableAttributedString(string: chunk, attributes: streamAttributes)
-                let appendedLength = appended.length
                 storage.beginEditing()
                 storage.append(appended)
-                applyStreamingTailFade(in: storage, appendedLength: appendedLength)
+                applyStreamingTailFade(in: storage)
                 storage.endEditing()
             }
         }
@@ -391,7 +393,7 @@ struct SelectableLinkTextView: UIViewRepresentable {
             }
         }
 
-        private func applyStreamingTailFade(in storage: NSTextStorage, appendedLength: Int) {
+        private func applyStreamingTailFade(in storage: NSTextStorage) {
             if let previous = lastStreamingTailRange,
                previous.location != NSNotFound,
                NSMaxRange(previous) <= storage.length {
@@ -403,38 +405,28 @@ struct SelectableLinkTextView: UIViewRepresentable {
                 return
             }
 
-            let tailSize = min(max(10, appendedLength * 5), 30)
-            let start = max(0, storage.length - tailSize)
-            let tailRange = NSRange(location: start, length: storage.length - start)
-            if tailRange.length > 0 {
-                // For very long bodies, keep fade lightweight to reduce attribute churn.
-                if storage.length > 6_000 {
-                    let tailColor = streamPrimaryColor.withAlphaComponent(0.42)
-                    storage.addAttribute(.foregroundColor, value: tailColor, range: tailRange)
-                    let latestRange = NSRange(location: storage.length - 1, length: 1)
-                    let latestColor = streamPrimaryColor.withAlphaComponent(0.28)
-                    storage.addAttribute(.foregroundColor, value: latestColor, range: latestRange)
-                    lastStreamingTailRange = tailRange
-                    return
-                }
+            // Use a tiny trailing window so the newest character looks subtly lighter
+            // without repainting a large range each frame (which can look like flicker).
+            let tailCount = min(3, max(1, storage.length))
+            let tailRange = NSRange(location: storage.length - tailCount, length: tailCount)
+            let alphas: [CGFloat]
+            switch tailCount {
+            case 1:
+                alphas = [0.58]
+            case 2:
+                alphas = [0.82, 0.58]
+            default:
+                alphas = [0.92, 0.78, 0.58]
+            }
 
-                for offset in 0..<tailRange.length {
-                    let unit = tailRange.length <= 1 ? 1.0 : (Double(offset) / Double(tailRange.length - 1))
-                    let alpha = CGFloat(1.0 - (0.58 * unit))
-                    let color = streamPrimaryColor.withAlphaComponent(alpha)
-                    storage.addAttribute(
-                        .foregroundColor,
-                        value: color,
-                        range: NSRange(location: tailRange.location + offset, length: 1)
-                    )
-                }
-
-                let latestCount = min(1, tailRange.length)
-                if latestCount > 0 {
-                    let latestRange = NSRange(location: storage.length - latestCount, length: latestCount)
-                    let latestColor = streamPrimaryColor.withAlphaComponent(0.28)
-                    storage.addAttribute(.foregroundColor, value: latestColor, range: latestRange)
-                }
+            for offset in 0..<tailRange.length {
+                let alpha = alphas[offset]
+                let color = streamPrimaryColor.withAlphaComponent(alpha)
+                storage.addAttribute(
+                    .foregroundColor,
+                    value: color,
+                    range: NSRange(location: tailRange.location + offset, length: 1)
+                )
             }
 
             lastStreamingTailRange = tailRange
