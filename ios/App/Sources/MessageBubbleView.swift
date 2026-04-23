@@ -3089,6 +3089,14 @@ struct MessageBubbleView: View {
             )
         }
 
+        // Guard against malformed trailing markdown fences like `` / ``` / ~~~
+        // that occasionally leak into viewer content.
+        normalized = normalized.replacingOccurrences(
+            of: #"(?:\n|\A)\s*[`~]{2,}\s*$"#,
+            with: "",
+            options: .regularExpression
+        )
+
         return normalized.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
