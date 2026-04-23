@@ -130,6 +130,15 @@ struct ChatScreen: View {
     @State private var autoBuildRequestID: Int = 0
     @State private var autoBuildRunningMessageID: UUID?
     @State private var latestProjectHasPreviewEntry = false
+    @State private var autoShellRunAttemptedAssistantIDs: Set<UUID> = []
+    @State private var showFrontendTerminalSheet = false
+    @State private var frontendTerminalCommand = ""
+    @State private var frontendTerminalOutput = ""
+    @State private var frontendTerminalIsRunning = false
+    @State private var frontendTerminalExitCode: Int?
+    @State private var frontendTerminalDurationMs: Int?
+    @State private var frontendTerminalTask: Task<Void, Never>?
+    @State private var frontendTerminalRunRequestID: Int = 0
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -216,6 +225,16 @@ struct ChatScreen: View {
             frontendOverlayFileIndex = 0
             frontendOverlayManualSelectionUntil = .distantPast
             projectFormatRetryAttemptedUserIDs.removeAll()
+            autoShellRunAttemptedAssistantIDs.removeAll()
+            frontendTerminalTask?.cancel()
+            frontendTerminalTask = nil
+            frontendTerminalIsRunning = false
+            showFrontendTerminalSheet = false
+            frontendTerminalCommand = ""
+            frontendTerminalOutput = ""
+            frontendTerminalExitCode = nil
+            frontendTerminalDurationMs = nil
+            frontendTerminalRunRequestID &+= 1
             Self.frontendOverlayCodeEntriesCache.removeAll()
             Self.frontendOverlayCodeEntriesCacheOrder.removeAll()
             DispatchQueue.main.async {
@@ -231,6 +250,16 @@ struct ChatScreen: View {
             frontendOverlayFileIndex = 0
             frontendOverlayManualSelectionUntil = .distantPast
             projectFormatRetryAttemptedUserIDs.removeAll()
+            autoShellRunAttemptedAssistantIDs.removeAll()
+            frontendTerminalTask?.cancel()
+            frontendTerminalTask = nil
+            frontendTerminalIsRunning = false
+            showFrontendTerminalSheet = false
+            frontendTerminalCommand = ""
+            frontendTerminalOutput = ""
+            frontendTerminalExitCode = nil
+            frontendTerminalDurationMs = nil
+            frontendTerminalRunRequestID &+= 1
             Self.frontendOverlayCodeEntriesCache.removeAll()
             Self.frontendOverlayCodeEntriesCacheOrder.removeAll()
             DispatchQueue.main.async {
@@ -290,6 +319,11 @@ struct ChatScreen: View {
             tokenUsageHideTask = nil
             sessionRotateHideTask?.cancel()
             sessionRotateHideTask = nil
+            frontendTerminalTask?.cancel()
+            frontendTerminalTask = nil
+            frontendTerminalIsRunning = false
+            showFrontendTerminalSheet = false
+            frontendTerminalRunRequestID &+= 1
         }
         .photosPicker(
             isPresented: $showPhotoPicker,
@@ -364,6 +398,18 @@ struct ChatScreen: View {
             CodeViewerSheet(
                 payload: payload,
                 codeThemeMode: viewModel.config.codeThemeMode
+            )
+        }
+        .sheet(isPresented: $showFrontendTerminalSheet) {
+            FrontendTerminalRunSheet(
+                command: frontendTerminalCommand,
+                output: frontendTerminalOutput,
+                isRunning: frontendTerminalIsRunning,
+                exitCode: frontendTerminalExitCode,
+                durationMs: frontendTerminalDurationMs,
+                onRerun: {
+                    runFrontendTerminalCommand(frontendTerminalCommand, autoTriggered: false)
+                }
             )
         }
     }
@@ -1080,6 +1126,7 @@ struct ChatScreen: View {
         noFileDirectiveAssistantIDs.formIntersection(currentAssistantIDs)
         autoBuildEligibleAssistantIDs.formIntersection(currentAssistantIDs)
         autoBuildInFlightAssistantIDs.formIntersection(currentAssistantIDs)
+        autoShellRunAttemptedAssistantIDs.formIntersection(currentAssistantIDs)
         projectFormatRetryAttemptedUserIDs.formIntersection(currentUserIDs)
     }
 
@@ -1203,7 +1250,8 @@ struct ChatScreen: View {
                 case .success(let buildResult):
                     autoBuildEligibleAssistantIDs.insert(sourceAssistant.id)
                     latestProjectHasPreviewEntry = true
-                    if buildResult.shouldAutoOpenPreview {
+                    let terminalSnippet = preferredTerminalCommandSnippet(from: sourceAssistant)
+                    if buildResult.shouldAutoOpenPreview, terminalSnippet == nil {
                         autoFrontendPreview = AutoFrontendPreviewPayload(
                             title: "自动预览 · \(buildResult.entryFileURL.lastPathComponent)",
                             html: buildResult.entryHTML,
@@ -1215,6 +1263,12 @@ struct ChatScreen: View {
                         autoFrontendPreview = nil
                         viewModel.statusMessage = "项目文件已自动落盘（\(buildResult.writtenRelativePaths.count) 文件）"
                     }
+                    if let terminalSnippet = terminalSnippet {
+                        attemptAutoFrontendTerminalRunIfNeeded(
+                            command: terminalSnippet.command,
+                            for: sourceAssistant.id
+                        )
+                    }
                 case .failure(let error):
                     // Auto mode should stay non-blocking; report status but avoid interrupting chat.
                     autoBuildEligibleAssistantIDs.remove(sourceAssistant.id)
@@ -1223,6 +1277,131 @@ struct ChatScreen: View {
                 }
             }
         }
+    }
+
+    private func attemptAutoFrontendTerminalRunIfNeeded(command: String, for assistantID: UUID) {
+        guard autoShellRunAttemptedAssistantIDs.insert(assistantID).inserted else { return }
+        runFrontendTerminalCommand(command, autoTriggered: true)
+    }
+
+    private func runFrontendTerminalCommand(_ rawCommand: String, autoTriggered: Bool) {
+        let command = normalizedTerminalCommandForExecution(rawCommand)
+        guard !command.isEmpty else { return }
+
+        frontendTerminalRunRequestID &+= 1
+        let requestID = frontendTerminalRunRequestID
+
+        frontendTerminalTask?.cancel()
+        frontendTerminalTask = nil
+
+        frontendTerminalCommand = command
+        frontendTerminalOutput = ""
+        frontendTerminalIsRunning = false
+        frontendTerminalExitCode = nil
+        frontendTerminalDurationMs = nil
+        showFrontendTerminalSheet = true
+
+        guard viewModel.config.shellExecutionEnabled else {
+            frontendTerminalOutput = "已识别到终端命令，但“远端终端运行”未启用。请在设置中开启后重试。"
+            if autoTriggered {
+                viewModel.statusMessage = "检测到终端命令，未自动执行（远端终端运行未启用）"
+            }
+            return
+        }
+
+        let endpoint = viewModel.config.shellExecutionURLString
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !endpoint.isEmpty else {
+            frontendTerminalOutput = "已识别到终端命令，但未配置终端执行接口地址。请在设置中完善后重试。"
+            if autoTriggered {
+                viewModel.statusMessage = "检测到终端命令，未自动执行（终端接口未配置）"
+            }
+            return
+        }
+
+        frontendTerminalIsRunning = true
+        viewModel.statusMessage = autoTriggered
+            ? "项目已落盘，正在自动执行终端命令…"
+            : "正在执行终端命令…"
+
+        let apiKey = viewModel.config.apiKey
+        let timeout = viewModel.config.shellExecutionTimeout
+        let workingDirectory = viewModel.config.shellExecutionWorkingDirectory
+
+        frontendTerminalTask = Task {
+            do {
+                let result = try await RemoteShellExecutionService.shared.run(
+                    command: command,
+                    endpoint: endpoint,
+                    apiKey: apiKey,
+                    workingDirectory: workingDirectory,
+                    timeout: timeout
+                )
+                try Task.checkCancellation()
+
+                await MainActor.run {
+                    guard frontendTerminalRunRequestID == requestID else { return }
+                    frontendTerminalIsRunning = false
+                    frontendTerminalOutput = result.output
+                    frontendTerminalExitCode = result.exitCode
+                    frontendTerminalDurationMs = result.durationMs
+                    if result.exitCode == 0 {
+                        viewModel.statusMessage = autoTriggered
+                            ? "项目已自动构建并完成终端运行"
+                            : "终端运行完成"
+                    } else {
+                        viewModel.statusMessage = autoTriggered
+                            ? "自动终端运行失败（退出码 \(result.exitCode)）"
+                            : "终端运行失败（退出码 \(result.exitCode)）"
+                    }
+                }
+            } catch is CancellationError {
+                await MainActor.run {
+                    guard frontendTerminalRunRequestID == requestID else { return }
+                    frontendTerminalIsRunning = false
+                    if frontendTerminalOutput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        frontendTerminalOutput = "运行已取消。"
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    guard frontendTerminalRunRequestID == requestID else { return }
+                    frontendTerminalIsRunning = false
+                    frontendTerminalExitCode = nil
+                    frontendTerminalDurationMs = nil
+                    if endpoint.isEmpty {
+                        frontendTerminalOutput = error.localizedDescription
+                    } else {
+                        frontendTerminalOutput = "\(error.localizedDescription)\n\n[接口 \(endpoint)]"
+                    }
+                    viewModel.statusMessage = autoTriggered
+                        ? "自动终端运行失败，可在日志查看详情"
+                        : "终端运行失败"
+                }
+            }
+        }
+    }
+
+    private func normalizedTerminalCommandForExecution(_ raw: String) -> String {
+        let normalized = raw.replacingOccurrences(of: "\r\n", with: "\n")
+        var cleanedLines: [String] = []
+
+        for rawLine in normalized.components(separatedBy: "\n") {
+            var line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.hasPrefix("$ ") {
+                line = String(line.dropFirst(2)).trimmingCharacters(in: .whitespacesAndNewlines)
+            } else if line.hasPrefix("PS "), let promptRange = line.range(of: ">") {
+                let commandPart = line[promptRange.upperBound...]
+                line = commandPart.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+
+            if line.isEmpty { continue }
+            cleanedLines.append(line)
+        }
+
+        return cleanedLines
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func invalidatePendingAutoProjectBuild() {
@@ -2033,8 +2212,12 @@ struct ChatScreen: View {
         var masked = message
         masked.fileAttachments = []
         let stripped = stripFrontendProjectPayload(from: message.content)
-        if !stripped.isEmpty {
+        let terminalSnippet = preferredTerminalCommandSnippet(from: message)
+        if shouldUseStrippedFrontendSummary(stripped) {
             masked.content = stripped
+            if !message.isStreaming, let terminalSnippet {
+                masked.content += terminalRunDisplayBlock(terminalSnippet)
+            }
             return masked
         }
 
@@ -2062,7 +2245,100 @@ struct ChatScreen: View {
                     : "项目文件已在后台写入完成。"
             }
         }
+        if !message.isStreaming, let terminalSnippet {
+            masked.content += terminalRunDisplayBlock(terminalSnippet)
+        }
         return masked
+    }
+
+    private func shouldUseStrippedFrontendSummary(_ text: String) -> Bool {
+        let normalized = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return false }
+
+        let lowered = normalized.lowercased()
+        if lowered.range(
+            of: #"^(终端运行|terminal run|run|bash|powershell|运行命令|命令行|步骤日志)\s*[:：]?$"#,
+            options: .regularExpression
+        ) != nil {
+            return false
+        }
+
+        if normalized.count <= 20 {
+            let genericTokens = [
+                "终端运行", "运行命令", "命令行", "步骤日志",
+                "terminal run", "run", "bash", "powershell"
+            ]
+            if genericTokens.contains(where: { lowered == $0 }) {
+                return false
+            }
+        }
+
+        return true
+    }
+
+    private func preferredTerminalCommandSnippet(from message: ChatMessage) -> (language: String, command: String)? {
+        let segments = MessageContentParser.parse(message)
+        var fallbackCandidate: (String, String)?
+
+        for segment in segments {
+            guard case let .code(language, content) = segment else { continue }
+            let normalizedCommand = normalizedTerminalCommandForExecution(content)
+            guard !normalizedCommand.isEmpty else { continue }
+
+            let normalizedLanguage = (language ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+
+            if isTerminalCommandLanguage(normalizedLanguage), looksLikeShellCommand(normalizedCommand) {
+                let safeLanguage = normalizedLanguage.isEmpty ? "bash" : normalizedLanguage
+                return (safeLanguage, normalizedCommand)
+            }
+
+            if fallbackCandidate == nil, looksLikeShellCommand(normalizedCommand) {
+                let safeLanguage = normalizedLanguage.isEmpty ? "bash" : normalizedLanguage
+                fallbackCandidate = (safeLanguage, normalizedCommand)
+            }
+        }
+
+        return fallbackCandidate
+    }
+
+    private func isTerminalCommandLanguage(_ language: String) -> Bool {
+        let normalized = language.lowercased()
+        return normalized == "bash"
+            || normalized == "sh"
+            || normalized == "zsh"
+            || normalized == "shell"
+            || normalized == "powershell"
+            || normalized == "ps1"
+            || normalized == "cmd"
+            || normalized == "bat"
+            || normalized == "terminal"
+            || normalized == "command"
+    }
+
+    private func looksLikeShellCommand(_ text: String) -> Bool {
+        let lowered = text.lowercased()
+        let markers = [
+            "npm ", "pnpm ", "yarn ", "pip ", "python ", "python3 ",
+            "cmake", "ctest", "cargo ", "go test", "go build", "make ",
+            "gradle ", "mvn ", "swift test", "swift build",
+            "./", "chmod ", "node ", "deno ", "php ", "composer ",
+            "cd ", "mkdir ", "rm ", "cp ", "mv ", "git "
+        ]
+        return markers.contains(where: { lowered.contains($0) })
+    }
+
+    private func terminalRunDisplayBlock(_ snippet: (language: String, command: String)) -> String {
+        """
+
+        终端运行
+        ```\(snippet.language)
+        \(snippet.command)
+        ```
+        """
     }
 
     private var shouldHideFrontendCodeInChat: Bool {
@@ -2140,6 +2416,7 @@ struct ChatScreen: View {
         let selectedEntry = frontendOverlaySelectedEntry(for: overlay)
         let safeFileIndex = frontendOverlaySafeFileIndex(for: overlay)
         let totalFiles = max(overlay.codeEntries.count, 1)
+        let terminalSnippet = frontendOverlayTerminalSnippet(for: overlay)
 
         return HStack(alignment: .bottom, spacing: 10) {
             Button {
@@ -2228,6 +2505,18 @@ struct ChatScreen: View {
                         }
                         .buttonStyle(.plain)
                     }
+
+                    if overlay.isCompleted, let terminalSnippet = terminalSnippet {
+                        Button {
+                            runFrontendTerminalCommand(terminalSnippet.command, autoTriggered: false)
+                        } label: {
+                            Text("终端日志")
+                                .underline()
+                                .font(.system(size: 12.5, weight: .semibold))
+                                .foregroundStyle(Color(red: 0.08, green: 0.45, blue: 0.90))
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
             }
         }
@@ -2306,6 +2595,17 @@ struct ChatScreen: View {
             return "\(overlay.subtitle) · \(selectedEntry.name)"
         }
         return overlay.subtitle
+    }
+
+    private func frontendOverlayTerminalSnippet(
+        for overlay: FrontendBuildOverlayState
+    ) -> (language: String, command: String)? {
+        guard let assistant = viewModel.messages.first(where: {
+            $0.id == overlay.messageID && $0.role == .assistant
+        }) else {
+            return nil
+        }
+        return preferredTerminalCommandSnippet(from: assistant)
     }
 
     private func frontendOverlaySafeFileIndex(for overlay: FrontendBuildOverlayState) -> Int {
@@ -3920,6 +4220,181 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             max(
                 -scrollView.contentInset.top,
                 scrollView.contentSize.height - scrollView.bounds.height + scrollView.contentInset.bottom
+            )
+        }
+    }
+}
+
+private struct FrontendTerminalRunSheet: View {
+    let command: String
+    let output: String
+    let isRunning: Bool
+    let exitCode: Int?
+    let durationMs: Int?
+    let onRerun: (() -> Void)?
+
+    @Environment(\.dismiss) private var dismiss
+
+    init(
+        command: String,
+        output: String,
+        isRunning: Bool,
+        exitCode: Int?,
+        durationMs: Int?,
+        onRerun: (() -> Void)? = nil
+    ) {
+        self.command = command
+        self.output = output
+        self.isRunning = isRunning
+        self.exitCode = exitCode
+        self.durationMs = durationMs
+        self.onRerun = onRerun
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 8) {
+                        Image(systemName: statusIconName)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(statusColor)
+
+                        Text(statusTitle)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.primary)
+
+                        Spacer(minLength: 0)
+
+                        if let onRerun {
+                            Button(isRunning ? "运行中..." : "重新运行") {
+                                onRerun()
+                            }
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .buttonStyle(.borderedProminent)
+                            .disabled(isRunning || renderedCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        }
+                    }
+
+                    if let metaText {
+                        Text(metaText)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    terminalSection(
+                        title: "命令",
+                        text: renderedCommand,
+                        textColor: Color.white.opacity(0.95)
+                    )
+
+                    terminalSection(
+                        title: "输出日志",
+                        text: renderedOutput,
+                        textColor: Color(red: 0.38, green: 0.95, blue: 0.60)
+                    )
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 14)
+                .padding(.bottom, 20)
+            }
+            .navigationTitle("终端日志")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("关闭") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+        .presentationDetents([.fraction(0.72), .large])
+        .presentationDragIndicator(.visible)
+        .presentationCornerRadius(26)
+    }
+
+    private var renderedCommand: String {
+        let normalized = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalized.isEmpty ? "未识别到可执行命令。" : normalized
+    }
+
+    private var renderedOutput: String {
+        let normalized = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !normalized.isEmpty {
+            return normalized
+        }
+        return isRunning ? "命令执行中，请稍候…" : "暂无输出。"
+    }
+
+    private var metaText: String? {
+        if isRunning {
+            return "正在执行远端终端命令..."
+        }
+        if let exitCode, let durationMs {
+            return "退出码 \(exitCode) · 耗时 \(durationMs)ms"
+        }
+        if let exitCode {
+            return "退出码 \(exitCode)"
+        }
+        if let durationMs {
+            return "耗时 \(durationMs)ms"
+        }
+        return nil
+    }
+
+    private var statusTitle: String {
+        if isRunning {
+            return "运行中"
+        }
+        if let exitCode {
+            return exitCode == 0 ? "运行成功" : "运行失败"
+        }
+        return "等待执行"
+    }
+
+    private var statusIconName: String {
+        if isRunning {
+            return "hourglass.circle.fill"
+        }
+        if let exitCode {
+            return exitCode == 0 ? "checkmark.circle.fill" : "xmark.octagon.fill"
+        }
+        return "terminal.fill"
+    }
+
+    private var statusColor: Color {
+        if isRunning {
+            return .blue
+        }
+        if let exitCode {
+            return exitCode == 0 ? .green : .red
+        }
+        return .secondary
+    }
+
+    @ViewBuilder
+    private func terminalSection(title: String, text: String, textColor: Color) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            ScrollView([.vertical, .horizontal], showsIndicators: true) {
+                Text(text)
+                    .font(.system(size: 12.5, weight: .medium, design: .monospaced))
+                    .foregroundStyle(textColor)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+                    .padding(12)
+            }
+            .frame(maxWidth: .infinity, minHeight: 96, maxHeight: 280, alignment: .topLeading)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.black.opacity(0.92))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color.white.opacity(0.12), lineWidth: 0.8)
             )
         }
     }
