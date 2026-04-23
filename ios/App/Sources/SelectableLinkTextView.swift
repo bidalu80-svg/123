@@ -9,6 +9,20 @@ struct StreamingMarkdownTextView: UIViewRepresentable {
 
     private static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
 
+    static func renderedAttributedText(
+        text: String,
+        textColor: UIColor,
+        linkColor: UIColor,
+        font: UIFont
+    ) -> NSAttributedString {
+        liveMarkdownAttributedText(
+            text: text,
+            textColor: textColor,
+            linkColor: linkColor,
+            font: font
+        )
+    }
+
     func makeCoordinator() -> Coordinator {
         Coordinator()
     }
@@ -45,7 +59,7 @@ struct StreamingMarkdownTextView: UIViewRepresentable {
             return
         }
 
-        let rendered = Self.liveMarkdownAttributedText(
+        let rendered = Self.renderedAttributedText(
             text: text,
             textColor: textColor,
             linkColor: linkColor,

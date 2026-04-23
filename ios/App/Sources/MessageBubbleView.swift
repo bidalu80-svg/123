@@ -1628,10 +1628,8 @@ struct MessageBubbleView: View {
         let copyToken = "\(title)|\(language ?? "")|\(actionContent)"
         let isCopied = copiedCodeToken == copyToken
         let isRunning = runningCodeToken == copyToken
-        let isShellRunning = shellRunTasks[copyToken] != nil && runningCodeToken == copyToken
         let canRunPython = supportsPythonRun(language: language, title: title)
             && PythonExecutionService.isRunnableSnippet(actionContent)
-        let canRunShell = supportsRemoteShellRun(language: language, title: title, content: actionContent)
         let canRunHTML = supportsHTMLPreview(language: language, title: title, content: actionContent)
         let runOutput = codeRunOutputs[copyToken]
         let runError = codeRunErrors[copyToken]
@@ -1653,19 +1651,6 @@ struct MessageBubbleView: View {
                     .font(.caption2)
                     .buttonStyle(.borderedProminent)
                     .tint(isRunning ? .red : Color(red: 0.08, green: 0.08, blue: 0.1))
-                    .foregroundStyle(.white)
-                }
-                if canRunShell {
-                    Button(isShellRunning ? "结束运行" : "终端运行") {
-                        if isShellRunning {
-                            stopRemoteShellRun(token: copyToken)
-                        } else {
-                            requestRemoteShellRun(actionContent, token: copyToken)
-                        }
-                    }
-                    .font(.caption2)
-                    .buttonStyle(.borderedProminent)
-                    .tint(isShellRunning ? .red : Color(red: 0.12, green: 0.58, blue: 0.35))
                     .foregroundStyle(.white)
                 }
                 if canRunHTML {

@@ -1099,7 +1099,7 @@ final class ChatViewModel: ObservableObject {
            [[endfile]]
         3) 路径必须是相对路径，禁止绝对路径和 `..`。
         4) 文件内容必须可运行，且相互引用路径正确。
-        5) 回复最后补“终端运行”小节，给出最小命令链（安装依赖 -> 构建 -> 运行 -> 测试）。
+        5) 不要补充终端命令，重点把可直接落盘的项目文件输出完整。
         """
 
         let original = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
