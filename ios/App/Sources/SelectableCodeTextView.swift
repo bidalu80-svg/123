@@ -32,6 +32,7 @@ struct SelectableCodeTextView: UIViewRepresentable {
         view.textContainer.lineFragmentPadding = 0
         view.textContainer.widthTracksTextView = true
         view.textContainer.lineBreakMode = .byWordWrapping
+        view.layoutManager.allowsNonContiguousLayout = false
         view.adjustsFontForContentSizeCategory = true
         view.setContentCompressionResistancePriority(.required, for: .vertical)
         view.setContentHuggingPriority(.required, for: .vertical)

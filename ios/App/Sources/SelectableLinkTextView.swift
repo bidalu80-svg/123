@@ -26,7 +26,8 @@ struct SelectableLinkTextView: UIViewRepresentable {
         view.textContainerInset = .zero
         view.textContainer.lineFragmentPadding = 0
         view.textContainer.widthTracksTextView = true
-        view.layoutManager.allowsNonContiguousLayout = true
+        // Non-contiguous layout can cause transient blank gaps while fast-scrolling very long text.
+        view.layoutManager.allowsNonContiguousLayout = false
         view.adjustsFontForContentSizeCategory = true
         view.setContentCompressionResistancePriority(.required, for: .vertical)
         view.setContentHuggingPriority(.required, for: .vertical)
@@ -312,9 +313,9 @@ struct SelectableLinkTextView: UIViewRepresentable {
             guard streamTimer == nil else { return }
             let timer = CADisplayLink(target: self, selector: #selector(handleStreamAnimationTick(_:)))
             if #available(iOS 15.0, *) {
-                timer.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
+                timer.preferredFrameRateRange = CAFrameRateRange(minimum: 24, maximum: 45, preferred: 45)
             } else {
-                timer.preferredFramesPerSecond = 60
+                timer.preferredFramesPerSecond = 45
             }
             timer.add(to: .main, forMode: .common)
             streamTimer = timer
@@ -338,7 +339,7 @@ struct SelectableLinkTextView: UIViewRepresentable {
 
             let elapsed = streamLastTimestamp > 0
                 ? max(0, timer.timestamp - streamLastTimestamp)
-                : (1.0 / 60.0)
+                : (1.0 / 45.0)
             streamLastTimestamp = timer.timestamp
 
             streamCharacterBudget += elapsed * streamingCharactersPerSecond(for: pendingStreamingSuffix.count)
@@ -374,17 +375,17 @@ struct SelectableLinkTextView: UIViewRepresentable {
         private func streamingCharactersPerSecond(for pendingCharacters: Int) -> Double {
             switch pendingCharacters {
             case 6_000...:
-                return 520
+                return 420
             case 3_000...:
-                return 380
+                return 320
             case 1_600...:
-                return 280
+                return 250
             case 800...:
-                return 210
+                return 190
             case 320...:
-                return 150
+                return 140
             case 120...:
-                return 110
+                return 100
             default:
                 return 72
             }
@@ -407,7 +408,7 @@ struct SelectableLinkTextView: UIViewRepresentable {
             let tailRange = NSRange(location: start, length: storage.length - start)
             if tailRange.length > 0 {
                 // For very long bodies, keep fade lightweight to reduce attribute churn.
-                if storage.length > 18_000 {
+                if storage.length > 6_000 {
                     let tailColor = streamPrimaryColor.withAlphaComponent(0.42)
                     storage.addAttribute(.foregroundColor, value: tailColor, range: tailRange)
                     let latestRange = NSRange(location: storage.length - 1, length: 1)
@@ -463,19 +464,18 @@ struct SelectableLinkTextView: UIViewRepresentable {
             guard abs(width - lastMeasuredWidth) < 0.5 else { return nil }
             guard textCount >= lastMeasuredTextCount else { return nil }
             // Long responses need exact relayout; stale cached heights can cause overlap and wrong scroll range.
-            guard textCount < 12_000 else { return nil }
+            guard textCount < 3_000 else { return nil }
+            guard lineBreakCount < 20 else { return nil }
             guard lineBreakCount <= lastMeasuredLineBreakCount else { return nil }
 
             let delta = textCount - lastMeasuredTextCount
             let reuseThreshold: Int
-            if textCount >= 7_000 {
-                reuseThreshold = 24
-            } else if textCount >= 3_000 {
-                reuseThreshold = 16
-            } else if textCount >= 1_200 {
-                reuseThreshold = 10
-            } else {
+            if textCount >= 2_000 {
                 reuseThreshold = 6
+            } else if textCount >= 1_000 {
+                reuseThreshold = 4
+            } else {
+                reuseThreshold = 3
             }
             if delta < reuseThreshold {
                 return CGSize(width: width, height: lastMeasuredHeight)

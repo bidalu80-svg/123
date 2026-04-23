@@ -13,10 +13,12 @@ struct ChatScreen: View {
     private let sidebarWidth: CGFloat = 286
     private let edgeDragActivationWidth: CGFloat = 28
     private let headerCenterMinHorizontalInset: CGFloat = 76
-    private let maxRenderedMessages = 100
-    private let maxRenderedCharacters = 200_000
-    private let maxSingleRenderedMessageChars = 80_000
-    private let maxRenderedFilePreviewChars = 18_000
+    private let maxRenderedMessages = 72
+    private let maxRenderedCharacters = 135_000
+    private let maxSingleRenderedMessageChars = 52_000
+    private let maxRenderedFilePreviewChars = 10_000
+    private let autoSessionRotateMessageCount = 180
+    private let autoSessionRotateCharacterCount = 260_000
 
     private struct OutgoingEcho {
         let id: UUID
@@ -65,6 +67,7 @@ struct ChatScreen: View {
     @State private var noFileDirectiveAssistantIDs: Set<UUID> = []
     @State private var autoBuildEligibleAssistantIDs: Set<UUID> = []
     @State private var composerMeasuredHeight: CGFloat = 0
+    @State private var composerStableHeight: CGFloat = 58
     @State private var keyboardOverlapHeight: CGFloat = 0
     @State private var headerLeadingWidth: CGFloat = 36
     @State private var headerTrailingWidth: CGFloat = 108
@@ -74,6 +77,7 @@ struct ChatScreen: View {
     @State private var pendingMessageDeletionIDs: Set<UUID> = []
     @State private var pendingMessageDeletionTasks: [UUID: Task<Void, Never>] = [:]
     @State private var pendingOutgoingEcho: OutgoingEcho?
+    @State private var autoRotatedSessionIDs: Set<UUID> = []
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -130,6 +134,7 @@ struct ChatScreen: View {
         .onChange(of: viewModel.messages) { oldMessages, newMessages in
             runAutoFrontendBuildIfNeeded(previousMessages: oldMessages, newMessages: newMessages)
             reconcilePendingOutgoingEcho(with: newMessages)
+            maybeAutoRotateLongConversation(using: newMessages)
         }
         .onChange(of: viewModel.currentSessionID) { _, _ in
             pendingOutgoingEcho = nil
@@ -157,6 +162,11 @@ struct ChatScreen: View {
             if abs(clamped - composerMeasuredHeight) > 0.5 {
                 composerMeasuredHeight = clamped
             }
+            let inferredComposerOnlyHeight = max(0, clamped - keyboardOverlapHeight)
+            let stableCandidate = inferredComposerOnlyHeight >= 36 ? inferredComposerOnlyHeight : clamped
+            if stableCandidate >= 36, abs(stableCandidate - composerStableHeight) > 0.5 {
+                composerStableHeight = stableCandidate
+            }
         }
         .onChange(of: selectedPhotoItems) { _, newItems in
             guard !newItems.isEmpty else { return }
@@ -183,6 +193,10 @@ struct ChatScreen: View {
         .onChange(of: keyboardOverlapHeight) { _, _ in
             guard isPinnedToBottom else { return }
             issueTranscriptCommand(.scrollToBottom(animated: false))
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                guard isPinnedToBottom else { return }
+                issueTranscriptCommand(.scrollToBottom(animated: false))
+            }
         }
         .onChange(of: speechToText.transcript) { _, newValue in
             applySpeechTranscript(newValue)
@@ -1402,15 +1416,20 @@ struct ChatScreen: View {
 
     private var transcriptBottomReservedInset: CGFloat {
         let measured = max(0, composerMeasuredHeight)
+        let stable = max(44, composerStableHeight)
         let keyboard = max(0, keyboardOverlapHeight)
-        guard keyboard > 0 else { return measured }
+        guard keyboard > 0 else { return max(stable, measured) }
 
-        // Some iOS keyboard transitions can transiently inflate this measurement with keyboard height.
-        // Keep only the real composer height so first-send does not jump upward.
-        if measured > keyboard + 90 {
-            return max(44, measured - keyboard)
+        // Keyboard transition can temporarily inflate measured inset; normalize to composer-only height.
+        let candidateWithoutKeyboard = measured - keyboard
+        if candidateWithoutKeyboard >= 24 {
+            return max(stable, candidateWithoutKeyboard)
         }
-        return measured
+
+        if measured > stable + 48 {
+            return stable
+        }
+        return max(stable, measured)
     }
 
     private func handleKeyboardFrameNotification(_ notification: Notification) {
@@ -1421,7 +1440,8 @@ struct ChatScreen: View {
 
         let endFrame = endFrameValue.cgRectValue
         let screenHeight = UIScreen.main.bounds.height
-        let overlap = max(0, screenHeight - endFrame.minY)
+        let safeBottom = currentWindowSafeAreaBottomInset()
+        let overlap = max(0, screenHeight - endFrame.minY - safeBottom)
         updateKeyboardOverlapHeight(overlap)
     }
 
@@ -1430,6 +1450,14 @@ struct ChatScreen: View {
         if abs(normalized - keyboardOverlapHeight) > 0.5 {
             keyboardOverlapHeight = normalized
         }
+    }
+
+    private func currentWindowSafeAreaBottomInset() -> CGFloat {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first(where: \.isKeyWindow)?
+            .safeAreaInsets.bottom ?? 0
     }
 
     private var renderWindowNotice: some View {
@@ -1972,10 +2000,18 @@ struct ChatScreen: View {
         stagePendingOutgoingEchoIfNeeded()
         isPinnedToBottom = true
         issueTranscriptCommand(.scrollToBottom(animated: false))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
+            guard isPinnedToBottom else { return }
+            issueTranscriptCommand(.scrollToBottom(animated: false))
+        }
         Task { @MainActor in
             await viewModel.sendCurrentMessage()
             reconcilePendingOutgoingEcho(with: viewModel.messages, forceClearWhenIdle: true)
             issueTranscriptCommand(.scrollToBottom(animated: false))
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                guard isPinnedToBottom else { return }
+                issueTranscriptCommand(.scrollToBottom(animated: false))
+            }
         }
     }
 
@@ -2020,6 +2056,34 @@ struct ChatScreen: View {
             guard message.imageAttachments.count == expectedImageCount else { return false }
             let fileName = message.fileAttachments.first?.fileName
             return fileName == expectedFileName
+        }
+    }
+
+    private func maybeAutoRotateLongConversation(using messages: [ChatMessage]) {
+        autoRotatedSessionIDs.formIntersection(Set(viewModel.sessions.map(\.id)))
+        guard !viewModel.isPrivateMode else { return }
+        guard !viewModel.isSending else { return }
+        guard let latest = messages.last else { return }
+        guard Date().timeIntervalSince(latest.createdAt) < 20 else { return }
+        guard let sessionID = viewModel.currentSessionID else { return }
+        guard !autoRotatedSessionIDs.contains(sessionID) else { return }
+        guard messages.count >= autoSessionRotateMessageCount || totalMessageCharacterCount(messages) >= autoSessionRotateCharacterCount else {
+            return
+        }
+
+        autoRotatedSessionIDs.insert(sessionID)
+        viewModel.createNewSession()
+        viewModel.statusMessage = "当前会话过长，已自动开启新会话以保持流畅。旧会话仍可在侧栏查看。"
+        isPinnedToBottom = true
+        issueTranscriptCommand(.scrollToBottom(animated: false))
+    }
+
+    private func totalMessageCharacterCount(_ messages: [ChatMessage]) -> Int {
+        messages.reduce(into: 0) { total, message in
+            total += message.content.count
+            total += message.fileAttachments.reduce(into: 0) { partial, file in
+                partial += min(file.textContent.count, maxRenderedFilePreviewChars)
+            }
         }
     }
 
@@ -2435,6 +2499,11 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             stackView.translatesAutoresizingMaskIntoConstraints = false
             scrollView.addSubview(stackView)
 
+            spacerView.backgroundColor = .clear
+            spacerView.setContentHuggingPriority(.defaultLow, for: .vertical)
+            spacerView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+            stackView.addArrangedSubview(spacerView)
+
             historyHostingController.sizingOptions = [.intrinsicContentSize]
             historyHostingController.view.backgroundColor = .clear
             historyHostingController.view.translatesAutoresizingMaskIntoConstraints = false
@@ -2454,14 +2523,10 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             streamingRichHostingController.view.backgroundColor = .clear
             streamingRichHostingController.view.translatesAutoresizingMaskIntoConstraints = false
             streamingRichHostingController.view.isHidden = true
+            streamingRichHostingController.view.isUserInteractionEnabled = false
             addChild(streamingRichHostingController)
             stackView.addArrangedSubview(streamingRichHostingController.view)
             streamingRichHostingController.didMove(toParent: self)
-
-            spacerView.backgroundColor = .clear
-            spacerView.setContentHuggingPriority(.defaultLow, for: .vertical)
-            spacerView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
-            stackView.addArrangedSubview(spacerView)
 
             NSLayoutConstraint.activate([
                 stackView.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor),
@@ -2529,7 +2594,6 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
                 }
             } else if !streamingLeadHostingController.view.isHidden || lastStreamingLeadSignature != nil {
                 UIView.performWithoutAnimation {
-                    streamingLeadHostingController.rootView = AnyView(EmptyView())
                     streamingLeadHostingController.view.isHidden = true
                 }
                 lastStreamingLeadSignature = nil
@@ -2566,7 +2630,6 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
                 pendingStreamingHideWorkItem?.cancel()
                 pendingStreamingHideWorkItem = nil
                 UIView.performWithoutAnimation {
-                    streamingRichHostingController.rootView = AnyView(EmptyView())
                     streamingRichHostingController.view.isHidden = true
                 }
                 lastStreamingSignature = nil
@@ -2654,14 +2717,12 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             guard !canScroll else { return }
             guard !scrollView.isTracking, !scrollView.isDragging, !scrollView.isDecelerating else { return }
             let topOffsetY = -scrollView.contentInset.top
-            // Avoid fighting user interaction when intrinsic height updates are still catching up.
-            guard abs(scrollView.contentOffset.y - topOffsetY) > 56 else { return }
+            guard abs(scrollView.contentOffset.y - topOffsetY) > 8 else { return }
             scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: topOffsetY), animated: false)
         }
 
         private var canScroll: Bool {
-            scrollView.contentSize.height + scrollView.contentInset.top + scrollView.contentInset.bottom
-                > scrollView.bounds.height + 8
+            scrollView.contentSize.height > scrollView.bounds.height + 8
         }
 
         private var bottomOffsetY: CGFloat {
