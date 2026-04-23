@@ -121,6 +121,8 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var hasValidatedModelList = false
     @Published var memoryEntries: [ConversationMemoryItem] = []
     @Published var isLoadingMemoryEntries = false
+    @Published var latestTokenUsage: ChatTokenUsage?
+    @Published var tokenUsageFlashTrigger: Int = 0
 
     private let service: ChatService
     private var autoSaveEnabled = false
@@ -921,6 +923,11 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func finishStreamingMessage(id: UUID, reply: ChatReply, target: StreamTargetContext) {
+        if let usage = reply.usage {
+            latestTokenUsage = usage
+            tokenUsageFlashTrigger &+= 1
+        }
+
         let normalizedReplyText = normalizedFinalStreamingText(reply.text)
         let shouldKeepFinalText = config.endpointMode != .imageGenerations
 

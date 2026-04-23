@@ -462,16 +462,29 @@ enum MessageContentParser {
                     continue
                 }
 
-                if let next = nextNonEmptyLine(in: lines, from: cursor + 1),
-                   isLikelyCodeLine(next) || isLikelyCodeContinuationLine(next) {
-                    collected.append(rawLine)
-                    cursor += 1
-                    continue
+                if let nextIndex = nextNonEmptyLineIndex(in: lines, from: cursor + 1) {
+                    let nextRaw = lines[nextIndex]
+                    let nextTrimmed = nextRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if isLikelyCodeLine(nextTrimmed)
+                        || isLikelyCodeContinuationLine(nextTrimmed)
+                        || isLikelyIndentedCodeContinuationLine(rawLine: nextRaw, trimmed: nextTrimmed) {
+                        collected.append(rawLine)
+                        cursor += 1
+                        continue
+                    }
                 }
+
                 break
             }
 
-            if isLikelyCodeLine(trimmed) || isLikelyCodeContinuationLine(trimmed) {
+            if trimmed == "```" || trimmed == "``" {
+                cursor += 1
+                break
+            }
+
+            if isLikelyCodeLine(trimmed)
+                || isLikelyCodeContinuationLine(trimmed)
+                || isLikelyIndentedCodeContinuationLine(rawLine: rawLine, trimmed: trimmed) {
                 collected.append(rawLine)
                 nonEmptyCount += 1
                 if isLikelyCodeLine(trimmed) {
@@ -498,12 +511,12 @@ enum MessageContentParser {
         return (language: language, content: content, nextIndex: cursor)
     }
 
-    private static func nextNonEmptyLine(in lines: [String], from start: Int) -> String? {
+    private static func nextNonEmptyLineIndex(in lines: [String], from start: Int) -> Int? {
         guard start < lines.count else { return nil }
         for idx in start..<lines.count {
             let trimmed = lines[idx].trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty {
-                return trimmed
+                return idx
             }
         }
         return nil
@@ -515,6 +528,30 @@ enum MessageContentParser {
         let continuationTokens: Set<String> = ["{", "}", "(", ")", "[", "]", ">", "<", ":", "::", ","]
         if continuationTokens.contains(trimmed) { return true }
         if trimmed.hasPrefix("\"") || trimmed.hasPrefix("'") || trimmed.hasPrefix("`") { return true }
+        return false
+    }
+
+    private static func isLikelyIndentedCodeContinuationLine(rawLine: String, trimmed: String) -> Bool {
+        guard !trimmed.isEmpty else { return false }
+        let leadingIndent = rawLine.prefix { $0 == " " || $0 == "\t" }.count
+        guard leadingIndent >= 2 else { return false }
+
+        if trimmed.hasSuffix(",") || trimmed.hasSuffix(":") {
+            return true
+        }
+
+        if trimmed.contains(": ") {
+            return true
+        }
+
+        if trimmed.hasPrefix(".") || trimmed.hasPrefix(")") || trimmed.hasPrefix("]") || trimmed.hasPrefix("}") {
+            return true
+        }
+
+        if trimmed.range(of: #"^[A-Za-z_][A-Za-z0-9_]*\s*:"#, options: .regularExpression) != nil {
+            return true
+        }
+
         return false
     }
 
@@ -534,6 +571,10 @@ enum MessageContentParser {
             return true
         }
 
+        if trimmed.range(of: #"^[A-Za-z_][A-Za-z0-9_]*\s*:\s*"#, options: .regularExpression) != nil {
+            return true
+        }
+
         let codeTokens = ["{", "}", "=>", "->", ":=", "::", "()", "[]", "==", "!=", "<=", ">=", "&&", "||", ";"]
         if codeTokens.contains(where: { trimmed.contains($0) }) {
             return true
@@ -544,6 +585,11 @@ enum MessageContentParser {
         }
 
         if trimmed.contains("=") && !trimmed.contains("==") {
+            return true
+        }
+
+        if trimmed.hasSuffix(","),
+           trimmed.contains("\"") || trimmed.contains("'") || trimmed.contains(":") || trimmed.hasPrefix(".") {
             return true
         }
 

@@ -30,6 +30,11 @@ struct ChatScreen: View {
         let createdAt: Date
     }
 
+    private struct TokenUsageToast: Equatable {
+        let trigger: Int
+        let usage: ChatTokenUsage
+    }
+
     private let starterPrompts: [(title: String, subtitle: String)] = [
         ("写一个 Swift 网络请求封装", "支持 async/await 和错误重试"),
         ("帮我排查 iOS 卡顿", "给出 Instruments 的定位步骤"),
@@ -80,6 +85,8 @@ struct ChatScreen: View {
     @State private var pendingMessageDeletionTasks: [UUID: Task<Void, Never>] = [:]
     @State private var pendingOutgoingEcho: OutgoingEcho?
     @State private var autoRotatedSessionIDs: Set<UUID> = []
+    @State private var tokenUsageToast: TokenUsageToast?
+    @State private var tokenUsageHideTask: Task<Void, Never>?
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -139,6 +146,10 @@ struct ChatScreen: View {
             if !viewModel.isSending, newMessages.count > oldMessages.count {
                 maybeAutoRotateLongConversation(using: newMessages)
             }
+        }
+        .onChange(of: viewModel.tokenUsageFlashTrigger) { _, trigger in
+            guard trigger > 0, let usage = viewModel.latestTokenUsage else { return }
+            presentTokenUsageToast(usage, trigger: trigger)
         }
         .onChange(of: viewModel.isSending) { _, isSending in
             guard !isSending else { return }
@@ -212,6 +223,8 @@ struct ChatScreen: View {
         .onDisappear {
             speechToText.stopRecording()
             cancelPendingMessageDeletionTasks()
+            tokenUsageHideTask?.cancel()
+            tokenUsageHideTask = nil
         }
         .photosPicker(
             isPresented: $showPhotoPicker,
@@ -318,6 +331,15 @@ struct ChatScreen: View {
                 )
                 .ignoresSafeArea()
             )
+            .overlay(alignment: .topLeading) {
+                if let toast = tokenUsageToast {
+                    tokenUsageToastView(toast)
+                        .padding(.top, 78)
+                        .padding(.leading, 14)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .allowsHitTesting(false)
+                }
+            }
     }
 
     private var header: some View {
@@ -550,6 +572,66 @@ struct ChatScreen: View {
             .buttonStyle(.plain)
         }
         .frame(minWidth: 36, alignment: .trailing)
+    }
+
+    private func tokenUsageToastView(_ toast: TokenUsageToast) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "bolt.horizontal.circle")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.primary.opacity(0.84))
+
+            Text("输 \(compactTokenCount(toast.usage.inputTokens))")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.primary.opacity(0.88))
+
+            Text("出 \(compactTokenCount(toast.usage.outputTokens))")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.primary.opacity(0.88))
+
+            Text("缓存 \(compactTokenCount(toast.usage.cachedTokens))")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.primary.opacity(0.72))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.ultraThinMaterial)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.white.opacity(colorScheme == .dark ? 0.18 : 0.46), lineWidth: 0.8)
+        )
+        .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.18 : 0.08), radius: 9, x: 0, y: 4)
+    }
+
+    private func compactTokenCount(_ value: Int) -> String {
+        let safe = max(0, value)
+        if safe >= 1_000_000 {
+            return String(format: "%.1fm", Double(safe) / 1_000_000.0)
+        }
+        if safe >= 1_000 {
+            return String(format: "%.1fk", Double(safe) / 1_000.0)
+        }
+        return String(safe)
+    }
+
+    private func presentTokenUsageToast(_ usage: ChatTokenUsage, trigger: Int) {
+        tokenUsageHideTask?.cancel()
+        tokenUsageHideTask = nil
+
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.82, blendDuration: 0.1)) {
+            tokenUsageToast = TokenUsageToast(trigger: trigger, usage: usage)
+        }
+
+        tokenUsageHideTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.22)) {
+                tokenUsageToast = nil
+            }
+            tokenUsageHideTask = nil
+        }
     }
 
 

@@ -1,9 +1,20 @@
 import Foundation
 
+struct ChatTokenUsage: Equatable {
+    var inputTokens: Int
+    var outputTokens: Int
+    var cachedTokens: Int
+
+    var totalTokens: Int {
+        max(0, inputTokens + outputTokens)
+    }
+}
+
 struct ChatReply: Equatable {
     var text: String
     var imageAttachments: [ChatImageAttachment] = []
     var videoAttachments: [ChatVideoAttachment] = []
+    var usage: ChatTokenUsage? = nil
 }
 
 struct ChatRequestBuilder {
@@ -841,6 +852,7 @@ final class ChatService {
             var pendingImageURLs = Set<String>()
             var thinkTagFilter = ThinkTagStreamFilter()
             var accumulatedResponseText = ""
+            var latestUsage: ChatTokenUsage?
             var lastEmitAt = Date.distantPast
             let streamEmitInterval: TimeInterval = 0.012
             let streamForceEmitCharacterThreshold = 28
@@ -900,6 +912,9 @@ final class ChatService {
                 }
 
                 if let eventObject = parseJSONObjectFromSSELine(line) {
+                    if let usage = extractTokenUsage(from: eventObject) {
+                        latestUsage = usage
+                    }
                     let videos = extractVideoAttachments(from: eventObject, baseURL: config.normalizedBaseURL)
                     if !videos.isEmpty {
                         videos.forEach { videoURLStrings.insert($0.requestURLString) }
@@ -944,7 +959,7 @@ final class ChatService {
                 throw ChatServiceError.noData
             }
 
-            return ChatReply(text: mergedText, imageAttachments: images, videoAttachments: videos)
+            return ChatReply(text: mergedText, imageAttachments: images, videoAttachments: videos, usage: latestUsage)
         }
     }
 
@@ -988,6 +1003,7 @@ final class ChatService {
         let citationURLs = StreamParser.extractCitationURLs(from: object)
         let cleanedText = ResponseCleaner.cleanAssistantText(parsed.text)
         let mergedText = mergeTextWithCitationURLs(cleanedText, citationURLs: citationURLs)
+        let usage = extractTokenUsage(from: object)
         let images = deduplicateImages(
             parsed.imageURLs.map { ChatImageAttachment(dataURL: $0, mimeType: "image/*", remoteURL: $0) }
         )
@@ -998,7 +1014,7 @@ final class ChatService {
         }
 
         onEvent(StreamChunk(rawLine: "", deltaText: mergedText, imageURLs: images.map(\.requestURLString), isDone: false))
-        return ChatReply(text: mergedText, imageAttachments: images, videoAttachments: videos)
+        return ChatReply(text: mergedText, imageAttachments: images, videoAttachments: videos, usage: usage)
     }
 
     private func shouldFallbackResponsesStreamError(_ error: Error) -> Bool {
@@ -1125,6 +1141,7 @@ final class ChatService {
                 var pendingImageURLs = Set<String>()
                 var thinkTagFilter = ThinkTagStreamFilter()
                 var accumulatedResponseText = ""
+                var latestUsage: ChatTokenUsage?
                 var lastEmitAt = Date.distantPast
                 // Emit smaller, more frequent deltas to keep the UI feed visually continuous.
                 let streamEmitInterval: TimeInterval = 0.012
@@ -1183,6 +1200,11 @@ final class ChatService {
                         chunk.imageURLs.forEach { pendingImageURLs.insert($0) }
                     }
 
+                    if let eventObject = parseJSONObjectFromSSELine(line),
+                       let usage = extractTokenUsage(from: eventObject) {
+                        latestUsage = usage
+                    }
+
                     emitPending()
                 }
 
@@ -1209,7 +1231,7 @@ final class ChatService {
                 if mergedText.isEmpty && images.isEmpty {
                     throw ChatServiceError.noData
                 }
-                return ChatReply(text: mergedText, imageAttachments: images)
+                return ChatReply(text: mergedText, imageAttachments: images, usage: latestUsage)
                 }
             } catch {
                 if !shouldFallbackChatCompletionsStreamError(error) {
@@ -1247,11 +1269,13 @@ final class ChatService {
         let parsed = StreamParser.extractPayload(from: object)
         let citationURLs = StreamParser.extractCitationURLs(from: object)
         let cleanedText = ResponseCleaner.cleanAssistantText(parsed.text)
+        let usage = extractTokenUsage(from: object)
         let reply = ChatReply(
             text: mergeTextWithCitationURLs(cleanedText, citationURLs: citationURLs),
             imageAttachments: deduplicateImages(
                 parsed.imageURLs.map { ChatImageAttachment(dataURL: $0, mimeType: "image/*", remoteURL: $0) }
-            )
+            ),
+            usage: usage
         )
         if reply.text.isEmpty && reply.imageAttachments.isEmpty {
             throw ChatServiceError.noData
@@ -2121,6 +2145,82 @@ final class ChatService {
             }
 
         return filteredLines.joined(separator: "\n")
+    }
+
+    private func extractTokenUsage(from object: [String: Any]) -> ChatTokenUsage? {
+        if let usage = object["usage"] as? [String: Any],
+           let parsed = parseTokenUsage(usage) {
+            return parsed
+        }
+
+        if let response = object["response"] as? [String: Any],
+           let usage = response["usage"] as? [String: Any],
+           let parsed = parseTokenUsage(usage) {
+            return parsed
+        }
+
+        return nil
+    }
+
+    private func parseTokenUsage(_ usage: [String: Any]) -> ChatTokenUsage? {
+        let inputTokens = extractInt(for: ["input_tokens", "prompt_tokens"], in: usage)
+        let outputTokens = extractInt(for: ["output_tokens", "completion_tokens"], in: usage)
+        let totalTokens = extractInt(for: ["total_tokens"], in: usage)
+
+        let cachedTokens =
+            extractInt(for: ["cached_tokens", "input_cached_tokens", "cache_read_input_tokens"], in: usage)
+            ?? extractInt(for: ["cached_tokens"], in: usage["input_tokens_details"])
+            ?? extractInt(for: ["cached_tokens"], in: usage["prompt_tokens_details"])
+
+        guard inputTokens != nil || outputTokens != nil || totalTokens != nil || cachedTokens != nil else {
+            return nil
+        }
+
+        var resolvedInput = inputTokens ?? 0
+        var resolvedOutput = outputTokens ?? 0
+
+        if totalTokens != nil, inputTokens == nil, outputTokens != nil {
+            resolvedInput = max(0, (totalTokens ?? 0) - resolvedOutput)
+        } else if totalTokens != nil, outputTokens == nil, inputTokens != nil {
+            resolvedOutput = max(0, (totalTokens ?? 0) - resolvedInput)
+        }
+
+        return ChatTokenUsage(
+            inputTokens: max(0, resolvedInput),
+            outputTokens: max(0, resolvedOutput),
+            cachedTokens: max(0, cachedTokens ?? 0)
+        )
+    }
+
+    private func extractInt(for keys: [String], in node: Any?) -> Int? {
+        guard let dict = node as? [String: Any] else { return nil }
+        for key in keys {
+            if let value = dict[key] {
+                if let parsed = parseInt(value) {
+                    return parsed
+                }
+            }
+        }
+        return nil
+    }
+
+    private func parseInt(_ value: Any) -> Int? {
+        if let number = value as? NSNumber {
+            return number.intValue
+        }
+        if let intValue = value as? Int {
+            return intValue
+        }
+        if let stringValue = value as? String {
+            let trimmed = stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let parsed = Int(trimmed) {
+                return parsed
+            }
+            if let parsedDouble = Double(trimmed) {
+                return Int(parsedDouble.rounded())
+            }
+        }
+        return nil
     }
 
     private func mergeTextWithCitationURLs(_ text: String, citationURLs: [String]) -> String {
