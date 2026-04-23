@@ -37,6 +37,11 @@ struct ChatScreen: View {
         let usage: ChatTokenUsage
     }
 
+    private struct SessionRotateToast: Equatable {
+        let trigger: Int
+        let message: String
+    }
+
     private let starterPrompts: [(title: String, subtitle: String)] = [
         ("写一个 Swift 网络请求封装", "支持 async/await 和错误重试"),
         ("帮我排查 iOS 卡顿", "给出 Instruments 的定位步骤"),
@@ -89,6 +94,9 @@ struct ChatScreen: View {
     @State private var autoRotatedSessionIDs: Set<UUID> = []
     @State private var tokenUsageToast: TokenUsageToast?
     @State private var tokenUsageHideTask: Task<Void, Never>?
+    @State private var sessionRotateToast: SessionRotateToast?
+    @State private var sessionRotateToastTrigger: Int = 0
+    @State private var sessionRotateHideTask: Task<Void, Never>?
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -236,6 +244,8 @@ struct ChatScreen: View {
             cancelPendingMessageDeletionTasks()
             tokenUsageHideTask?.cancel()
             tokenUsageHideTask = nil
+            sessionRotateHideTask?.cancel()
+            sessionRotateHideTask = nil
         }
         .photosPicker(
             isPresented: $showPhotoPicker,
@@ -343,12 +353,18 @@ struct ChatScreen: View {
                 .ignoresSafeArea()
             )
             .overlay(alignment: .topLeading) {
-                if let toast = tokenUsageToast {
-                    tokenUsageToastView(toast)
-                        .padding(.top, 78)
-                        .padding(.leading, 14)
-                        .transition(.move(edge: .top).combined(with: .opacity))
+                VStack(alignment: .leading, spacing: 8) {
+                    if let toast = tokenUsageToast {
+                        tokenUsageToastView(toast)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                    if let toast = sessionRotateToast {
+                        sessionRotateToastView(toast)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
                 }
+                .padding(.top, 78)
+                .padding(.leading, 14)
             }
     }
 
@@ -675,6 +691,67 @@ struct ChatScreen: View {
         tokenUsageHideTask = nil
         withAnimation(.easeOut(duration: 0.22)) {
             tokenUsageToast = nil
+        }
+    }
+
+    private func sessionRotateToastView(_ toast: SessionRotateToast) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "rectangle.3.group.bubble.left.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.primary.opacity(0.84))
+
+            Text(toast.message)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.primary.opacity(0.88))
+                .lineLimit(2)
+
+            Button {
+                dismissSessionRotateToast()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.primary.opacity(0.55))
+                    .padding(.leading, 2)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("关闭会话切换提示")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.ultraThinMaterial)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.white.opacity(colorScheme == .dark ? 0.18 : 0.46), lineWidth: 0.8)
+        )
+        .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.18 : 0.08), radius: 9, x: 0, y: 4)
+    }
+
+    private func presentSessionRotateToast(
+        _ message: String = "当前对话窗口已上限，已为您创建新的对话窗口"
+    ) {
+        sessionRotateHideTask?.cancel()
+        sessionRotateHideTask = nil
+        sessionRotateToastTrigger &+= 1
+
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.82, blendDuration: 0.1)) {
+            sessionRotateToast = SessionRotateToast(trigger: sessionRotateToastTrigger, message: message)
+        }
+
+        sessionRotateHideTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard !Task.isCancelled else { return }
+            dismissSessionRotateToast()
+        }
+    }
+
+    private func dismissSessionRotateToast() {
+        sessionRotateHideTask?.cancel()
+        sessionRotateHideTask = nil
+        withAnimation(.easeOut(duration: 0.22)) {
+            sessionRotateToast = nil
         }
     }
 
@@ -2243,6 +2320,7 @@ struct ChatScreen: View {
         } else {
             viewModel.statusMessage = "当前会话超过 \(autoSessionRotateMessageCount) 条，已自动开启新会话以保持流畅。旧会话仍可在侧栏查看。"
         }
+        presentSessionRotateToast()
         isPinnedToBottom = true
         issueTranscriptCommand(.scrollToBottom(animated: false))
     }
@@ -2269,6 +2347,7 @@ struct ChatScreen: View {
         }
         let ratioText = String(format: "%.1f", overflow.ratio)
         viewModel.statusMessage = "当前会话已超出窗口承载（约 \(ratioText)x），已切换到新会话；请再次点击发送。"
+        presentSessionRotateToast()
         return true
     }
 
