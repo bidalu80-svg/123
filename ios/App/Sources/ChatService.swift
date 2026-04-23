@@ -879,10 +879,11 @@ final class ChatService {
 
                 if !chunk.deltaText.isEmpty {
                     let filtered = thinkTagFilter.filter(chunk.deltaText)
-                    if !filtered.isEmpty {
+                    let sanitized = sanitizeStreamingAssistantText(filtered)
+                    if !sanitized.isEmpty {
                         let incremental = incrementalStreamingTextDelta(
                             existing: accumulatedResponseText,
-                            incoming: filtered
+                            incoming: sanitized
                         )
                         if !incremental.isEmpty {
                             accumulatedResponseText += incremental
@@ -909,10 +910,11 @@ final class ChatService {
             }
 
             let trailingFiltered = thinkTagFilter.finalize()
-            if !trailingFiltered.isEmpty {
+            let trailingSanitized = sanitizeStreamingAssistantText(trailingFiltered)
+            if !trailingSanitized.isEmpty {
                 let incremental = incrementalStreamingTextDelta(
                     existing: accumulatedResponseText,
-                    incoming: trailingFiltered
+                    incoming: trailingSanitized
                 )
                 if !incremental.isEmpty {
                     accumulatedResponseText += incremental
@@ -1122,6 +1124,7 @@ final class ChatService {
                 var pendingDeltaCharacters = 0
                 var pendingImageURLs = Set<String>()
                 var thinkTagFilter = ThinkTagStreamFilter()
+                var accumulatedResponseText = ""
                 var lastEmitAt = Date.distantPast
                 // Emit smaller, more frequent deltas to keep the UI feed visually continuous.
                 let streamEmitInterval: TimeInterval = 0.012
@@ -1161,10 +1164,18 @@ final class ChatService {
 
                     if !chunk.deltaText.isEmpty {
                         let filtered = thinkTagFilter.filter(chunk.deltaText)
-                        if !filtered.isEmpty {
-                            fullReplyParts.append(filtered)
-                            pendingDeltaParts.append(filtered)
-                            pendingDeltaCharacters += filtered.count
+                        let sanitized = sanitizeStreamingAssistantText(filtered)
+                        if !sanitized.isEmpty {
+                            let incremental = incrementalStreamingTextDelta(
+                                existing: accumulatedResponseText,
+                                incoming: sanitized
+                            )
+                            if !incremental.isEmpty {
+                                accumulatedResponseText += incremental
+                                fullReplyParts.append(incremental)
+                                pendingDeltaParts.append(incremental)
+                                pendingDeltaCharacters += incremental.count
+                            }
                         }
                     }
                     if !chunk.imageURLs.isEmpty {
@@ -1176,10 +1187,18 @@ final class ChatService {
                 }
 
                 let trailingFiltered = thinkTagFilter.finalize()
-                if !trailingFiltered.isEmpty {
-                    fullReplyParts.append(trailingFiltered)
-                    pendingDeltaParts.append(trailingFiltered)
-                    pendingDeltaCharacters += trailingFiltered.count
+                let trailingSanitized = sanitizeStreamingAssistantText(trailingFiltered)
+                if !trailingSanitized.isEmpty {
+                    let incremental = incrementalStreamingTextDelta(
+                        existing: accumulatedResponseText,
+                        incoming: trailingSanitized
+                    )
+                    if !incremental.isEmpty {
+                        accumulatedResponseText += incremental
+                        fullReplyParts.append(incremental)
+                        pendingDeltaParts.append(incremental)
+                        pendingDeltaCharacters += incremental.count
+                    }
                 }
                 emitPending(force: true)
 
@@ -2053,6 +2072,57 @@ final class ChatService {
         return incoming
     }
 
+    private func sanitizeStreamingAssistantText(_ raw: String) -> String {
+        guard !raw.isEmpty else { return "" }
+
+        let normalized = raw
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\u{0000}", with: "")
+        let lowered = normalized.lowercased()
+
+        let likelyProtocolLeak =
+            lowered.contains("to=shell")
+            || lowered.contains("to=functions.")
+            || lowered.contains("to=multi_tool_use.")
+            || lowered.contains("\"recipient_name\"")
+            || lowered.contains("functions.shell_command")
+            || lowered.contains("multi_tool_use.parallel")
+            || lowered.contains("{\"command\":[\"bash\"")
+            || lowered.contains("{\"command\":[\"powershell\"")
+
+        guard likelyProtocolLeak else { return normalized }
+
+        let filteredLines = normalized
+            .components(separatedBy: "\n")
+            .filter { line in
+                let trimmedLower = line
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased()
+                guard !trimmedLower.isEmpty else { return true }
+
+                if trimmedLower.hasPrefix("to=shell")
+                    || trimmedLower.hasPrefix("to=functions.")
+                    || trimmedLower.hasPrefix("to=multi_tool_use.") {
+                    return false
+                }
+
+                if trimmedLower.contains("functions.shell_command")
+                    || trimmedLower.contains("multi_tool_use.parallel")
+                    || trimmedLower.contains("\"recipient_name\"") {
+                    return false
+                }
+
+                if trimmedLower.hasPrefix("{\"command\":[\"bash\"")
+                    || trimmedLower.hasPrefix("{\"command\":[\"powershell\"") {
+                    return false
+                }
+
+                return true
+            }
+
+        return filteredLines.joined(separator: "\n")
+    }
+
     private func mergeTextWithCitationURLs(_ text: String, citationURLs: [String]) -> String {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if citationURLs.isEmpty {
@@ -2307,6 +2377,8 @@ enum ResponseCleaner {
         var text = raw
         let preservedCodeBlocks = preserveCodeBlocks(in: &text)
 
+        text = stripAgentProtocolLeakage(in: text)
+
         text = text.replacingOccurrences(
             of: "(?is)<think>.*?</think>",
             with: "",
@@ -2363,6 +2435,37 @@ enum ResponseCleaner {
             restored = restored.replacingOccurrences(of: "CODEBLOCKTOKEN\(index)", with: block)
         }
         return restored
+    }
+
+    private static func stripAgentProtocolLeakage(in text: String) -> String {
+        guard !text.isEmpty else { return text }
+        return text
+            .components(separatedBy: "\n")
+            .filter { line in
+                let trimmedLower = line
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased()
+
+                if trimmedLower.hasPrefix("to=shell")
+                    || trimmedLower.hasPrefix("to=functions.")
+                    || trimmedLower.hasPrefix("to=multi_tool_use.") {
+                    return false
+                }
+
+                if trimmedLower.contains("functions.shell_command")
+                    || trimmedLower.contains("multi_tool_use.parallel")
+                    || trimmedLower.contains("\"recipient_name\"") {
+                    return false
+                }
+
+                if trimmedLower.hasPrefix("{\"command\":[\"bash\"")
+                    || trimmedLower.hasPrefix("{\"command\":[\"powershell\"") {
+                    return false
+                }
+
+                return true
+            }
+            .joined(separator: "\n")
     }
 }
 

@@ -17,8 +17,8 @@ struct ChatScreen: View {
     private let maxRenderedCharacters = 135_000
     private let maxSingleRenderedMessageChars = 52_000
     private let maxRenderedFilePreviewChars = 10_000
-    private let autoSessionRotateMessageCount = 180
-    private let autoSessionRotateCharacterCount = 260_000
+    private let autoSessionRotateMessageCount = 120
+    private let autoSessionRotateCharacterCount = 180_000
 
     private struct OutgoingEcho {
         let id: UUID
@@ -134,7 +134,10 @@ struct ChatScreen: View {
         .onChange(of: viewModel.messages) { oldMessages, newMessages in
             runAutoFrontendBuildIfNeeded(previousMessages: oldMessages, newMessages: newMessages)
             reconcilePendingOutgoingEcho(with: newMessages)
-            maybeAutoRotateLongConversation(using: newMessages)
+        }
+        .onChange(of: viewModel.isSending) { _, isSending in
+            guard !isSending else { return }
+            maybeAutoRotateLongConversation(using: viewModel.messages)
         }
         .onChange(of: viewModel.currentSessionID) { _, _ in
             pendingOutgoingEcho = nil
@@ -2063,8 +2066,10 @@ struct ChatScreen: View {
         autoRotatedSessionIDs.formIntersection(Set(viewModel.sessions.map(\.id)))
         guard !viewModel.isPrivateMode else { return }
         guard !viewModel.isSending else { return }
+        guard !messages.isEmpty else { return }
         guard let latest = messages.last else { return }
-        guard Date().timeIntervalSince(latest.createdAt) < 20 else { return }
+        // Only rotate after an assistant reply is fully finished.
+        guard latest.role == .assistant, !latest.isStreaming else { return }
         guard let sessionID = viewModel.currentSessionID else { return }
         guard !autoRotatedSessionIDs.contains(sessionID) else { return }
         guard messages.count >= autoSessionRotateMessageCount || totalMessageCharacterCount(messages) >= autoSessionRotateCharacterCount else {
@@ -2073,7 +2078,7 @@ struct ChatScreen: View {
 
         autoRotatedSessionIDs.insert(sessionID)
         viewModel.createNewSession()
-        viewModel.statusMessage = "当前会话过长，已自动开启新会话以保持流畅。旧会话仍可在侧栏查看。"
+        viewModel.statusMessage = "当前会话超过 \(autoSessionRotateMessageCount) 条，已自动开启新会话以保持流畅。旧会话仍可在侧栏查看。"
         isPinnedToBottom = true
         issueTranscriptCommand(.scrollToBottom(animated: false))
     }

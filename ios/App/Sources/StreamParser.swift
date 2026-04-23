@@ -45,6 +45,15 @@ enum StreamParser {
         var textParts: [String] = []
         var imageURLs: [String] = []
 
+        if let rawType = object["type"] as? String,
+           rawType.lowercased().hasPrefix("response.") {
+            appendResponsesEventPayload(object, textParts: &textParts, imageURLs: &imageURLs)
+            return (
+                textParts.joined(),
+                dedupe(imageURLs)
+            )
+        }
+
         appendResponsesEventPayload(object, textParts: &textParts, imageURLs: &imageURLs)
 
         if let choices = object["choices"] as? [[String: Any]] {
