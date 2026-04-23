@@ -139,34 +139,6 @@ struct SettingsScreen: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
 
-                Toggle("启用远端终端运行", isOn: $viewModel.config.shellExecutionEnabled)
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("终端执行接口（可填相对路径或完整 URL）")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    TextField("/v1/shell/execute", text: $viewModel.config.shellExecutionPath)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-
-                    TextField("工作目录（可选，如 latest）", text: $viewModel.config.shellExecutionWorkingDirectory)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-
-                    HStack {
-                        Text("终端超时")
-                        Spacer()
-                        Text("\(Int(viewModel.config.shellExecutionTimeout)) 秒")
-                            .foregroundStyle(.secondary)
-                    }
-                    Slider(value: $viewModel.config.shellExecutionTimeout, in: 5...300, step: 5)
-
-                    Text("完整终端 URL：\(viewModel.config.shellExecutionURLString)")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .lineLimit(2)
-                }
-
                 Toggle("启用消息音效（发送/回复完成）", isOn: $viewModel.config.soundEffectsEnabled)
                 Toggle("自动朗读 AI 回复", isOn: $viewModel.config.replySpeechPlaybackEnabled)
                 Picker("回复声线", selection: $viewModel.config.replySpeechVoicePreset) {
@@ -411,7 +383,6 @@ struct SettingsScreen: View {
                 statusRow("当前接口", value: viewModel.config.endpointMode.title)
                 statusRow("当前模型", value: viewModel.config.model)
                 statusRow("流式模式", value: viewModel.config.streamEnabled ? "开启" : "关闭")
-                statusRow("远端终端", value: viewModel.config.shellExecutionEnabled ? "开启" : "关闭")
                 statusRow("回复朗读", value: viewModel.config.replySpeechPlaybackEnabled ? "开启" : "关闭")
                 if viewModel.config.replySpeechPlaybackEnabled {
                     statusRow("朗读声线", value: viewModel.config.replySpeechVoicePreset.title)

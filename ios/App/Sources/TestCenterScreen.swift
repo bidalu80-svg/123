@@ -24,9 +24,6 @@ struct TestCenterScreen: View {
                 Button("UI 测试（清空当前会话）") {
                     viewModel.clearCurrentSessionMessages()
                 }
-                NavigationLink("Agent 测试（终端模块）") {
-                    AgentLabScreen()
-                }
             }
 
             Section("测试说明") {

@@ -131,15 +131,6 @@ struct ChatScreen: View {
     @State private var autoBuildRequestID: Int = 0
     @State private var autoBuildRunningMessageID: UUID?
     @State private var latestProjectHasPreviewEntry = false
-    @State private var autoShellRunAttemptedAssistantIDs: Set<UUID> = []
-    @State private var showFrontendTerminalSheet = false
-    @State private var frontendTerminalCommand = ""
-    @State private var frontendTerminalOutput = ""
-    @State private var frontendTerminalIsRunning = false
-    @State private var frontendTerminalExitCode: Int?
-    @State private var frontendTerminalDurationMs: Int?
-    @State private var frontendTerminalTask: Task<Void, Never>?
-    @State private var frontendTerminalRunRequestID: Int = 0
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -226,16 +217,6 @@ struct ChatScreen: View {
             frontendOverlayFileIndex = 0
             frontendOverlayManualSelectionUntil = .distantPast
             projectFormatRetryAttemptedUserIDs.removeAll()
-            autoShellRunAttemptedAssistantIDs.removeAll()
-            frontendTerminalTask?.cancel()
-            frontendTerminalTask = nil
-            frontendTerminalIsRunning = false
-            showFrontendTerminalSheet = false
-            frontendTerminalCommand = ""
-            frontendTerminalOutput = ""
-            frontendTerminalExitCode = nil
-            frontendTerminalDurationMs = nil
-            frontendTerminalRunRequestID &+= 1
             Self.frontendOverlayCodeEntriesCache.removeAll()
             Self.frontendOverlayCodeEntriesCacheOrder.removeAll()
             DispatchQueue.main.async {
@@ -251,16 +232,6 @@ struct ChatScreen: View {
             frontendOverlayFileIndex = 0
             frontendOverlayManualSelectionUntil = .distantPast
             projectFormatRetryAttemptedUserIDs.removeAll()
-            autoShellRunAttemptedAssistantIDs.removeAll()
-            frontendTerminalTask?.cancel()
-            frontendTerminalTask = nil
-            frontendTerminalIsRunning = false
-            showFrontendTerminalSheet = false
-            frontendTerminalCommand = ""
-            frontendTerminalOutput = ""
-            frontendTerminalExitCode = nil
-            frontendTerminalDurationMs = nil
-            frontendTerminalRunRequestID &+= 1
             Self.frontendOverlayCodeEntriesCache.removeAll()
             Self.frontendOverlayCodeEntriesCacheOrder.removeAll()
             DispatchQueue.main.async {
@@ -320,11 +291,6 @@ struct ChatScreen: View {
             tokenUsageHideTask = nil
             sessionRotateHideTask?.cancel()
             sessionRotateHideTask = nil
-            frontendTerminalTask?.cancel()
-            frontendTerminalTask = nil
-            frontendTerminalIsRunning = false
-            showFrontendTerminalSheet = false
-            frontendTerminalRunRequestID &+= 1
         }
         .photosPicker(
             isPresented: $showPhotoPicker,
@@ -399,21 +365,7 @@ struct ChatScreen: View {
             CodeViewerSheet(
                 payload: payload,
                 codeThemeMode: viewModel.config.codeThemeMode,
-                onRunTerminalCommand: { command in
-                    runFrontendTerminalCommandFromCodeViewer(command)
-                }
-            )
-        }
-        .sheet(isPresented: $showFrontendTerminalSheet) {
-            FrontendTerminalRunSheet(
-                command: frontendTerminalCommand,
-                output: frontendTerminalOutput,
-                isRunning: frontendTerminalIsRunning,
-                exitCode: frontendTerminalExitCode,
-                durationMs: frontendTerminalDurationMs,
-                onRerun: {
-                    runFrontendTerminalCommand(frontendTerminalCommand, autoTriggered: false)
-                }
+                onRunTerminalCommand: nil
             )
         }
     }
@@ -1130,7 +1082,6 @@ struct ChatScreen: View {
         noFileDirectiveAssistantIDs.formIntersection(currentAssistantIDs)
         autoBuildEligibleAssistantIDs.formIntersection(currentAssistantIDs)
         autoBuildInFlightAssistantIDs.formIntersection(currentAssistantIDs)
-        autoShellRunAttemptedAssistantIDs.formIntersection(currentAssistantIDs)
         projectFormatRetryAttemptedUserIDs.formIntersection(currentUserIDs)
     }
 
@@ -1254,8 +1205,7 @@ struct ChatScreen: View {
                 case .success(let buildResult):
                     autoBuildEligibleAssistantIDs.insert(sourceAssistant.id)
                     latestProjectHasPreviewEntry = true
-                    let terminalSnippet = preferredTerminalCommandSnippet(from: sourceAssistant)
-                    if buildResult.shouldAutoOpenPreview, terminalSnippet == nil {
+                    if buildResult.shouldAutoOpenPreview {
                         let previewHTML = sanitizedFrontendPreviewHTML(buildResult.entryHTML)
                         autoFrontendPreview = AutoFrontendPreviewPayload(
                             title: "自动预览 · \(buildResult.entryFileURL.lastPathComponent)",
@@ -1268,142 +1218,11 @@ struct ChatScreen: View {
                         autoFrontendPreview = nil
                         viewModel.statusMessage = "项目文件已自动落盘（\(buildResult.writtenRelativePaths.count) 文件）"
                     }
-                    if let terminalSnippet = terminalSnippet {
-                        attemptAutoFrontendTerminalRunIfNeeded(
-                            command: terminalSnippet.command,
-                            for: sourceAssistant.id
-                        )
-                    }
                 case .failure(let error):
                     // Auto mode should stay non-blocking; report status but avoid interrupting chat.
                     autoBuildEligibleAssistantIDs.remove(sourceAssistant.id)
                     let reason = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                     viewModel.statusMessage = "项目自动落盘失败：\(reason)"
-                }
-            }
-        }
-    }
-
-    private func attemptAutoFrontendTerminalRunIfNeeded(command: String, for assistantID: UUID) {
-        guard autoShellRunAttemptedAssistantIDs.insert(assistantID).inserted else { return }
-        runFrontendTerminalCommand(command, autoTriggered: true)
-    }
-
-    private func runFrontendTerminalCommandFromCodeViewer(_ command: String) {
-        activeFrontendCodeViewer = nil
-        let commandToRun = command
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) {
-            self.runFrontendTerminalCommand(commandToRun, autoTriggered: false)
-        }
-    }
-
-    private func runFrontendTerminalCommand(_ rawCommand: String, autoTriggered: Bool) {
-        let command = normalizedTerminalCommandForExecution(rawCommand)
-        if command.isEmpty {
-            frontendTerminalRunRequestID &+= 1
-            frontendTerminalTask?.cancel()
-            frontendTerminalTask = nil
-            frontendTerminalCommand = rawCommand.trimmingCharacters(in: .whitespacesAndNewlines)
-            frontendTerminalOutput = "未识别到可执行命令，请在回复里提供可直接运行的 bash/powershell 命令。"
-            frontendTerminalIsRunning = false
-            frontendTerminalExitCode = nil
-            frontendTerminalDurationMs = nil
-            showFrontendTerminalSheet = true
-            if autoTriggered {
-                viewModel.statusMessage = "检测到终端片段，但未识别到可执行命令"
-            }
-            return
-        }
-
-        frontendTerminalRunRequestID &+= 1
-        let requestID = frontendTerminalRunRequestID
-
-        frontendTerminalTask?.cancel()
-        frontendTerminalTask = nil
-
-        frontendTerminalCommand = command
-        frontendTerminalOutput = ""
-        frontendTerminalIsRunning = false
-        frontendTerminalExitCode = nil
-        frontendTerminalDurationMs = nil
-        showFrontendTerminalSheet = true
-
-        guard viewModel.config.shellExecutionEnabled else {
-            frontendTerminalOutput = "已识别到终端命令，但“远端终端运行”未启用。请在设置中开启后重试。"
-            if autoTriggered {
-                viewModel.statusMessage = "检测到终端命令，未自动执行（远端终端运行未启用）"
-            }
-            return
-        }
-
-        let endpoint = viewModel.config.shellExecutionURLString
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !endpoint.isEmpty else {
-            frontendTerminalOutput = "已识别到终端命令，但未配置终端执行接口地址。请在设置中完善后重试。"
-            if autoTriggered {
-                viewModel.statusMessage = "检测到终端命令，未自动执行（终端接口未配置）"
-            }
-            return
-        }
-
-        frontendTerminalIsRunning = true
-        viewModel.statusMessage = autoTriggered
-            ? "项目已落盘，正在自动执行终端命令…"
-            : "正在执行终端命令…"
-
-        let apiKey = viewModel.config.apiKey
-        let timeout = viewModel.config.shellExecutionTimeout
-        let workingDirectory = viewModel.config.shellExecutionWorkingDirectory
-
-        frontendTerminalTask = Task {
-            do {
-                let result = try await RemoteShellExecutionService.shared.run(
-                    command: command,
-                    endpoint: endpoint,
-                    apiKey: apiKey,
-                    workingDirectory: workingDirectory,
-                    timeout: timeout
-                )
-                try Task.checkCancellation()
-
-                await MainActor.run {
-                    guard frontendTerminalRunRequestID == requestID else { return }
-                    frontendTerminalIsRunning = false
-                    frontendTerminalOutput = result.output
-                    frontendTerminalExitCode = result.exitCode
-                    frontendTerminalDurationMs = result.durationMs
-                    if result.exitCode == 0 {
-                        viewModel.statusMessage = autoTriggered
-                            ? "项目已自动构建并完成终端运行"
-                            : "终端运行完成"
-                    } else {
-                        viewModel.statusMessage = autoTriggered
-                            ? "自动终端运行失败（退出码 \(result.exitCode)）"
-                            : "终端运行失败（退出码 \(result.exitCode)）"
-                    }
-                }
-            } catch is CancellationError {
-                await MainActor.run {
-                    guard frontendTerminalRunRequestID == requestID else { return }
-                    frontendTerminalIsRunning = false
-                    if frontendTerminalOutput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        frontendTerminalOutput = "运行已取消。"
-                    }
-                }
-            } catch {
-                await MainActor.run {
-                    guard frontendTerminalRunRequestID == requestID else { return }
-                    frontendTerminalIsRunning = false
-                    frontendTerminalExitCode = nil
-                    frontendTerminalDurationMs = nil
-                    if endpoint.isEmpty {
-                        frontendTerminalOutput = error.localizedDescription
-                    } else {
-                        frontendTerminalOutput = "\(error.localizedDescription)\n\n[接口 \(endpoint)]"
-                    }
-                    viewModel.statusMessage = autoTriggered
-                        ? "自动终端运行失败，可在日志查看详情"
-                        : "终端运行失败"
                 }
             }
         }
@@ -2302,12 +2121,8 @@ struct ChatScreen: View {
         var masked = message
         masked.fileAttachments = []
         let stripped = stripFrontendProjectPayload(from: message.content)
-        let terminalSnippet = preferredTerminalCommandSnippet(from: message)
         if shouldUseStrippedFrontendSummary(stripped) {
             masked.content = stripped
-            if !message.isStreaming, let terminalSnippet {
-                masked.content += terminalRunDisplayBlock(terminalSnippet)
-            }
             return masked
         }
 
@@ -2333,9 +2148,6 @@ struct ChatScreen: View {
                     ? "项目文件已在后台写入完成，可在左下角卡片点击预览。"
                     : "项目文件已在后台写入完成。"
             }
-        }
-        if !message.isStreaming, let terminalSnippet {
-            masked.content += terminalRunDisplayBlock(terminalSnippet)
         }
         return masked
     }
@@ -2922,8 +2734,6 @@ struct ChatScreen: View {
         let selectedEntry = frontendOverlaySelectedEntry(for: overlay)
         let safeFileIndex = frontendOverlaySafeFileIndex(for: overlay)
         let totalFiles = max(overlay.codeEntries.count, 1)
-        let terminalSnippet = frontendOverlayTerminalSnippet(for: overlay)
-
         return HStack(alignment: .bottom, spacing: 10) {
             Button {
                 openFrontendOverlayCodeViewer(overlay)
@@ -3011,18 +2821,6 @@ struct ChatScreen: View {
                         }
                         .buttonStyle(.plain)
                     }
-
-                    if overlay.isCompleted, let terminalSnippet = terminalSnippet {
-                        Button {
-                            runFrontendTerminalCommand(terminalSnippet.command, autoTriggered: false)
-                        } label: {
-                            Text("终端日志")
-                                .underline()
-                                .font(.system(size: 12.5, weight: .semibold))
-                                .foregroundStyle(Color(red: 0.08, green: 0.45, blue: 0.90))
-                        }
-                        .buttonStyle(.plain)
-                    }
                 }
             }
         }
@@ -3103,17 +2901,6 @@ struct ChatScreen: View {
         return overlay.subtitle
     }
 
-    private func frontendOverlayTerminalSnippet(
-        for overlay: FrontendBuildOverlayState
-    ) -> (language: String, command: String)? {
-        guard let assistant = viewModel.messages.first(where: {
-            $0.id == overlay.messageID && $0.role == .assistant
-        }) else {
-            return nil
-        }
-        return preferredTerminalCommandSnippet(from: assistant)
-    }
-
     private func frontendOverlaySafeFileIndex(for overlay: FrontendBuildOverlayState) -> Int {
         guard !overlay.codeEntries.isEmpty else { return 0 }
         return min(max(frontendOverlayFileIndex, 0), overlay.codeEntries.count - 1)
@@ -3160,18 +2947,11 @@ struct ChatScreen: View {
 
     private func openFrontendOverlayCodeViewer(_ overlay: FrontendBuildOverlayState) {
         guard !overlay.codeEntries.isEmpty else { return }
-        let terminalSnippet = frontendOverlayTerminalSnippet(for: overlay)
-        let preferredTerminalCommand = terminalSnippet
-            .map { normalizedTerminalCommandForExecution($0.command) }
-            .flatMap { normalized in
-                let trimmed = normalized.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed.isEmpty ? nil : trimmed
-            }
         activeFrontendCodeViewer = CodeViewerPayload(
             title: "项目代码",
             entries: overlay.codeEntries,
             initialIndex: frontendOverlaySafeFileIndex(for: overlay),
-            preferredTerminalCommand: preferredTerminalCommand
+            preferredTerminalCommand: nil
         )
     }
 
@@ -4478,6 +4258,188 @@ private struct ChatTranscriptCommand: Equatable {
     let kind: Kind
 }
 
+private final class NativeStreamingMessageView: UIView {
+    private let rootStack = UIStackView()
+    private let headerStack = UIStackView()
+    private let iconContainer = UIView()
+    private let titleLabel = UILabel()
+    private let noticeLabel = UILabel()
+    private let textView = UITextView()
+    private let waitingLabel = UILabel()
+    private let mediaLabel = UILabel()
+    private let textFont = UIFont(name: "PingFangSC-Medium", size: 16) ?? UIFont.systemFont(ofSize: 16, weight: .medium)
+    private var lastSignature: String?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        translatesAutoresizingMaskIntoConstraints = false
+        setupUI()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func apply(message: ChatMessage) {
+        let slice = streamingDisplaySlice(from: message.content)
+        let displayText = slice.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let mediaCount = message.imageAttachments.count + message.videoAttachments.count + message.fileAttachments.count
+        let signature = [
+            message.id.uuidString,
+            String(message.content.count),
+            String(slice.isTruncated ? 1 : 0),
+            String(mediaCount),
+            String(displayText.prefix(120)),
+            String(displayText.suffix(240))
+        ].joined(separator: "|")
+
+        guard signature != lastSignature else { return }
+        lastSignature = signature
+
+        noticeLabel.isHidden = !slice.isTruncated
+        waitingLabel.isHidden = !displayText.isEmpty
+        textView.isHidden = displayText.isEmpty
+        mediaLabel.isHidden = mediaCount == 0
+
+        if !displayText.isEmpty {
+            textView.attributedText = StreamingMarkdownTextView.renderedAttributedText(
+                text: displayText,
+                textColor: .label,
+                linkColor: .secondaryLabel,
+                font: textFont
+            )
+        } else {
+            textView.attributedText = NSAttributedString()
+        }
+
+        if mediaCount > 0 {
+            mediaLabel.text = "收到 \(mediaCount) 个媒体内容，完成后展示完整预览。"
+        }
+
+        invalidateIntrinsicContentSize()
+        setNeedsLayout()
+    }
+
+    func reset() {
+        lastSignature = nil
+        textView.attributedText = NSAttributedString()
+        noticeLabel.isHidden = true
+        waitingLabel.isHidden = false
+        mediaLabel.isHidden = true
+        invalidateIntrinsicContentSize()
+        setNeedsLayout()
+    }
+
+    private func setupUI() {
+        backgroundColor = .clear
+        isOpaque = false
+
+        headerStack.axis = .horizontal
+        headerStack.alignment = .center
+        headerStack.spacing = 7
+        headerStack.translatesAutoresizingMaskIntoConstraints = false
+
+        iconContainer.translatesAutoresizingMaskIntoConstraints = false
+        iconContainer.backgroundColor = .black
+        iconContainer.layer.cornerRadius = 5
+        iconContainer.layer.borderWidth = 0.8
+        iconContainer.layer.borderColor = UIColor.white.withAlphaComponent(0.16).cgColor
+        NSLayoutConstraint.activate([
+            iconContainer.widthAnchor.constraint(equalToConstant: 18),
+            iconContainer.heightAnchor.constraint(equalToConstant: 18)
+        ])
+
+        let iconLabel = UILabel()
+        iconLabel.translatesAutoresizingMaskIntoConstraints = false
+        iconLabel.text = "✦"
+        iconLabel.font = .systemFont(ofSize: 9, weight: .semibold)
+        iconLabel.textColor = .white
+        iconLabel.textAlignment = .center
+        iconContainer.addSubview(iconLabel)
+        NSLayoutConstraint.activate([
+            iconLabel.centerXAnchor.constraint(equalTo: iconContainer.centerXAnchor),
+            iconLabel.centerYAnchor.constraint(equalTo: iconContainer.centerYAnchor)
+        ])
+
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.text = "IEXA"
+        titleLabel.font = .systemFont(ofSize: 14, weight: .semibold)
+        titleLabel.textColor = .label
+
+        headerStack.addArrangedSubview(iconContainer)
+        headerStack.addArrangedSubview(titleLabel)
+        headerStack.addArrangedSubview(UIView())
+
+        noticeLabel.translatesAutoresizingMaskIntoConstraints = false
+        noticeLabel.font = .systemFont(ofSize: 12)
+        noticeLabel.textColor = .secondaryLabel
+        noticeLabel.numberOfLines = 0
+        noticeLabel.text = "长文本生成中，当前仅渲染最新片段以保持流畅；完成后自动展示全文。"
+        noticeLabel.isHidden = true
+
+        waitingLabel.translatesAutoresizingMaskIntoConstraints = false
+        waitingLabel.font = .systemFont(ofSize: 14, weight: .medium)
+        waitingLabel.textColor = .secondaryLabel
+        waitingLabel.text = "正在接收流式内容…"
+        waitingLabel.numberOfLines = 1
+
+        textView.translatesAutoresizingMaskIntoConstraints = false
+        textView.isEditable = false
+        textView.isScrollEnabled = false
+        textView.isSelectable = false
+        textView.backgroundColor = .clear
+        textView.textContainerInset = .zero
+        textView.textContainer.lineFragmentPadding = 0
+        textView.textContainer.widthTracksTextView = true
+        textView.layoutManager.allowsNonContiguousLayout = false
+        textView.setContentCompressionResistancePriority(.required, for: .vertical)
+        textView.setContentHuggingPriority(.required, for: .vertical)
+
+        mediaLabel.translatesAutoresizingMaskIntoConstraints = false
+        mediaLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        mediaLabel.textColor = .secondaryLabel
+        mediaLabel.numberOfLines = 0
+        mediaLabel.isHidden = true
+
+        rootStack.axis = .vertical
+        rootStack.alignment = .fill
+        rootStack.spacing = 6
+        rootStack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(rootStack)
+
+        rootStack.addArrangedSubview(headerStack)
+        rootStack.addArrangedSubview(noticeLabel)
+        rootStack.addArrangedSubview(waitingLabel)
+        rootStack.addArrangedSubview(textView)
+        rootStack.addArrangedSubview(mediaLabel)
+
+        NSLayoutConstraint.activate([
+            rootStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
+            rootStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -18),
+            rootStack.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            rootStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6)
+        ])
+    }
+
+    private func streamingDisplaySlice(from raw: String) -> (text: String, isTruncated: Bool) {
+        let normalized = raw.replacingOccurrences(of: "\r\n", with: "\n")
+        let isCodeLikePayload = normalized.contains("```") || normalized.contains("[[file:")
+        let hardLimit = isCodeLikePayload ? 10_000 : 16_000
+        let tailLimit = isCodeLikePayload ? 4_800 : 9_000
+        guard normalized.count > hardLimit else {
+            return (normalized, false)
+        }
+
+        let start = normalized.index(normalized.endIndex, offsetBy: -tailLimit)
+        var tail = String(normalized[start...])
+        if let firstBreak = tail.firstIndex(of: "\n"), firstBreak != tail.startIndex {
+            tail = String(tail[firstBreak...])
+        }
+        return (tail, true)
+    }
+}
+
 private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
     let historyContent: AnyView
     let historyVersion: String
@@ -4526,7 +4488,7 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
         private let stackView = UIStackView()
         private let historyHostingController = UIHostingController(rootView: AnyView(EmptyView()))
         private let streamingLeadHostingController = UIHostingController(rootView: AnyView(EmptyView()))
-        private let streamingRichHostingController = UIHostingController(rootView: AnyView(EmptyView()))
+        private let streamingRichView = NativeStreamingMessageView()
         private let spacerView = UIView()
         private var onMetricsChanged: (ChatTranscriptMetrics) -> Void
         private var lastReportedMetrics = ChatTranscriptMetrics()
@@ -4598,14 +4560,8 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             stackView.addArrangedSubview(streamingLeadHostingController.view)
             streamingLeadHostingController.didMove(toParent: self)
 
-            streamingRichHostingController.sizingOptions = [.intrinsicContentSize]
-            streamingRichHostingController.view.backgroundColor = .clear
-            streamingRichHostingController.view.translatesAutoresizingMaskIntoConstraints = false
-            streamingRichHostingController.view.isHidden = true
-            streamingRichHostingController.view.isUserInteractionEnabled = false
-            addChild(streamingRichHostingController)
-            stackView.addArrangedSubview(streamingRichHostingController.view)
-            streamingRichHostingController.didMove(toParent: self)
+            streamingRichView.isHidden = true
+            stackView.addArrangedSubview(streamingRichView)
 
             spacerView.backgroundColor = .clear
             spacerView.setContentHuggingPriority(.defaultLow, for: .vertical)
@@ -4697,34 +4653,19 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
                 pendingStreamingHideWorkItem?.cancel()
                 pendingStreamingHideWorkItem = nil
                 if newStreamingSignature != lastStreamingSignature
-                    || streamingRichHostingController.view.isHidden {
+                    || streamingRichView.isHidden {
                     UIView.performWithoutAnimation {
-                        let richView = AnyView(
-                            MessageBubbleView(
-                                message: streamingMessage,
-                                codeThemeMode: codeThemeMode,
-                                apiKey: apiKey,
-                                apiBaseURL: apiBaseURL,
-                                shellExecutionEnabled: shellExecutionEnabled,
-                                shellExecutionURLString: shellExecutionURLString,
-                                shellExecutionTimeout: shellExecutionTimeout,
-                                shellExecutionWorkingDirectory: shellExecutionWorkingDirectory,
-                                showsAssistantActionBar: false,
-                                onRegenerate: nil
-                            )
-                            .padding(.horizontal, 18)
-                        )
-                        streamingRichHostingController.rootView = richView
-                        streamingRichHostingController.view.invalidateIntrinsicContentSize()
-                        streamingRichHostingController.view.isHidden = false
+                        streamingRichView.apply(message: streamingMessage)
+                        streamingRichView.isHidden = false
                     }
                     lastStreamingSignature = newStreamingSignature
                 }
-            } else if !streamingRichHostingController.view.isHidden || lastStreamingSignature != nil {
+            } else if !streamingRichView.isHidden || lastStreamingSignature != nil {
                 pendingStreamingHideWorkItem?.cancel()
                 pendingStreamingHideWorkItem = nil
                 UIView.performWithoutAnimation {
-                    streamingRichHostingController.view.isHidden = true
+                    streamingRichView.reset()
+                    streamingRichView.isHidden = true
                 }
                 lastStreamingSignature = nil
                 reportMetrics()
