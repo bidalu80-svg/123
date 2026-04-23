@@ -36,6 +36,43 @@ enum MessageContentParser {
     private static let maxCacheEntries = 72
     private static let maxStreamingSnapshots = 4
     private static let streamingSnapshotTTL: TimeInterval = 2.5
+    private static let languageTagAliases: [String: String] = [
+        "go": "go",
+        "golang": "go",
+        "python": "python",
+        "py": "python",
+        "javascript": "javascript",
+        "js": "javascript",
+        "node": "javascript",
+        "nodejs": "javascript",
+        "typescript": "typescript",
+        "ts": "typescript",
+        "java": "java",
+        "kotlin": "kotlin",
+        "swift": "swift",
+        "rust": "rust",
+        "rs": "rust",
+        "c": "c",
+        "cpp": "cpp",
+        "c++": "cpp",
+        "cxx": "cpp",
+        "c#": "csharp",
+        "cs": "csharp",
+        "php": "php",
+        "ruby": "ruby",
+        "sql": "sql",
+        "bash": "bash",
+        "shell": "bash",
+        "sh": "bash",
+        "json": "json",
+        "yaml": "yaml",
+        "yml": "yaml",
+        "xml": "xml",
+        "html": "html",
+        "css": "css",
+        "markdown": "markdown",
+        "md": "markdown"
+    ]
     private static var parseCache: [String: [MessageSegment]] = [:]
     private static var parseCacheOrder: [String] = []
     private static var streamingSnapshots: [UUID: StreamingParseSnapshot] = [:]
@@ -315,7 +352,7 @@ enum MessageContentParser {
 
         let lines = text.components(separatedBy: "\n")
         guard lines.count >= 2 else {
-            return parseInlineImages(in: text)
+            return parseInlineImagesAndImplicitCode(in: text)
         }
 
         var segments: [MessageSegment] = []
@@ -325,7 +362,7 @@ enum MessageContentParser {
         func flushTextBuffer() {
             guard !textBuffer.isEmpty else { return }
             let chunk = textBuffer.joined(separator: "\n")
-            segments.append(contentsOf: parseInlineImages(in: chunk))
+            segments.append(contentsOf: parseInlineImagesAndImplicitCode(in: chunk))
             textBuffer.removeAll(keepingCapacity: true)
         }
 
@@ -345,6 +382,172 @@ enum MessageContentParser {
 
         flushTextBuffer()
         return segments
+    }
+
+    private static func parseInlineImagesAndImplicitCode(in text: String) -> [MessageSegment] {
+        let promoted = parseLanguageMarkerCodeBlocks(in: text)
+        var output: [MessageSegment] = []
+        output.reserveCapacity(promoted.count)
+
+        for segment in promoted {
+            switch segment {
+            case .text(let raw):
+                output.append(contentsOf: parseInlineImages(in: raw))
+            default:
+                output.append(segment)
+            }
+        }
+        return output
+    }
+
+    private static func parseLanguageMarkerCodeBlocks(in text: String) -> [MessageSegment] {
+        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
+        let lines = normalized.components(separatedBy: "\n")
+        guard lines.count >= 2 else { return [.text(text)] }
+
+        var segments: [MessageSegment] = []
+        var textBuffer: [String] = []
+        var index = 0
+
+        func flushTextBuffer() {
+            guard !textBuffer.isEmpty else { return }
+            let joined = textBuffer.joined(separator: "\n")
+            if !joined.isEmpty {
+                segments.append(.text(joined))
+            }
+            textBuffer.removeAll(keepingCapacity: true)
+        }
+
+        while index < lines.count {
+            if let parsed = parseLanguageMarkerCodeRun(lines: lines, start: index) {
+                flushTextBuffer()
+                segments.append(.code(language: parsed.language, content: parsed.content))
+                index = parsed.nextIndex
+                continue
+            }
+
+            textBuffer.append(lines[index])
+            index += 1
+        }
+
+        flushTextBuffer()
+        return segments
+    }
+
+    private static func parseLanguageMarkerCodeRun(
+        lines: [String],
+        start: Int
+    ) -> (language: String?, content: String, nextIndex: Int)? {
+        guard start < lines.count else { return nil }
+        let markerLine = lines[start].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !markerLine.isEmpty else { return nil }
+
+        let normalizedMarker = markerLine
+            .trimmingCharacters(in: CharacterSet(charactersIn: "`'\""))
+            .lowercased()
+        guard let language = languageTagAliases[normalizedMarker] else { return nil }
+
+        var cursor = start + 1
+        var collected: [String] = []
+        var codeLikeCount = 0
+        var nonEmptyCount = 0
+
+        while cursor < lines.count {
+            let rawLine = lines[cursor]
+            let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if trimmed.isEmpty {
+                if collected.isEmpty {
+                    cursor += 1
+                    continue
+                }
+
+                if let next = nextNonEmptyLine(in: lines, from: cursor + 1),
+                   isLikelyCodeLine(next) || isLikelyCodeContinuationLine(next) {
+                    collected.append(rawLine)
+                    cursor += 1
+                    continue
+                }
+                break
+            }
+
+            if isLikelyCodeLine(trimmed) || isLikelyCodeContinuationLine(trimmed) {
+                collected.append(rawLine)
+                nonEmptyCount += 1
+                if isLikelyCodeLine(trimmed) {
+                    codeLikeCount += 1
+                }
+                cursor += 1
+                continue
+            }
+
+            break
+        }
+
+        guard !collected.isEmpty else { return nil }
+        guard codeLikeCount >= 1 else { return nil }
+        if nonEmptyCount > 1, codeLikeCount < 2 {
+            return nil
+        }
+
+        let content = collected
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !content.isEmpty else { return nil }
+
+        return (language: language, content: content, nextIndex: cursor)
+    }
+
+    private static func nextNonEmptyLine(in lines: [String], from start: Int) -> String? {
+        guard start < lines.count else { return nil }
+        for idx in start..<lines.count {
+            let trimmed = lines[idx].trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                return trimmed
+            }
+        }
+        return nil
+    }
+
+    private static func isLikelyCodeContinuationLine(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let continuationTokens: Set<String> = ["{", "}", "(", ")", "[", "]", ">", "<", ":", "::", ","]
+        if continuationTokens.contains(trimmed) { return true }
+        if trimmed.hasPrefix("\"") || trimmed.hasPrefix("'") || trimmed.hasPrefix("`") { return true }
+        return false
+    }
+
+    private static func isLikelyCodeLine(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        if trimmed.hasPrefix("•") || trimmed.hasPrefix("- ") { return false }
+
+        if trimmed.range(
+            of: #"^(package|import|func|type|var|const|class|interface|struct|enum|def|return|if|for|while|switch|case|let|public|private|protected|from|select|insert|update|delete)\b"#,
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil {
+            return true
+        }
+
+        if trimmed.range(of: #"^[A-Za-z0-9_./-]+\.(go|py|js|ts|tsx|jsx|java|kt|swift|rs|c|cc|cpp|h|hpp|sql|sh|yaml|yml|json|xml|html|css)$"#, options: .regularExpression) != nil {
+            return true
+        }
+
+        let codeTokens = ["{", "}", "=>", "->", ":=", "::", "()", "[]", "==", "!=", "<=", ">=", "&&", "||", ";"]
+        if codeTokens.contains(where: { trimmed.contains($0) }) {
+            return true
+        }
+
+        if trimmed.contains("(") && trimmed.contains(")") {
+            return true
+        }
+
+        if trimmed.contains("=") && !trimmed.contains("==") {
+            return true
+        }
+
+        return false
     }
 
     private static func parseMarkdownTable(lines: [String], start: Int) -> ParsedMarkdownTable? {

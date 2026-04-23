@@ -17,8 +17,10 @@ struct ChatScreen: View {
     private let maxRenderedCharacters = 135_000
     private let maxSingleRenderedMessageChars = 52_000
     private let maxRenderedFilePreviewChars = 10_000
-    private let autoSessionRotateMessageCount = 120
-    private let autoSessionRotateCharacterCount = 180_000
+    private let autoSessionRotateMessageCount = 60
+    private let autoSessionRotateCharacterCount = 100_000
+    private let autoSessionRotateAssistantCharacterCount = 70_000
+    private let autoSessionRotateSingleAssistantCharacterCount = 22_000
 
     private struct OutgoingEcho {
         let id: UUID
@@ -134,6 +136,9 @@ struct ChatScreen: View {
         .onChange(of: viewModel.messages) { oldMessages, newMessages in
             runAutoFrontendBuildIfNeeded(previousMessages: oldMessages, newMessages: newMessages)
             reconcilePendingOutgoingEcho(with: newMessages)
+            if !viewModel.isSending, newMessages.count > oldMessages.count {
+                maybeAutoRotateLongConversation(using: newMessages)
+            }
         }
         .onChange(of: viewModel.isSending) { _, isSending in
             guard !isSending else { return }
@@ -2072,19 +2077,49 @@ struct ChatScreen: View {
         guard latest.role == .assistant, !latest.isStreaming else { return }
         guard let sessionID = viewModel.currentSessionID else { return }
         guard !autoRotatedSessionIDs.contains(sessionID) else { return }
-        guard messages.count >= autoSessionRotateMessageCount || totalMessageCharacterCount(messages) >= autoSessionRotateCharacterCount else {
+        let totalCharacters = totalMessageCharacterCount(messages)
+        let totalAssistantCharacters = totalAssistantCharacterCount(messages)
+        let latestAssistantCharacters = latest.content.count
+
+        let exceededByMessageCount = messages.count >= autoSessionRotateMessageCount
+        let exceededByTotalCharacters = totalCharacters >= autoSessionRotateCharacterCount
+        let exceededByAssistantCharacters = totalAssistantCharacters >= autoSessionRotateAssistantCharacterCount
+        let exceededBySingleAssistantReply = latestAssistantCharacters >= autoSessionRotateSingleAssistantCharacterCount
+
+        guard exceededByMessageCount
+            || exceededByTotalCharacters
+            || exceededByAssistantCharacters
+            || exceededBySingleAssistantReply else {
             return
         }
 
         autoRotatedSessionIDs.insert(sessionID)
         viewModel.createNewSession()
-        viewModel.statusMessage = "当前会话超过 \(autoSessionRotateMessageCount) 条，已自动开启新会话以保持流畅。旧会话仍可在侧栏查看。"
+        if exceededBySingleAssistantReply {
+            viewModel.statusMessage = "本条回复过长（>\(autoSessionRotateSingleAssistantCharacterCount) 字），已自动开启新会话以保持流畅。旧会话仍可在侧栏查看。"
+        } else if exceededByAssistantCharacters {
+            viewModel.statusMessage = "助手内容累计过长，已自动开启新会话以保持流畅。旧会话仍可在侧栏查看。"
+        } else if exceededByTotalCharacters {
+            viewModel.statusMessage = "当前会话总内容过长，已自动开启新会话以保持流畅。旧会话仍可在侧栏查看。"
+        } else {
+            viewModel.statusMessage = "当前会话超过 \(autoSessionRotateMessageCount) 条，已自动开启新会话以保持流畅。旧会话仍可在侧栏查看。"
+        }
         isPinnedToBottom = true
         issueTranscriptCommand(.scrollToBottom(animated: false))
     }
 
     private func totalMessageCharacterCount(_ messages: [ChatMessage]) -> Int {
         messages.reduce(into: 0) { total, message in
+            total += message.content.count
+            total += message.fileAttachments.reduce(into: 0) { partial, file in
+                partial += min(file.textContent.count, maxRenderedFilePreviewChars)
+            }
+        }
+    }
+
+    private func totalAssistantCharacterCount(_ messages: [ChatMessage]) -> Int {
+        messages.reduce(into: 0) { total, message in
+            guard message.role == .assistant else { return }
             total += message.content.count
             total += message.fileAttachments.reduce(into: 0) { partial, file in
                 partial += min(file.textContent.count, maxRenderedFilePreviewChars)
