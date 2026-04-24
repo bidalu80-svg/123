@@ -628,7 +628,7 @@ struct MessageBubbleView: View {
                     .padding(.vertical, 4)
                     .background(
                         Capsule(style: .continuous)
-                            .fill(Color(.secondarySystemBackground))
+                            .fill(MinisTheme.softPill)
                     )
             }
 
@@ -1042,11 +1042,11 @@ struct MessageBubbleView: View {
         .padding(.vertical, 12)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color(.systemBackground))
+                .fill(MinisTheme.panelBackground)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.black.opacity(colorScheme == .dark ? 0.16 : 0.08), lineWidth: 1)
+                .stroke(MinisTheme.subtleStroke, lineWidth: 1)
         )
     }
 
@@ -1066,11 +1066,11 @@ struct MessageBubbleView: View {
         }
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(.secondarySystemBackground))
+                .fill(MinisTheme.elevatedBackground)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.black.opacity(colorScheme == .dark ? 0.24 : 0.08), lineWidth: 0.8)
+                .stroke(MinisTheme.subtleStroke, lineWidth: 0.8)
         )
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1750,7 +1750,7 @@ struct MessageBubbleView: View {
                     .padding(.vertical, 5)
                     .background(
                         Capsule(style: .continuous)
-                            .fill(Color(.secondarySystemBackground).opacity(colorScheme == .dark ? 0.72 : 0.9))
+                            .fill(MinisTheme.elevatedBackground.opacity(colorScheme == .dark ? 0.92 : 0.96))
                     )
                     .padding(.trailing, 8)
                     .padding(.bottom, 8)
@@ -2498,11 +2498,11 @@ struct MessageBubbleView: View {
         .padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(.secondarySystemBackground))
+                .fill(MinisTheme.elevatedBackground)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.black.opacity(colorScheme == .dark ? 0.22 : 0.08), lineWidth: 0.8)
+                .stroke(MinisTheme.subtleStroke, lineWidth: 0.8)
         )
     }
 
@@ -2548,11 +2548,11 @@ struct MessageBubbleView: View {
         .padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(.secondarySystemBackground))
+                .fill(MinisTheme.elevatedBackground)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.black.opacity(colorScheme == .dark ? 0.22 : 0.08), lineWidth: 0.8)
+                .stroke(MinisTheme.subtleStroke, lineWidth: 0.8)
         )
     }
 
@@ -2598,11 +2598,11 @@ struct MessageBubbleView: View {
         .padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(.secondarySystemBackground))
+                .fill(MinisTheme.elevatedBackground)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.black.opacity(colorScheme == .dark ? 0.22 : 0.08), lineWidth: 0.8)
+                .stroke(MinisTheme.subtleStroke, lineWidth: 0.8)
         )
     }
 
@@ -2653,11 +2653,11 @@ struct MessageBubbleView: View {
         .padding(.vertical, 14)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color(.systemBackground))
+                .fill(MinisTheme.panelBackground)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.black.opacity(colorScheme == .dark ? 0.18 : 0.08), lineWidth: 1)
+                .stroke(MinisTheme.subtleStroke, lineWidth: 1)
         )
     }
 
@@ -3543,7 +3543,7 @@ private struct ImageGenerationPlaceholderPattern: View {
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(.secondarySystemBackground))
+                .fill(MinisTheme.elevatedBackground)
 
             Canvas { context, size in
                 let spacing: CGFloat = 18
@@ -4184,7 +4184,7 @@ private struct OfficePreviewSheet: View {
                 .padding(.top, 18)
                 .padding(.bottom, 30)
             }
-            .background(Color(.systemGroupedBackground).ignoresSafeArea())
+            .background(MinisTheme.appBackground.ignoresSafeArea())
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
@@ -4235,7 +4235,7 @@ private struct OfficePreviewSheet: View {
         .padding(.horizontal, 16)
         .padding(.top, 10)
         .padding(.bottom, 18)
-        .background(.thinMaterial)
+        .background(MinisTheme.panelBackground)
     }
 
     private func bottomActionButton(title: String, systemImage: String) -> some View {
@@ -4253,7 +4253,7 @@ private struct OfficePreviewSheet: View {
             .padding(.vertical, 12)
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color(.systemBackground))
+                    .fill(MinisTheme.panelBackground)
             )
         }
         .buttonStyle(.plain)
@@ -4306,11 +4306,11 @@ private struct OfficePreviewSheet: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .background(
                         RoundedRectangle(cornerRadius: 28, style: .continuous)
-                            .fill(Color(.systemBackground))
+                            .fill(MinisTheme.panelBackground)
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 28, style: .continuous)
-                            .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                            .stroke(MinisTheme.subtleStroke, lineWidth: 1)
                     )
                     .padding(.bottom, 22)
                 }
@@ -4358,11 +4358,11 @@ private struct OfficePreviewSheet: View {
             .padding(22)
             .background(
                 RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .fill(Color(.systemBackground))
+                    .fill(MinisTheme.panelBackground)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                    .stroke(MinisTheme.subtleStroke, lineWidth: 1)
             )
         }
     }
@@ -4393,7 +4393,7 @@ private struct OfficePreviewSheet: View {
                                     .padding(.vertical, 10)
                                     .background(
                                         RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                            .fill(index == safeIndex ? Color.green.opacity(0.12) : Color(.systemBackground))
+                                            .fill(index == safeIndex ? Color.green.opacity(0.12) : MinisTheme.panelBackground)
                                     )
                             }
                             .buttonStyle(.plain)
@@ -4418,7 +4418,7 @@ private struct OfficePreviewSheet: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 16)
-                        .background(Color(.systemBackground))
+                        .background(MinisTheme.panelBackground)
                 }
             }
 
@@ -4432,18 +4432,18 @@ private struct OfficePreviewSheet: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 15)
-                            .background(Color(.systemBackground))
+                            .background(MinisTheme.panelBackground)
                     }
                 }
             }
         }
         .background(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(Color(.systemBackground))
+                .fill(MinisTheme.panelBackground)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                .stroke(MinisTheme.subtleStroke, lineWidth: 1)
         )
     }
 }

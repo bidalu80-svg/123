@@ -1727,7 +1727,7 @@ struct ChatScreen: View {
                         } label: {
                             ZStack {
                                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                    .fill(Color(.secondarySystemBackground))
+                                    .fill(MinisTheme.elevatedBackground)
                                     .frame(width: 92, height: 92)
                                 Image(systemName: "camera")
                                     .font(.system(size: 30, weight: .regular))
@@ -1748,7 +1748,7 @@ struct ChatScreen: View {
                                         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                                 } else {
                                     RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                        .fill(Color(.secondarySystemBackground))
+                                        .fill(MinisTheme.elevatedBackground)
                                         .frame(width: 92, height: 92)
                                         .overlay {
                                             ProgressView()
@@ -2098,7 +2098,11 @@ struct ChatScreen: View {
         .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(.secondarySystemBackground))
+                .fill(MinisTheme.elevatedBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(MinisTheme.subtleStroke, lineWidth: 0.8)
         )
     }
 
@@ -3625,7 +3629,7 @@ struct ChatScreen: View {
         }
         .frame(width: sidebarWidth)
         .frame(maxHeight: .infinity)
-        .background(Color(.systemBackground))
+        .background(MinisTheme.panelBackground)
     }
 
     private var sidebarRevealWidth: CGFloat {
@@ -3695,7 +3699,11 @@ struct ChatScreen: View {
                 .padding(10)
                 .background(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(viewModel.currentSessionID == session.id ? Color.blue.opacity(0.12) : Color(.secondarySystemBackground))
+                        .fill(viewModel.currentSessionID == session.id ? Color.blue.opacity(0.16) : MinisTheme.elevatedBackground)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(viewModel.currentSessionID == session.id ? Color.blue.opacity(0.24) : MinisTheme.subtleStroke, lineWidth: 0.8)
                 )
             }
             .buttonStyle(.plain)
@@ -3780,7 +3788,11 @@ struct ChatScreen: View {
             .font(.caption2)
         }
         .padding(10)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(MinisTheme.elevatedBackground, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(MinisTheme.subtleStroke, lineWidth: 0.8)
+        )
     }
 
     private func startCameraFromAttachmentSheet() {
