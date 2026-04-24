@@ -1,5 +1,6 @@
 import SwiftUI
 import WebKit
+import UIKit
 
 struct HTMLPreviewSheet: View {
     let title: String
@@ -18,23 +19,100 @@ struct HTMLPreviewSheet: View {
 
     var body: some View {
         NavigationStack {
-            HTMLPreviewWebView(html: html, baseURL: baseURL, entryFileURL: entryFileURL)
-                .ignoresSafeArea(edges: .bottom)
-                .navigationTitle(titleForDisplay)
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button("关闭") {
-                            dismiss()
-                        }
+            VStack(spacing: 0) {
+                previewHeader
+
+                if let entryPathDisplay {
+                    HStack(spacing: 10) {
+                        Text("preview")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                            .background(
+                                Capsule(style: .continuous)
+                                    .fill(MinisTheme.accentBlue)
+                            )
+
+                        Text(entryPathDisplay)
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(MinisTheme.secondaryText)
+                            .lineLimit(1)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(
+                                Capsule(style: .continuous)
+                                    .fill(MinisTheme.softPill)
+                            )
                     }
+                    .padding(.horizontal, 14)
+                    .padding(.top, 10)
                 }
+
+                HTMLPreviewWebView(html: html, baseURL: baseURL, entryFileURL: entryFileURL)
+                    .ignoresSafeArea(edges: .bottom)
+                    .padding(.top, entryPathDisplay == nil ? 0 : 10)
+            }
+            .background(MinisTheme.appBackground.ignoresSafeArea())
+            .navigationBarHidden(true)
         }
+    }
+
+    private var previewHeader: some View {
+        HStack(spacing: 14) {
+            circleToolbarButton(systemName: "xmark") {
+                dismiss()
+            }
+
+            Spacer(minLength: 0)
+
+            Text(titleForDisplay)
+                .font(.system(size: 18, weight: .bold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+
+            Spacer(minLength: 0)
+
+            if let targetURL = entryFileURL ?? baseURL {
+                circleToolbarButton(systemName: "globe") {
+                    UIApplication.shared.open(targetURL)
+                }
+            } else {
+                Color.clear
+                    .frame(width: 42, height: 42)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
+        .padding(.bottom, 12)
+        .background(MinisTheme.panelBackground)
     }
 
     private var titleForDisplay: String {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "网页预览" : trimmed
+        return trimmed.isEmpty ? "IEXA Computer" : trimmed
+    }
+
+    private var entryPathDisplay: String? {
+        let path = entryFileURL?.path ?? baseURL?.absoluteString
+        let trimmed = path?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return nil }
+        return trimmed
+    }
+
+    private func circleToolbarButton(systemName: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.primary)
+                .frame(width: 42, height: 42)
+                .background(
+                    Circle()
+                        .fill(MinisTheme.softPill)
+                )
+        }
+        .buttonStyle(.plain)
     }
 }
 

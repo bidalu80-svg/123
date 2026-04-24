@@ -376,8 +376,8 @@ struct ChatScreen: View {
                 header
                     .padding(.horizontal, 12)
                     .padding(.top, 2)
-                    .padding(.bottom, 8)
-                    .background(Color(.systemBackground))
+                    .padding(.bottom, 9)
+                    .background(MinisTheme.panelBackground)
                     .overlay(alignment: .bottom) {
                         Divider().opacity(0.2)
                     }
@@ -394,15 +394,8 @@ struct ChatScreen: View {
                     )
             }
             .background(
-                LinearGradient(
-                    colors: [
-                        Color(.systemBackground),
-                        Color(.secondarySystemBackground).opacity(0.22)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .ignoresSafeArea()
+                MinisTheme.appBackground
+                    .ignoresSafeArea()
             )
             .overlay(alignment: .topLeading) {
                 VStack(alignment: .leading, spacing: 8) {
@@ -431,8 +424,8 @@ struct ChatScreen: View {
     private var header: some View {
         VStack(spacing: 4) {
             Text("IEXA")
-                .font(.system(size: 11.5, weight: .medium))
-                .foregroundStyle(.secondary)
+                .font(.system(size: 16.5, weight: .bold))
+                .foregroundStyle(.primary)
                 .frame(maxWidth: .infinity, alignment: .center)
 
             ZStack {
@@ -495,6 +488,10 @@ struct ChatScreen: View {
             TwoLineMenuIcon()
                 .foregroundStyle(.primary)
                 .frame(width: 34, height: 34)
+                .background(
+                    Circle()
+                        .fill(MinisTheme.softPill)
+                )
         }
         .buttonStyle(.plain)
         .frame(width: 36, alignment: .leading)
@@ -504,20 +501,17 @@ struct ChatScreen: View {
         VStack(spacing: 2) {
             HStack(spacing: 6) {
                 Circle()
-                    .fill(viewModel.isCurrentModelAvailable ? Color.green : Color.red)
+                    .fill(viewModel.isCurrentModelAvailable ? MinisTheme.modelDot : Color.red)
                     .frame(width: 7, height: 7)
+                Image(systemName: "square.stack.3d.up")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color.secondary.opacity(0.84))
                 Text(headerModelName)
                     .font(.system(size: 12, weight: .semibold))
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
             .foregroundStyle(.primary)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(Color(.secondarySystemBackground))
-            )
 
             Text(headerModelVendorName)
                 .font(.system(size: 10.5, weight: .medium))
@@ -592,7 +586,7 @@ struct ChatScreen: View {
                         .fill(
                             viewModel.isPrivateMode
                                 ? Color(red: 0.14, green: 0.21, blue: 0.38)
-                                : Color(.secondarySystemBackground)
+                                : MinisTheme.softPill
                         )
 
                     Image("PrivateModeIcon")
@@ -638,10 +632,14 @@ struct ChatScreen: View {
                 }
                 .disabled(!viewModel.isSending)
             } label: {
-                Image(systemName: "slider.horizontal.3")
-                    .font(.system(size: 16, weight: .medium))
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(.primary)
                     .frame(width: 36, height: 36)
+                    .background(
+                        Circle()
+                            .fill(MinisTheme.softPill)
+                    )
             }
             .buttonStyle(.plain)
         }
@@ -926,36 +924,13 @@ struct ChatScreen: View {
                 starterPromptStrip
             }
 
-            HStack(alignment: .center, spacing: 12) {
-                Button {
-                    showAttachmentSheet = true
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 17, weight: .regular))
-                        .foregroundStyle(.primary)
-                        .frame(width: 36, height: 36)
-                        .background(
-                            Circle()
-                                .fill(Color(.secondarySystemBackground))
-                        )
-                        .overlay(
-                            Circle()
-                                .stroke(Color.black.opacity(0.04), lineWidth: 0.8)
-                        )
-                }
-                .buttonStyle(.plain)
-
-                composerInputContainer
-            }
-            .padding(.vertical, 2)
-            .padding(.leading, 0)
-            .padding(.trailing, 0)
-            .background(Color.clear)
+            composerInputContainer
+                .padding(.vertical, 2)
         }
         .padding(.horizontal, 12)
-        .padding(.top, 4)
-        .padding(.bottom, 8)
-        .background(Color(.systemBackground))
+        .padding(.top, 6)
+        .padding(.bottom, 10)
+        .background(MinisTheme.appBackground)
         .overlay(alignment: .top) {
             Divider().opacity(0.18)
         }
@@ -963,6 +938,34 @@ struct ChatScreen: View {
 
     private var composerInputContainer: some View {
         HStack(alignment: .center, spacing: 10) {
+            Button {
+                showAttachmentSheet = true
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 18, weight: .regular))
+                    .foregroundStyle(viewModel.isPrivateMode ? Color.white : Color.primary)
+                    .frame(width: 38, height: 38)
+                    .background(
+                        Circle()
+                            .fill(viewModel.isPrivateMode ? Color.white.opacity(0.12) : MinisTheme.softPill)
+                    )
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                insertSlashCommandPrefix()
+            } label: {
+                Text("/")
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundStyle(viewModel.isPrivateMode ? Color.white : Color.primary)
+                    .frame(width: 38, height: 38)
+                    .background(
+                        Circle()
+                            .fill(viewModel.isPrivateMode ? Color.white.opacity(0.12) : MinisTheme.softPill)
+                    )
+            }
+            .buttonStyle(.plain)
+
             textInputArea
 
             Button {
@@ -985,33 +988,33 @@ struct ChatScreen: View {
                     if viewModel.isSending {
                         Image(systemName: "stop.fill")
                     } else if shouldUseVoicePrimaryAction {
-                        Image(systemName: speechToText.isRecording ? "waveform" : "waveform.path")
+                        Image(systemName: speechToText.isRecording ? "waveform" : "mic")
                     } else {
                         Image(systemName: "arrow.up")
                     }
                 }
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Color.white)
-                .frame(width: 30, height: 30)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(shouldUseVoicePrimaryAction && !speechToText.isRecording ? Color.primary : Color.white)
+                .frame(width: 38, height: 38)
                 .background(
                     Circle()
-                        .fill(canTapPrimaryComposerButton ? Color.black : Color(.systemGray3))
+                        .fill(primaryComposerButtonFill)
                 )
             }
             .disabled(!canTapPrimaryComposerButton)
         }
-        .frame(minHeight: 34)
+        .frame(minHeight: 52)
         .padding(.horizontal, 12)
-        .padding(.vertical, 4)
+        .padding(.vertical, 10)
         .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(viewModel.isPrivateMode ? Color.black : Color(.secondarySystemBackground))
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .fill(viewModel.isPrivateMode ? Color.black : MinisTheme.panelBackground)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(viewModel.isPrivateMode ? Color.white.opacity(0.18) : Color.black.opacity(0.04), lineWidth: 0.8)
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .stroke(viewModel.isPrivateMode ? Color.white.opacity(0.18) : MinisTheme.subtleStroke, lineWidth: 0.8)
         )
-        .shadow(color: Color.black.opacity(0.025), radius: 6, x: 0, y: 2)
+        .shadow(color: Color.black.opacity(0.07), radius: 18, x: 0, y: 8)
     }
 
     private var textInputArea: some View {
@@ -1029,13 +1032,13 @@ struct ChatScreen: View {
                 guard viewModel.canSend else { return }
                 sendCurrentComposerMessage()
             }
-            .font(.system(size: 15))
+            .font(.system(size: 17, weight: .regular))
             .foregroundStyle(viewModel.isPrivateMode ? Color.white : Color.primary)
-            .frame(maxWidth: .infinity, minHeight: 18, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
     }
 
     private var composerPlaceholderColor: Color {
-        viewModel.isPrivateMode ? Color.white.opacity(0.88) : Color.secondary
+        viewModel.isPrivateMode ? Color.white.opacity(0.80) : MinisTheme.secondaryText
     }
 
     private var composerPlaceholderText: String {
@@ -1044,9 +1047,19 @@ struct ChatScreen: View {
             return "请说话"
         }
         if viewModel.isPrivateMode {
-            return "私密聊天，内容不会保存"
+            return "Private IEXA"
         }
-        return "有问题，尽管问"
+        return "Message IEXA"
+    }
+
+    private var primaryComposerButtonFill: Color {
+        if !canTapPrimaryComposerButton {
+            return Color(.systemGray4)
+        }
+        if shouldUseVoicePrimaryAction && !speechToText.isRecording {
+            return MinisTheme.softPill
+        }
+        return Color.black
     }
 
     private var shouldUseVoicePrimaryAction: Bool {
@@ -1613,11 +1626,11 @@ struct ChatScreen: View {
             Image(systemName: "arrow.down")
                 .font(.system(size: 18, weight: .medium))
                 .foregroundStyle(.primary)
-                .frame(width: 48, height: 48)
+                .frame(width: 52, height: 52)
                 .background(
                     Circle()
-                        .fill(Color(.systemBackground))
-                        .shadow(color: Color.black.opacity(0.12), radius: 8, x: 0, y: 3)
+                        .fill(MinisTheme.panelBackground)
+                        .shadow(color: Color.black.opacity(0.10), radius: 14, x: 0, y: 6)
                 )
         }
         .buttonStyle(.plain)
@@ -1626,9 +1639,9 @@ struct ChatScreen: View {
     private var starterPromptStrip: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("编程推荐")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.secondary)
+                Text("Start With IEXA")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(MinisTheme.secondaryText)
                 Spacer()
                 Button("换一批") {
                     withAnimation(.easeInOut(duration: 0.18)) {
@@ -1637,7 +1650,7 @@ struct ChatScreen: View {
                 }
                 .font(.system(size: 13, weight: .medium))
                 .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(MinisTheme.secondaryText)
             }
 
             ScrollView(.horizontal, showsIndicators: false) {
@@ -1648,12 +1661,12 @@ struct ChatScreen: View {
                         } label: {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(prompt.title)
-                                    .font(.system(size: 15, weight: .medium))
+                                    .font(.system(size: 15, weight: .semibold))
                                     .foregroundStyle(.primary)
                                     .lineLimit(1)
                                 Text(prompt.subtitle)
                                     .font(.system(size: 12, weight: .regular))
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(MinisTheme.secondaryText)
                                     .lineLimit(1)
                             }
                             .frame(width: 168, alignment: .leading)
@@ -1661,8 +1674,13 @@ struct ChatScreen: View {
                             .padding(.vertical, 12)
                             .background(
                                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                    .fill(Color(.secondarySystemBackground))
+                                    .fill(MinisTheme.panelBackground)
                             )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                    .stroke(MinisTheme.subtleStroke, lineWidth: 0.8)
+                            )
+                            .shadow(color: Color.black.opacity(0.03), radius: 10, x: 0, y: 5)
                         }
                         .buttonStyle(.plain)
                     }
@@ -3753,6 +3771,16 @@ struct ChatScreen: View {
         if sendAfterPaste {
             sendCurrentComposerMessage()
         }
+    }
+
+    private func insertSlashCommandPrefix() {
+        let trimmed = viewModel.draftMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            viewModel.draftMessage = "/"
+        } else if !trimmed.hasPrefix("/") {
+            viewModel.draftMessage = "/" + viewModel.draftMessage
+        }
+        isComposerFocused = true
     }
 
     private func sendCurrentComposerMessage() {

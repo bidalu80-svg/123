@@ -5,7 +5,7 @@ struct StreamingMarkdownTextView: UIViewRepresentable {
     let text: String
     var textColor: UIColor = .label
     var linkColor: UIColor = .secondaryLabel
-    var font: UIFont = UIFont(name: "PingFangSC-Regular", size: 15.5) ?? .systemFont(ofSize: 15.5, weight: .regular)
+    var font: UIFont = MinisTheme.assistantUIFont
 
     private static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
 
@@ -382,7 +382,7 @@ struct SelectableLinkTextView: UIViewRepresentable {
     let text: String
     var textColor: UIColor = .label
     var linkColor: UIColor = .secondaryLabel
-    var font: UIFont = UIFont(name: "PingFangSC-Regular", size: 15.5) ?? .systemFont(ofSize: 15.5, weight: .regular)
+    var font: UIFont = MinisTheme.assistantUIFont
     var renderMarkdown: Bool = false
     var streamingAnimated: Bool = false
     var onFileLinkTap: ((String) -> Void)? = nil

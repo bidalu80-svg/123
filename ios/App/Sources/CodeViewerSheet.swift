@@ -73,7 +73,7 @@ struct CodeViewerSheet: View {
                 bottomPager
             }
         }
-        .background(Color(.systemGroupedBackground).ignoresSafeArea())
+        .background(MinisTheme.appBackground.ignoresSafeArea())
     }
 
     private var topBar: some View {
@@ -116,8 +116,9 @@ struct CodeViewerSheet: View {
             }
         }
         .padding(.horizontal, 16)
-        .padding(.top, 10)
-        .padding(.bottom, 10)
+        .padding(.top, 12)
+        .padding(.bottom, 12)
+        .background(MinisTheme.panelBackground)
     }
 
     private func viewerCard(entry: CodeViewerEntry) -> some View {
@@ -125,14 +126,14 @@ struct CodeViewerSheet: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Image(systemName: "doc.text.fill")
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(MinisTheme.secondaryText)
                 Text(entry.name)
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 Text("(\(entry.fileSizeText))")
                     .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(MinisTheme.secondaryText)
                     .lineLimit(1)
                 Spacer(minLength: 0)
             }
@@ -148,7 +149,7 @@ struct CodeViewerSheet: View {
                     SelectableCodeTextView(
                         text: entry.content,
                         textColor: codePrimaryTextColor,
-                        font: .monospacedSystemFont(ofSize: 15.5, weight: .medium),
+                        font: MinisTheme.codeUIFont,
                         lineSpacing: 3.5,
                         language: entry.language,
                         codeThemeMode: codeThemeMode,
@@ -170,15 +171,16 @@ struct CodeViewerSheet: View {
         }
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color(.systemBackground))
+                .fill(MinisTheme.panelBackground)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.black.opacity(colorScheme == .dark ? 0.15 : 0.06), lineWidth: 1)
+                .stroke(MinisTheme.subtleStroke, lineWidth: 1)
         )
         .padding(.horizontal, 12)
         .padding(.top, 12)
         .padding(.bottom, 6)
+        .shadow(color: Color.black.opacity(0.04), radius: 14, x: 0, y: 6)
     }
 
     private var bottomPager: some View {
@@ -209,7 +211,7 @@ struct CodeViewerSheet: View {
         .padding(.horizontal, 18)
         .padding(.top, 10)
         .padding(.bottom, 14)
-        .background(.ultraThinMaterial)
+        .background(MinisTheme.panelBackground)
     }
 
     private var emptyState: some View {
@@ -277,7 +279,7 @@ struct CodeViewerSheet: View {
                 .frame(width: 42, height: 42)
                 .background(
                     Circle()
-                        .fill(Color(.secondarySystemGroupedBackground))
+                        .fill(MinisTheme.softPill)
                 )
         }
         .buttonStyle(.plain)
@@ -301,27 +303,10 @@ struct CodeViewerSheet: View {
     }
 
     private var codeViewportBackgroundColor: Color {
-        if usesDarkCodePalette {
-            return Color.black.opacity(0.24)
-        }
-        return Color.black.opacity(0.03)
+        MinisTheme.codeViewport
     }
 
     private var codePrimaryTextColor: UIColor {
-        if usesDarkCodePalette {
-            return UIColor(red: 0.83, green: 0.84, blue: 0.86, alpha: 1)
-        }
-        return UIColor(red: 0.14, green: 0.16, blue: 0.18, alpha: 1)
-    }
-
-    private var usesDarkCodePalette: Bool {
-        switch codeThemeMode {
-        case .vscodeDark:
-            return true
-        case .githubLight:
-            return false
-        case .followApp:
-            return colorScheme == .dark
-        }
+        MinisTheme.codeText
     }
 }

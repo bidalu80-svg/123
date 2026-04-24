@@ -11,7 +11,7 @@ struct AgentLabScreen: View {
     var body: some View {
         List {
             Section("终端 Agent 测试") {
-                Text("这个功能是独立终端模块，不依赖第三方包。用于快速验证聊天接口、Agent 模式，以及 web 产物生成。")
+                Text("这个模块用于快速验证 IEXA 的 agent 能力：聊天接口、web 项目输出、以及在 Linux shell / workspace 中执行任务。")
                     .font(.subheadline)
             }
 
@@ -25,6 +25,12 @@ struct AgentLabScreen: View {
                 Text("1. 使用 --agent web 后，AI 会按 [[file:...]] 格式返回网站文件。")
                 Text("2. 使用 --web-out 指定输出目录，例如 ./web。")
                 Text("3. 生成后可直接打开 ./web/index.html 预览。")
+            }
+
+            Section("远端 Shell 说明") {
+                Text("1. 在 Linux / workspace 机器上启动 ios/Tools/shell_execute_server.py。")
+                Text("2. 在 App 设置里配置 shell 路径和默认工作目录。")
+                Text("3. 之后代码块里的 shell 命令可直接在 IEXA 里运行。")
             }
 
             if !copiedMessage.isEmpty {

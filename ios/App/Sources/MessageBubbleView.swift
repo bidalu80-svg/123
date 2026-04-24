@@ -48,7 +48,7 @@ struct MessageBubbleView: View {
     @State private var wordGenerationTask: Task<Void, Never>?
     @State private var excelGenerationTask: Task<Void, Never>?
     @State private var frontendBuildRequestID: Int = 0
-    private let chatUIFont = UIFont(name: "PingFangSC-Medium", size: 16) ?? UIFont.systemFont(ofSize: 16, weight: .medium)
+    private let chatUIFont = MinisTheme.assistantUIFont
 
     init(
         message: ChatMessage,
@@ -118,7 +118,11 @@ struct MessageBubbleView: View {
         .sheet(item: $activeCodeViewer) { payload in
             CodeViewerSheet(
                 payload: payload,
-                codeThemeMode: codeThemeMode
+                codeThemeMode: codeThemeMode,
+                onRunTerminalCommand: { command in
+                    let token = "viewer|\(payload.id.uuidString)|\(command)"
+                    requestRemoteShellRun(command, token: token)
+                }
             )
         }
         .sheet(item: $pendingPythonRun) { payload in
@@ -146,18 +150,18 @@ struct MessageBubbleView: View {
     }
 
     private var assistantMessageView: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 9) {
             assistantIdentityHeader
 
             content
 
             if showsAssistantActionBar && frontendProgressPayload == nil {
                 assistantActionBar
-                    .padding(.top, 2)
+                    .padding(.top, 1)
             }
         }
         .padding(.horizontal, 2)
-        .padding(.vertical, 6)
+        .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -166,7 +170,7 @@ struct MessageBubbleView: View {
             assistantIdentityIcon
 
             Text("IEXA")
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: 16.5, weight: .bold))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
         }
@@ -174,22 +178,15 @@ struct MessageBubbleView: View {
     }
 
     private var assistantIdentityIcon: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(Color.black)
+        ZStack(alignment: .topLeading) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Color(red: 0.79, green: 0.74, blue: 0.58))
 
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .stroke(Color.white.opacity(0.16), lineWidth: 0.8)
-
-            HStack(spacing: 1) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 8, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.96))
-                Image(systemName: "sparkles")
-                    .font(.system(size: 5, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.86))
-                    .offset(y: 2)
-            }
+            Image(systemName: "sparkles")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(Color(red: 0.84, green: 0.80, blue: 0.66))
+                .offset(x: -4, y: -2)
         }
         .frame(width: 18, height: 18)
     }
@@ -402,6 +399,16 @@ struct MessageBubbleView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(
+            Capsule(style: .continuous)
+                .fill(MinisTheme.softPill)
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .stroke(MinisTheme.subtleStroke, lineWidth: 0.8)
+        )
         .animation(.easeInOut(duration: 0.18), value: reaction)
         .animation(.easeInOut(duration: 0.18), value: actionFeedback)
     }
@@ -443,16 +450,16 @@ struct MessageBubbleView: View {
             Spacer(minLength: 62)
             userMessageContent
                 .padding(.vertical, 12)
-                .padding(.horizontal, 16)
+                .padding(.horizontal, 17)
                 .background(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
                         .fill(userBubbleColor)
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .stroke(Color.black.opacity(colorScheme == .dark ? 0.12 : 0.035), lineWidth: 0.8)
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .stroke(Color.black.opacity(colorScheme == .dark ? 0.12 : 0.03), lineWidth: 0.8)
                 )
-                .frame(maxWidth: 312, alignment: .trailing)
+                .frame(maxWidth: 306, alignment: .trailing)
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
     }
@@ -466,8 +473,8 @@ struct MessageBubbleView: View {
                     .foregroundStyle(.secondary)
             } else if let fallback = fallbackPlainText {
                 Text(fallback)
-                    .font(.custom("PingFangSC-Medium", size: 16))
-                    .lineSpacing(4)
+                    .font(.system(size: 17, weight: .regular))
+                    .lineSpacing(5)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
             } else {
@@ -902,8 +909,8 @@ struct MessageBubbleView: View {
         switch segment {
         case .text(let text):
             Text(text)
-                .font(.custom("PingFangSC-Medium", size: 16))
-                .lineSpacing(4)
+                .font(.system(size: 17, weight: .regular))
+                .lineSpacing(5)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
         case .code(let language, let content):
@@ -1246,10 +1253,15 @@ struct MessageBubbleView: View {
             || line.contains("❌")
             || line.contains("⚠️")
         let hasCommandPrefix = normalizedTitle.hasPrefix("$ ") || normalizedTitle.hasPrefix("> ")
+        let looksLikeToolIdentifier = normalizedTitle.range(
+            of: #"^(memory_(get|save|write)|browser|shell|terminal|read|write|exec|edit|command)$"#,
+            options: .regularExpression
+        ) != nil
         let looksLikeStep = duration != nil
             || hasPrefixMarker
             || hasExplicitStepEmoji
             || hasCommandPrefix
+            || looksLikeToolIdentifier
             || (hasStepBulletPrefix && hasKeywordMarker && normalizedTitle.count <= 80)
         guard looksLikeStep else { return nil }
         if isLikelyConversationalAssistantLine(normalizedTitle),
@@ -1393,17 +1405,18 @@ struct MessageBubbleView: View {
                     .lineLimit(1)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
         .background(
-            Capsule(style: .continuous)
-                .fill(Color(.secondarySystemBackground))
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(MinisTheme.panelBackground)
         )
         .overlay(
-            Capsule(style: .continuous)
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(stepBorderColor(status), lineWidth: 0.9)
         )
         .frame(maxWidth: .infinity, alignment: .leading)
+        .shadow(color: Color.black.opacity(0.035), radius: 10, x: 0, y: 4)
     }
 
     private func stepIconName(for title: String, kind: AssistantStepKind) -> String {
@@ -1445,13 +1458,13 @@ struct MessageBubbleView: View {
             return Color.red
         }
         if status == .running {
-            return Color.orange
+            return MinisTheme.accentOrange
         }
         switch kind {
         case .command:
-            return Color.blue
+            return MinisTheme.accentBlue
         case .file, .memory, .generic:
-            return Color.green
+            return MinisTheme.accentGreen
         }
     }
 
@@ -1459,27 +1472,27 @@ struct MessageBubbleView: View {
         let base: Color
         switch kind {
         case .command:
-            base = .blue
+            base = MinisTheme.accentBlue
         case .file, .memory, .generic:
-            base = .green
+            base = MinisTheme.accentGreen
         }
         if status == .error {
             return Color.red.opacity(0.12)
         }
         if status == .running {
-            return Color.orange.opacity(0.16)
+            return MinisTheme.accentOrange.opacity(0.16)
         }
-        return base.opacity(colorScheme == .dark ? 0.16 : 0.12)
+        return base.opacity(0.12)
     }
 
     private func stepBorderColor(_ status: AssistantStepStatus) -> Color {
         switch status {
         case .neutral:
-            return Color.black.opacity(colorScheme == .dark ? 0.14 : 0.07)
+            return MinisTheme.subtleStroke
         case .running:
-            return Color.orange.opacity(0.45)
+            return MinisTheme.accentOrange.opacity(0.42)
         case .success:
-            return Color.green.opacity(0.42)
+            return MinisTheme.accentGreen.opacity(0.34)
         case .error:
             return Color.red.opacity(0.42)
         }
@@ -1498,14 +1511,14 @@ struct MessageBubbleView: View {
                 StreamingMarkdownTextView(
                     text: displayText,
                     textColor: UIColor.label,
-                    linkColor: UIColor.secondaryLabel,
+                    linkColor: MinisTheme.accentBlueUIColor,
                     font: chatUIFont
                 )
             } else {
                 SelectableLinkTextView(
                     text: displayText,
                     textColor: UIColor.label,
-                    linkColor: UIColor.secondaryLabel,
+                    linkColor: MinisTheme.accentBlueUIColor,
                     font: chatUIFont,
                     renderMarkdown: false,
                     streamingAnimated: false,
@@ -1527,7 +1540,7 @@ struct MessageBubbleView: View {
         var output: [String] = []
         output.reserveCapacity(lines.count)
 
-        for (lineIndex, line) in lines.enumerated() {
+        for (_, line) in lines.enumerated() {
             if line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 output.append(line)
                 continue
@@ -1546,9 +1559,8 @@ struct MessageBubbleView: View {
             ) {
                 let marker = String(trimmedStart[markerRange])
                 let number = Int(marker.prefix { $0.isNumber }) ?? 0
-                let icon = numberedListIcon(number: number, lineIndex: lineIndex)
                 let remainder = trimmedStart[markerRange.upperBound...]
-                output.append("\(leading)\(icon) \(remainder)")
+                output.append("\(leading)\(max(1, number)). \(remainder)")
                 continue
             }
 
@@ -1556,9 +1568,8 @@ struct MessageBubbleView: View {
                 of: #"^[•●▪︎◦\-*]\s+"#,
                 options: .regularExpression
             ) {
-                let icon = bulletListIcon(lineIndex: lineIndex)
                 let remainder = trimmedStart[markerRange.upperBound...]
-                output.append("\(leading)\(icon) \(remainder)")
+                output.append("\(leading)• \(remainder)")
                 continue
             }
 
@@ -1583,30 +1594,6 @@ struct MessageBubbleView: View {
         return false
     }
 
-    private func numberedListIcon(number: Int, lineIndex: Int) -> String {
-        let keycapIcons: [String] = ["0️⃣", "1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
-        if (0...10).contains(number) {
-            return keycapIcons[number]
-        }
-
-        let fallbackIcons = ["✨", "📌", "💡", "🧩", "🎯", "🚀", "✅", "🔹"]
-        let seed = stableListIconSeed(offset: number * 17 + lineIndex * 31)
-        return fallbackIcons[seed % fallbackIcons.count]
-    }
-
-    private func bulletListIcon(lineIndex: Int) -> String {
-        let icons = ["🔹", "•", "✦", "▸", "▫️"]
-        let seed = stableListIconSeed(offset: lineIndex * 13)
-        return icons[seed % icons.count]
-    }
-
-    private func stableListIconSeed(offset: Int) -> Int {
-        let base = message.id.uuidString.unicodeScalars.reduce(0) { partial, scalar in
-            partial &+ Int(scalar.value)
-        }
-        return abs(base &+ offset)
-    }
-
     private func codeBlock(
         title: String,
         content: String,
@@ -1628,6 +1615,7 @@ struct MessageBubbleView: View {
         let copyToken = "\(title)|\(language ?? "")|\(actionContent)"
         let isCopied = copiedCodeToken == copyToken
         let isRunning = runningCodeToken == copyToken
+        let canRunShell = supportsRemoteShellRun(language: language, title: title, content: actionContent)
         let canRunPython = supportsPythonRun(language: language, title: title)
             && PythonExecutionService.isRunnableSnippet(actionContent)
         let canRunHTML = supportsHTMLPreview(language: language, title: title, content: actionContent)
@@ -1635,44 +1623,70 @@ struct MessageBubbleView: View {
         let runError = codeRunErrors[copyToken]
 
         return VStack(alignment: .leading, spacing: 10) {
-            HStack {
+            HStack(spacing: 10) {
                 Text(title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.primary.opacity(0.92))
+                    .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(Color.white.opacity(0.68))
                 Spacer()
+                if canRunShell {
+                    Button {
+                        if isRunning {
+                            stopShellRun(token: copyToken)
+                        } else {
+                            requestRemoteShellRun(actionContent, token: copyToken)
+                        }
+                    } label: {
+                        Image(systemName: isRunning ? "stop.fill" : "terminal")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Color.white.opacity(0.92))
+                            .frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(MiniIconButtonStyle())
+                    .accessibilityLabel(isRunning ? "停止终端运行" : "运行终端命令")
+                }
                 if canRunPython {
-                    Button(isRunning ? "结束运行" : "运行") {
+                    Button {
                         if isRunning {
                             stopPythonRun(token: copyToken)
                         } else {
                             requestPythonRun(actionContent, token: copyToken)
                         }
+                    } label: {
+                        Image(systemName: isRunning ? "stop.fill" : "play.fill")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Color.white.opacity(0.92))
+                            .frame(width: 28, height: 28)
                     }
-                    .font(.caption2)
-                    .buttonStyle(.borderedProminent)
-                    .tint(isRunning ? .red : Color(red: 0.08, green: 0.08, blue: 0.1))
-                    .foregroundStyle(.white)
+                    .buttonStyle(MiniIconButtonStyle())
+                    .accessibilityLabel(isRunning ? "停止 Python 运行" : "运行 Python")
                 }
                 if canRunHTML {
-                    Button("运行网页") {
+                    Button {
                         openHTMLPreview(title: title, content: actionContent)
+                    } label: {
+                        Image(systemName: "globe")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Color.white.opacity(0.92))
+                            .frame(width: 28, height: 28)
                     }
-                    .font(.caption2)
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color(red: 0.06, green: 0.36, blue: 0.86))
-                    .foregroundStyle(.white)
+                    .buttonStyle(MiniIconButtonStyle())
+                    .accessibilityLabel("打开网页预览")
                 }
-                Button("查看") {
+                Button {
                     openCodeViewer(
                         title: title,
                         language: language,
                         displayContent: content
                     )
+                } label: {
+                    Image(systemName: "doc.text")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color.white.opacity(0.92))
+                        .frame(width: 28, height: 28)
                 }
-                .font(.caption2)
-                .buttonStyle(.bordered)
+                .buttonStyle(MiniIconButtonStyle())
                 .disabled(actionContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                Button(isCopied ? "已复制" : "复制代码") {
+                Button {
                     UIPasteboard.general.string = actionContent
                     UINotificationFeedbackGenerator().notificationOccurred(.success)
                     withAnimation(.easeInOut(duration: 0.16)) {
@@ -1684,12 +1698,16 @@ struct MessageBubbleView: View {
                             copiedCodeToken = nil
                         }
                     }
+                } label: {
+                    Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(isCopied ? MinisTheme.accentGreen : Color.white.opacity(0.92))
+                        .frame(width: 28, height: 28)
                 }
-                .font(.caption2)
-                .buttonStyle(.bordered)
-                .tint(isCopied ? .green : nil)
+                .buttonStyle(MiniIconButtonStyle())
                 .animation(.easeInOut(duration: 0.16), value: isCopied)
             }
+            .padding(.horizontal, 2)
 
             ZStack(alignment: .bottomTrailing) {
                 RoundedRectangle(cornerRadius: 11, style: .continuous)
@@ -1698,7 +1716,7 @@ struct MessageBubbleView: View {
                 SelectableCodeTextView(
                     text: content,
                     textColor: codePrimaryTextColor,
-                    font: .monospacedSystemFont(ofSize: 15.5, weight: .medium),
+                    font: MinisTheme.codeUIFont,
                     lineSpacing: 3.5,
                     language: language,
                     codeThemeMode: codeThemeMode,
@@ -1740,9 +1758,9 @@ struct MessageBubbleView: View {
                 HStack(spacing: 8) {
                     ProgressView()
                         .scaleEffect(0.75)
-                    Text("正在运行 Python…")
+                    Text(canRunShell ? "正在运行终端命令…" : "正在运行 Python…")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color.white.opacity(0.72))
                 }
             }
 
@@ -1764,13 +1782,18 @@ struct MessageBubbleView: View {
 
                     Text(runOutput)
                         .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(Color.white.opacity(0.92))
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
                 }
-                .padding(8)
+                .padding(10)
                 .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.primary.opacity(colorScheme == .dark ? 0.16 : 0.06))
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.black.opacity(0.92))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color.white.opacity(0.08), lineWidth: 0.8)
                 )
             }
 
@@ -1785,15 +1808,19 @@ struct MessageBubbleView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
                 }
-                .padding(8)
+                .padding(10)
                 .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.red.opacity(colorScheme == .dark ? 0.18 : 0.08))
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color(red: 0.22, green: 0.06, blue: 0.08))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color.red.opacity(0.28), lineWidth: 0.8)
                 )
             }
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.vertical, 13)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(codeBackgroundColor)
@@ -1833,7 +1860,12 @@ struct MessageBubbleView: View {
         activeCodeViewer = CodeViewerPayload(
             title: "代码查看",
             entries: entries,
-            initialIndex: initialIndex
+            initialIndex: initialIndex,
+            preferredTerminalCommand: supportsRemoteShellRun(
+                language: language,
+                title: title,
+                content: selectedContent
+            ) ? selectedContent : nil
         )
     }
 
@@ -1866,7 +1898,8 @@ struct MessageBubbleView: View {
         activeCodeViewer = CodeViewerPayload(
             title: "项目代码",
             entries: entries,
-            initialIndex: index
+            initialIndex: index,
+            preferredTerminalCommand: nil
         )
 
         if index == 0,
@@ -3256,57 +3289,23 @@ struct MessageBubbleView: View {
     }
 
     private var codeBackgroundColor: Color {
-        switch codeThemeMode {
-        case .vscodeDark:
-            return Color(red: 0.12, green: 0.12, blue: 0.14)
-        case .githubLight:
-            return Color(red: 0.97, green: 0.97, blue: 0.975)
-        case .followApp:
-            return colorScheme == .dark
-                ? Color(red: 0.12, green: 0.12, blue: 0.14)
-                : Color(red: 0.97, green: 0.97, blue: 0.975)
-        }
+        MinisTheme.codeCard
     }
 
     private var codeViewportBackgroundColor: Color {
-        switch codeThemeMode {
-        case .vscodeDark:
-            return Color.black.opacity(0.20)
-        case .githubLight:
-            return Color.black.opacity(0.025)
-        case .followApp:
-            return colorScheme == .dark ? Color.black.opacity(0.20) : Color.black.opacity(0.025)
-        }
+        MinisTheme.codeViewport
     }
 
     private var codePrimaryTextColor: UIColor {
-        switch codeThemeMode {
-        case .vscodeDark:
-            return UIColor(red: 0.83, green: 0.84, blue: 0.86, alpha: 1)
-        case .githubLight:
-            return UIColor(red: 0.14, green: 0.16, blue: 0.18, alpha: 1)
-        case .followApp:
-            return colorScheme == .dark
-                ? UIColor(red: 0.83, green: 0.84, blue: 0.86, alpha: 1)
-                : UIColor(red: 0.14, green: 0.16, blue: 0.18, alpha: 1)
-        }
+        MinisTheme.codeText
     }
 
     private var codeCardBorderColor: Color {
-        switch codeThemeMode {
-        case .vscodeDark:
-            return Color.white.opacity(0.16)
-        case .githubLight:
-            return Color.black.opacity(0.08)
-        case .followApp:
-            return colorScheme == .dark ? Color.white.opacity(0.16) : Color.black.opacity(0.08)
-        }
+        MinisTheme.codeStroke
     }
 
     private var userBubbleColor: Color {
-        colorScheme == .dark
-            ? Color(red: 0.20, green: 0.20, blue: 0.22)
-            : Color(red: 0.93, green: 0.93, blue: 0.94)
+        colorScheme == .dark ? Color(red: 0.20, green: 0.20, blue: 0.22) : MinisTheme.userBubble
     }
 
     private var saveFeedbackBinding: Binding<Bool> {
