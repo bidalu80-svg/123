@@ -442,4 +442,134 @@ final class FrontendProjectBuilderTests: XCTestCase {
         let snapshot = FrontendProjectBuilder.explicitPayloadProgressSnapshot(from: message)
         XCTAssertEqual(snapshot?.detectedFileCount, 1)
     }
+
+    func testOverwriteLatestProjectPreservesExistingEntryAndLinkedFilesOnPartialUpdate() throws {
+        let initial = ChatMessage(
+            role: .assistant,
+            content: "",
+            fileAttachments: [
+                ChatFileAttachment(
+                    fileName: "index.html",
+                    mimeType: "text/html",
+                    textContent: """
+                    <!doctype html>
+                    <html>
+                    <head>
+                      <meta charset="utf-8">
+                      <link rel="stylesheet" href="styles.css">
+                    </head>
+                    <body>
+                      <h1>Hello</h1>
+                      <script src="script.js"></script>
+                    </body>
+                    </html>
+                    """
+                ),
+                ChatFileAttachment(
+                    fileName: "styles.css",
+                    mimeType: "text/css",
+                    textContent: "body { background: white; }"
+                ),
+                ChatFileAttachment(
+                    fileName: "script.js",
+                    mimeType: "application/javascript",
+                    textContent: "console.log('v1');"
+                )
+            ]
+        )
+        _ = try FrontendProjectBuilder.buildProject(from: initial, mode: .overwriteLatestProject)
+
+        let partialUpdate = ChatMessage(
+            role: .assistant,
+            content: """
+            [[file:styles.css]]
+            body { background: black; color: white; }
+            [[endfile]]
+            """
+        )
+
+        let result = try FrontendProjectBuilder.buildProject(from: partialUpdate, mode: .overwriteLatestProject)
+        let latestEntry = try XCTUnwrap(FrontendProjectBuilder.latestEntryFileURL())
+        let entryText = try String(contentsOf: latestEntry, encoding: .utf8)
+        let updatedStyle = try String(
+            contentsOf: result.projectDirectoryURL.appendingPathComponent("styles.css"),
+            encoding: .utf8
+        )
+        let preservedScript = try String(
+            contentsOf: result.projectDirectoryURL.appendingPathComponent("script.js"),
+            encoding: .utf8
+        )
+
+        XCTAssertEqual(result.entryFileURL.lastPathComponent.lowercased(), "index.html")
+        XCTAssertEqual(latestEntry.lastPathComponent.lowercased(), "index.html")
+        XCTAssertTrue(entryText.contains("styles.css"))
+        XCTAssertTrue(entryText.contains("script.js"))
+        XCTAssertTrue(updatedStyle.contains("background: black"))
+        XCTAssertTrue(updatedStyle.contains("color: white"))
+        XCTAssertTrue(preservedScript.contains("console.log('v1');"))
+    }
+
+    func testOverwriteLatestProjectPreservesNonWebProjectFilesOnPartialUpdate() throws {
+        let initial = ChatMessage(
+            role: .assistant,
+            content: "",
+            fileAttachments: [
+                ChatFileAttachment(
+                    fileName: "main.py",
+                    mimeType: "text/x-python",
+                    textContent: """
+                    import helper
+
+                    print(helper.message())
+                    """
+                ),
+                ChatFileAttachment(
+                    fileName: "helper.py",
+                    mimeType: "text/x-python",
+                    textContent: """
+                    def message():
+                        return "v1"
+                    """
+                ),
+                ChatFileAttachment(
+                    fileName: "requirements.txt",
+                    mimeType: "text/plain",
+                    textContent: "requests==2.31.0"
+                )
+            ]
+        )
+        _ = try FrontendProjectBuilder.buildProject(from: initial, mode: .overwriteLatestProject)
+
+        let partialUpdate = ChatMessage(
+            role: .assistant,
+            content: """
+            [[file:helper.py]]
+            def message():
+                return "v2"
+            [[endfile]]
+            """
+        )
+
+        let result = try FrontendProjectBuilder.buildProject(from: partialUpdate, mode: .overwriteLatestProject)
+        let mainPy = try String(
+            contentsOf: result.projectDirectoryURL.appendingPathComponent("main.py"),
+            encoding: .utf8
+        )
+        let helperPy = try String(
+            contentsOf: result.projectDirectoryURL.appendingPathComponent("helper.py"),
+            encoding: .utf8
+        )
+        let requirements = try String(
+            contentsOf: result.projectDirectoryURL.appendingPathComponent("requirements.txt"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(result.writtenRelativePaths.contains("main.py"))
+        XCTAssertTrue(result.writtenRelativePaths.contains("helper.py"))
+        XCTAssertTrue(result.writtenRelativePaths.contains("requirements.txt"))
+        XCTAssertTrue(mainPy.contains("import helper"))
+        XCTAssertTrue(mainPy.contains("helper.message()"))
+        XCTAssertTrue(helperPy.contains("\"v2\""))
+        XCTAssertTrue(requirements.contains("requests==2.31.0"))
+    }
 }

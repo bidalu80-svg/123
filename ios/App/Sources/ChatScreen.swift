@@ -172,6 +172,8 @@ struct ChatScreen: View {
                 .zIndex(3)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .background(MinisTheme.appBackground.ignoresSafeArea())
         .navigationBarHidden(true)
         .simultaneousGesture(sidebarDragGesture)
         .onChange(of: viewModel.errorMessage) { _, newValue in
@@ -3673,54 +3675,58 @@ struct ChatScreen: View {
     }
 
     private var sessionSidebar: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("聊天记录")
-                    .font(.system(size: 30, weight: .bold))
-                Spacer()
-                Button {
-                    viewModel.createNewSession()
+        ZStack {
+            MinisTheme.panelBackground
+                .ignoresSafeArea()
+
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Text("聊天记录")
+                        .font(.system(size: 30, weight: .bold))
+                    Spacer()
+                    Button {
+                        viewModel.createNewSession()
+                        setSidebarOpen(false)
+                    } label: {
+                        Image(systemName: "square.and.pencil")
+                            .font(.system(size: 20, weight: .regular))
+                            .frame(width: 44, height: 44)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .fill(Color(.systemGray5))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 12)
+                .padding(.bottom, 16)
+
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ScrollsToTopConfigurator(enabled: false)
+                            .frame(width: 0, height: 0)
+                        ForEach(viewModel.sessions) { session in
+                            sessionRow(session)
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 12)
+                }
+
+                Divider()
+                Button(role: .destructive) {
+                    viewModel.clearAllSessions()
                     setSidebarOpen(false)
                 } label: {
-                    Image(systemName: "square.and.pencil")
-                        .font(.system(size: 20, weight: .regular))
-                        .frame(width: 44, height: 44)
-                        .background(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(Color(.systemGray5))
-                        )
+                    Label("一键清空全部会话", systemImage: "trash")
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .buttonStyle(.plain)
+                .padding()
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 12)
-            .padding(.bottom, 16)
-
-            ScrollView {
-                LazyVStack(spacing: 8) {
-                    ScrollsToTopConfigurator(enabled: false)
-                        .frame(width: 0, height: 0)
-                    ForEach(viewModel.sessions) { session in
-                        sessionRow(session)
-                    }
-                }
-                .padding(.horizontal, 10)
-                .padding(.bottom, 12)
-            }
-
-            Divider()
-            Button(role: .destructive) {
-                viewModel.clearAllSessions()
-                setSidebarOpen(false)
-            } label: {
-                Label("一键清空全部会话", systemImage: "trash")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .padding()
         }
         .frame(width: sidebarWidth)
         .frame(maxHeight: .infinity)
-        .background(MinisTheme.panelBackground)
     }
 
     private var sidebarRevealWidth: CGFloat {
