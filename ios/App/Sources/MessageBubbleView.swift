@@ -2319,6 +2319,18 @@ struct MessageBubbleView: View {
         pythonRunTasks[token] = task
     }
 
+    private func stopShellRun(token: String) {
+        shellRunTasks[token]?.cancel()
+        shellRunTasks[token] = nil
+        if runningCodeToken == token {
+            runningCodeToken = nil
+        }
+        if codeRunErrors[token] == nil {
+            codeRunErrors[token] = "运行已结束。"
+        }
+        feedback(.light, "已结束运行")
+    }
+
     private func stopPythonRun(token: String) {
         if pendingPythonRun?.token == token {
             pendingPythonRun = nil
