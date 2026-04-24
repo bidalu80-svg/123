@@ -134,15 +134,15 @@ final class StreamRenderer {
         let base = max(1, configuration.maxCharactersPerFrame)
         switch stagedCharacters {
         case 12_000...:
-            return min(420, base * 28)
+            return min(160, base * 5)
         case 6_000...:
-            return min(320, base * 18)
+            return min(128, base * 4)
         case 2_500...:
-            return min(220, base * 12)
+            return min(96, base * 3)
         case 900...:
-            return min(150, base * 8)
+            return min(72, base * 2)
         case 360...:
-            return min(96, base * 4)
+            return min(56, base * 2)
         default:
             return base
         }

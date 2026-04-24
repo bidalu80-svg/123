@@ -138,6 +138,7 @@ struct ChatScreen: View {
             sessionSidebar
 
             mainContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .overlay {
                     if sidebarRevealWidth > 0.01 {
                         Color.black.opacity(0.16 * sidebarRevealProgress)
