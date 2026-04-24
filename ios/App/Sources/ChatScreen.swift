@@ -815,9 +815,9 @@ struct ChatScreen: View {
             NativeTranscriptScrollView(
                 historyContent: AnyView(transcriptHistoryContent()),
                 historyVersion: transcriptHistoryVersion,
-                streamingLeadContent: nil,
-                streamingLeadSignature: nil,
-                streamingMessage: activeStreamingRenderedMessage,
+                streamingLeadContent: activeStreamingBubbleContent,
+                streamingLeadSignature: activeStreamingBubbleSignature,
+                streamingMessage: nil,
                 codeThemeSignature: codeThemeRenderSignature,
                 codeThemeMode: viewModel.config.codeThemeMode,
                 apiKey: viewModel.config.apiKey,
@@ -1983,6 +1983,30 @@ struct ChatScreen: View {
             )
             .padding(.horizontal, 18)
         )
+    }
+
+    private var activeStreamingBubbleContent: AnyView? {
+        guard let active = activeStreamingRenderedMessage else { return nil }
+        return AnyView(
+            MessageBubbleView(
+                message: active,
+                codeThemeMode: viewModel.config.codeThemeMode,
+                apiKey: viewModel.config.apiKey,
+                apiBaseURL: viewModel.config.normalizedBaseURL,
+                shellExecutionEnabled: viewModel.config.shellExecutionEnabled,
+                shellExecutionURLString: viewModel.config.shellExecutionURLString,
+                shellExecutionTimeout: viewModel.config.shellExecutionTimeout,
+                shellExecutionWorkingDirectory: viewModel.config.shellExecutionWorkingDirectory,
+                showsAssistantActionBar: false,
+                onRegenerate: nil
+            )
+            .padding(.horizontal, 18)
+        )
+    }
+
+    private var activeStreamingBubbleSignature: String? {
+        guard let active = activeStreamingRenderedMessage else { return nil }
+        return "\(active.id.uuidString)|\(active.content.count)|\(active.imageAttachments.count)|\(active.videoAttachments.count)|\(active.fileAttachments.count)|\(codeThemeRenderSignature)"
     }
 
     private var frozenRenderedMessages: [ChatMessage] {
