@@ -409,4 +409,37 @@ final class FrontendProjectBuilderTests: XCTestCase {
 
         XCTAssertFalse(FrontendProjectBuilder.canGenerateProject(from: message))
     }
+
+    func testHasExplicitProjectPayloadRejectsPlainMarkdownFence() {
+        let message = ChatMessage(
+            role: .assistant,
+            content: """
+            下面是自我介绍：
+
+            ```markdown
+            # IEXA
+            我是一个偏代码与终端任务的助手。
+            ```
+            """
+        )
+
+        XCTAssertFalse(FrontendProjectBuilder.hasExplicitProjectPayload(from: message))
+        XCTAssertNil(FrontendProjectBuilder.explicitPayloadProgressSnapshot(from: message))
+    }
+
+    func testHasExplicitProjectPayloadAcceptsTaggedFileOutput() {
+        let message = ChatMessage(
+            role: .assistant,
+            content: """
+            [[file:README.md]]
+            # IEXA
+            这是一个测试文件。
+            [[endfile]]
+            """
+        )
+
+        XCTAssertTrue(FrontendProjectBuilder.hasExplicitProjectPayload(from: message))
+        let snapshot = FrontendProjectBuilder.explicitPayloadProgressSnapshot(from: message)
+        XCTAssertEqual(snapshot?.detectedFileCount, 1)
+    }
 }

@@ -37,19 +37,39 @@ struct ChatRequestBuilder {
     private static let frontendAutoBuildSystemPrompt = """
     你当前处于“项目自动生成模式（多语言）”。当用户让你创建项目、脚手架、代码仓库或多文件示例时，遵循以下规则：
     1) 优先输出完整可运行的项目文件，不要只给片段，不要写“省略”。
-    2) 多文件输出时，默认使用如下格式（非常重要）：
+    2) 如果当前用户消息并不是在要求创建/修改项目文件，而只是普通问答、闲聊、介绍自己、解释概念，则不要输出任何 `[[file:...]]`，也不要擅自创建 `README.md`、说明文档或示例文件。
+    3) 多文件输出时，默认使用如下格式（非常重要）：
        [[file:relative/path.ext]]
        <完整文件内容>
        [[endfile]]
-    3) `relative/path.ext` 必须是相对路径，不要使用绝对路径，不要包含 `..`。
-    4) 语言不限：可生成 Python、Java、Go、Rust、Node.js/TypeScript、Swift、C/C++、PHP、Shell、SQL、配置文件等。
-    5) 若用户未指定技术栈，先做合理技术决策，给出最小可运行结构（含必要入口文件和配置）。
-    6) 若用户明确要求网页/前端项目，继续按网页最佳实践输出（例如 `index.html`、`styles.css`、`script.js` 或框架结构）。
-    7) 所有文件必须互相连通，导入/引用路径必须正确。
-    8) 必须补齐可运行所需的构建与依赖文件（如 `package.json`、`requirements.txt`、`Cargo.toml`、`go.mod`、`CMakeLists.txt`、`pom.xml`、`build.gradle` 等）。
-    9) 输出前可先给 2-5 行很短的步骤日志，示例：`创建项目目录`、`写入 src/main.rs`、`补齐 Cargo.toml`、`准备预览入口`。
-    10) 除非用户明确要求解释，尽量以“极短说明 + 完整文件输出”为主。
-    11) 不要说“先检查 AGENTS.md / 先扫仓库 / 调用工具后再做”；直接输出可落盘文件内容。
+    4) `relative/path.ext` 必须是相对路径，不要使用绝对路径，不要包含 `..`。
+    5) 语言不限：可生成 Python、Java、Go、Rust、Node.js/TypeScript、Swift、C/C++、PHP、Shell、SQL、配置文件等。
+    6) 若用户未指定技术栈，先做合理技术决策，给出最小可运行结构（含必要入口文件和配置）。
+    7) 若用户明确要求网页/前端项目，继续按网页最佳实践输出（例如 `index.html`、`styles.css`、`script.js` 或框架结构）。
+    8) 所有文件必须互相连通，导入/引用路径必须正确。
+    9) 必须补齐可运行所需的构建与依赖文件（如 `package.json`、`requirements.txt`、`Cargo.toml`、`go.mod`、`CMakeLists.txt`、`pom.xml`、`build.gradle` 等）。
+    10) 输出前可先给 2-5 行很短的步骤日志，示例：`创建项目目录`、`写入 src/main.rs`、`补齐 Cargo.toml`、`准备预览入口`。
+    11) 除非用户明确要求解释，尽量以“极短说明 + 完整文件输出”为主。
+    12) 不要说“先检查 AGENTS.md / 先扫仓库 / 调用工具后再做”；直接输出可落盘文件内容。
+    """
+    private static let workspaceContinuationSystemPrompt = """
+    你当前连接着一个活动工作区（latest）。把它当成当前任务的真实项目状态来源，而不是抽象示例。
+    - 如果用户是在继续刚才的项目、代码、报错、验证或终端任务，优先基于当前工作区继续，不要从零重建。
+    - 先利用当前工作区上下文、入口文件、现有文件列表和最近一次自动验证结果来判断下一步。
+    - 优先做最小必要改动；如果只需要改 1-2 个文件，就只输出这些文件，不要每次重写整个项目。
+    - 如果最近验证日志显示失败，优先根据失败日志修复。
+    - 普通聊天、介绍自己、解释概念、泛问答时，不要输出 `[[file:...]]`，不要虚构 `README.md` 或其他项目文件。
+    - 只有当用户明确要求创建/修改文件、生成项目，或明显在继续当前工作区任务时，才进入文件输出模式。
+    - 如果当前请求与工作区无关，就忽略工作区上下文，正常回答。
+    """
+    private static let executionTaskSystemPrompt = """
+    当前任务更接近 agent 执行，而不是普通聊天。请遵循：
+    - 先基于已有工作区上下文、最近验证结果和当前报错，判断最可能的下一步。
+    - 优先给“最短路径”的动作，不要泛泛而谈，不要让用户重复提供已经有的信息。
+    - 如果需要命令，给可直接执行的完整命令，并尽量放在独立代码块中。
+    - 如果需要修改项目，优先输出最小必要改动；能只改 1 个文件，就不要重写整个项目。
+    - 如果是在继续修 bug / 继续实现功能，默认是在接手同一个项目继续推进。
+    - 不要把普通问答硬包装成执行任务；与工作区无关时正常回答即可。
     """
     private static let strictCodeOnlySystemPrompt = """
     当用户明确提出“只输出代码、不输出解释、保持逻辑不变、自动修复格式”时，必须严格执行：
@@ -149,6 +169,10 @@ struct ChatRequestBuilder {
                 \(latestProjectContext)
                 """
             ])
+            prefix.append([
+                "role": "system",
+                "content": workspaceContinuationSystemPrompt
+            ])
         }
 
         if shouldInjectFrontendAutoBuildPrompt(
@@ -167,6 +191,28 @@ struct ChatRequestBuilder {
                 "role": "system",
                 "content": strictCodeOnlySystemPrompt
             ])
+        }
+
+        if shouldInjectExecutionTaskPrompt(message: message, history: history) {
+            prefix.append([
+                "role": "system",
+                "content": executionTaskSystemPrompt
+            ])
+        }
+
+        if shouldInjectBundledAgentContext(message: message, history: history) {
+            if let memory = BundledAgentContextProvider.memoryContext() {
+                prefix.append([
+                    "role": "system",
+                    "content": "[IEXA 内部记忆]\n\(memory)"
+                ])
+            }
+            if let plan = BundledAgentContextProvider.planContext() {
+                prefix.append([
+                    "role": "system",
+                    "content": "[IEXA 当前路线图]\n\(plan)"
+                ])
+            }
         }
 
         for skill in enabledBuiltinSkills(from: enabledBuiltinSkillIDs) {
@@ -239,6 +285,7 @@ struct ChatRequestBuilder {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
         guard !raw.isEmpty else { return false }
+        if looksLikeGeneralChatRequest(raw) { return false }
         if containsNoFileDirective(raw) { return false }
 
         let intentMarkers = [
@@ -324,7 +371,7 @@ struct ChatRequestBuilder {
         for message in history.reversed() {
             guard message.role == .assistant else { continue }
             inspected += 1
-            if FrontendProjectBuilder.canGenerateProject(from: message) {
+            if FrontendProjectBuilder.hasExplicitProjectPayload(from: message) {
                 return true
             }
             if inspected >= 6 {
@@ -477,19 +524,101 @@ struct ChatRequestBuilder {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
         guard !raw.isEmpty else { return false }
+        if looksLikeGeneralChatRequest(raw) { return false }
 
-        let followupMarkers = [
-            "继续", "修改", "修复", "优化", "完善", "重构", "接着", "顺便",
+        let directWorkspaceMarkers = [
             "项目", "网站", "页面", "前端", "后端", "代码", "文件", "目录",
             "运行", "执行", "测试", "编译", "构建", "报错", "错误", "日志",
-            "continue", "modify", "update", "fix", "improve", "refactor",
-            "run", "test", "build", "compile", "error", "log", "project", "workspace"
+            "project", "workspace", "code", "file", "files", "directory",
+            "run", "test", "build", "compile", "error", "log"
         ]
-        if followupMarkers.contains(where: { raw.contains($0) }) {
+        if directWorkspaceMarkers.contains(where: { raw.contains($0) }) {
+            return true
+        }
+
+        guard recentConversationContainsProjectContext(history: history) else {
+            return false
+        }
+
+        let continuationMarkers = [
+            "继续", "修改", "修复", "优化", "完善", "重构", "接着", "顺便",
+            "continue", "modify", "update", "fix", "improve", "refactor"
+        ]
+        return continuationMarkers.contains(where: { raw.contains($0) })
+    }
+
+    private static func shouldInjectExecutionTaskPrompt(
+        message: ChatMessage,
+        history: [ChatMessage]
+    ) -> Bool {
+        guard message.role == .user else { return false }
+
+        let raw = message.copyableText
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard !raw.isEmpty else { return false }
+        if looksLikeGeneralChatRequest(raw) { return false }
+
+        let directExecutionMarkers = [
+            "运行", "执行", "测试", "编译", "构建", "安装", "部署",
+            "报错", "错误", "日志", "修复", "修一下", "改一下", "继续改",
+            "run", "execute", "test", "build", "compile", "install", "deploy",
+            "error", "errors", "log", "fix", "debug", "continue"
+        ]
+        if directExecutionMarkers.contains(where: { raw.contains($0) }) {
             return true
         }
 
         return recentConversationContainsProjectContext(history: history)
+            && looksLikeProjectFollowupEdit(raw)
+    }
+
+    private static func shouldInjectBundledAgentContext(
+        message: ChatMessage,
+        history: [ChatMessage]
+    ) -> Bool {
+        guard message.role == .user else { return false }
+
+        let raw = message.copyableText
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard !raw.isEmpty else { return false }
+        guard !looksLikeGeneralChatRequest(raw) else { return false }
+
+        if shouldInjectExecutionTaskPrompt(message: message, history: history) {
+            return true
+        }
+        if shouldInjectLatestProjectContext(message: message, history: history) {
+            return true
+        }
+        return shouldInjectFrontendAutoBuildPrompt(
+            enabled: true,
+            message: message,
+            history: history
+        )
+    }
+
+    private static func looksLikeGeneralChatRequest(_ raw: String) -> Bool {
+        let markers = [
+            "你是谁", "你叫什么", "介绍你自己", "介绍一下你自己", "详细介绍自己", "详细介绍你自己",
+            "聊聊你自己", "自我介绍", "你的功能", "你能做什么",
+            "who are you", "introduce yourself", "tell me about yourself",
+            "what can you do", "your capabilities"
+        ]
+        if markers.contains(where: { raw.contains($0) }) {
+            return true
+        }
+
+        if raw.range(
+            of: #"(介绍|聊聊|说说|详细介绍).{0,8}(你自己|自己|你|你的功能|你能做什么)"#,
+            options: .regularExpression
+        ) != nil {
+            return true
+        }
+
+        return false
     }
 
     private static func compactHistoryForRequest(_ history: [ChatMessage]) -> [ChatMessage] {

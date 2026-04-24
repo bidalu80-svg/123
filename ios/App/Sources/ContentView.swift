@@ -5,12 +5,18 @@ struct ContentView: View {
     @EnvironmentObject private var authViewModel: AuthViewModel
 
     var body: some View {
-        NavigationStack {
-            if authViewModel.isAuthenticated {
-                ChatScreen()
-            } else {
-                AuthScreen()
+        ZStack {
+            MinisTheme.appBackground
+                .ignoresSafeArea()
+
+            NavigationStack {
+                if authViewModel.isAuthenticated {
+                    ChatScreen()
+                } else {
+                    AuthScreen()
+                }
             }
+            .background(MinisTheme.appBackground.ignoresSafeArea())
         }
         .tint(.primary)
         .preferredColorScheme(viewModel.preferredColorScheme)

@@ -133,6 +133,40 @@ enum FrontendProjectBuilder {
         return canGenerate
     }
 
+    static func hasExplicitProjectPayload(from message: ChatMessage) -> Bool {
+        if message.fileAttachments.contains(where: {
+            $0.binaryBase64 == nil
+                && sanitizeRelativePath($0.fileName) != nil
+                && !$0.textContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }) {
+            return true
+        }
+
+        let text = message.content.replacingOccurrences(of: "\r\n", with: "\n")
+        return containsTaggedFile(in: text)
+    }
+
+    static func explicitPayloadProgressSnapshot(from message: ChatMessage) -> ChatProgressSnapshot? {
+        if message.isStreaming {
+            return explicitStreamingChatProgressSnapshot(from: message)
+        }
+
+        let parsed = extractExplicitProjectFiles(from: message)
+        let normalizedPaths = parsed.map { $0.path.lowercased() }
+        let uniquePaths = Array(Set(normalizedPaths))
+        guard !uniquePaths.isEmpty else { return nil }
+
+        let hasHTMLPath = uniquePaths.contains(where: { isHTMLPath($0) })
+        let hasPHPPath = uniquePaths.contains(where: { isPHPPath($0) })
+        let hasHTMLLikeFile = parsed.contains(where: { looksLikeHTML($0.content) })
+        let hasPHPLikeFile = parsed.contains(where: { looksLikePHP($0.content) })
+
+        return ChatProgressSnapshot(
+            detectedFileCount: uniquePaths.count,
+            hasEntryHTML: hasHTMLPath || hasPHPPath || hasHTMLLikeFile || hasPHPLikeFile
+        )
+    }
+
     static func chatProgressSnapshot(from message: ChatMessage) -> ChatProgressSnapshot? {
         if !message.isStreaming, let cached = progressSnapshotCache[message.id] {
             switch cached {
@@ -223,6 +257,24 @@ enum FrontendProjectBuilder {
 
         return ChatProgressSnapshot(
             detectedFileCount: max(detectedFileCount, 1),
+            hasEntryHTML: hasEntryHTML
+        )
+    }
+
+    private static func explicitStreamingChatProgressSnapshot(from message: ChatMessage) -> ChatProgressSnapshot? {
+        let text = message.content.replacingOccurrences(of: "\r\n", with: "\n")
+        let taggedPaths = explicitTaggedPaths(in: text)
+        let attachmentPaths = message.fileAttachments.compactMap { attachment -> String? in
+            guard attachment.binaryBase64 == nil else { return nil }
+            guard !attachment.textContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            return sanitizeRelativePath(attachment.fileName)?.lowercased()
+        }
+        let uniquePaths = Array(Set(taggedPaths + attachmentPaths))
+        guard !uniquePaths.isEmpty else { return nil }
+
+        let hasEntryHTML = uniquePaths.contains(where: { isHTMLPath($0) || isPHPPath($0) })
+        return ChatProgressSnapshot(
+            detectedFileCount: uniquePaths.count,
             hasEntryHTML: hasEntryHTML
         )
     }
@@ -329,7 +381,8 @@ enum FrontendProjectBuilder {
         let fileManager = FileManager.default
         guard fileManager.fileExists(atPath: latest.path) else { return nil }
 
-        let entryPath = latestEntryFileURL()?.lastPathComponent ?? "无"
+        let entryFileURL = latestEntryFileURL()
+        let entryPath = entryFileURL?.lastPathComponent ?? "无"
 
         let relativePaths: [String] = {
             guard let enumerator = fileManager.enumerator(
@@ -363,6 +416,14 @@ enum FrontendProjectBuilder {
             let filesText = relativePaths.prefix(20).map { "- \($0)" }.joined(separator: "\n")
             parts.append("文件列表：\n\(filesText)")
         }
+        let snippets = latestProjectKeyFileSnippets(
+            in: latest,
+            entryFileURL: entryFileURL,
+            relativePaths: relativePaths
+        )
+        if !snippets.isEmpty {
+            parts.append("关键文件片段：\n\(snippets.joined(separator: "\n\n"))")
+        }
         if let validation = loadLatestValidationSnapshot() {
             parts.append("""
             最近一次自动验证：
@@ -373,6 +434,72 @@ enum FrontendProjectBuilder {
             """)
         }
         return parts.joined(separator: "\n\n")
+    }
+
+    private static func latestProjectKeyFileSnippets(
+        in latest: URL,
+        entryFileURL: URL?,
+        relativePaths: [String]
+    ) -> [String] {
+        var targets: [String] = []
+
+        if let entryFileURL {
+            let root = latest.standardizedFileURL.path
+            let absolute = entryFileURL.standardizedFileURL.path
+            if absolute.hasPrefix(root + "/") {
+                targets.append(String(absolute.dropFirst(root.count + 1)))
+            } else {
+                targets.append(entryFileURL.lastPathComponent)
+            }
+        }
+
+        let preferredNames = [
+            "package.json",
+            "requirements.txt",
+            "pyproject.toml",
+            "cargo.toml",
+            "go.mod",
+            "package.swift",
+            "pom.xml",
+            "build.gradle",
+            "build.gradle.kts",
+            "readme.md"
+        ]
+        for name in preferredNames {
+            if let matched = relativePaths.first(where: { $0.lowercased() == name }) {
+                targets.append(matched)
+            }
+        }
+
+        var snippets: [String] = []
+        var seen = Set<String>()
+        for relativePath in targets {
+            let normalized = relativePath.lowercased()
+            guard seen.insert(normalized).inserted else { continue }
+            let fileURL = latest.appendingPathComponent(relativePath, isDirectory: false)
+            guard let snippet = contextSnippet(for: fileURL, relativePath: relativePath) else { continue }
+            snippets.append(snippet)
+            if snippets.count >= 3 {
+                break
+            }
+        }
+
+        return snippets
+    }
+
+    private static func contextSnippet(for fileURL: URL, relativePath: String) -> String? {
+        guard let raw = try? String(contentsOf: fileURL, encoding: .utf8) else { return nil }
+        let normalized = raw.replacingOccurrences(of: "\r\n", with: "\n")
+        let trimmed = normalized.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let lines = trimmed.components(separatedBy: "\n")
+        let previewLines = Array(lines.prefix(28)).joined(separator: "\n")
+        let preview = String(previewLines.prefix(1_200))
+        return """
+        --- \(relativePath) ---
+        \(preview)
+        """
     }
 
     static func saveLatestValidationResult(command: String, result: ShellExecutionResult) {
@@ -659,6 +786,24 @@ enum FrontendProjectBuilder {
         return mergeParsedFiles(files)
     }
 
+    private static func extractExplicitProjectFiles(from message: ChatMessage) -> [ParsedWebFile] {
+        var files: [ParsedWebFile] = []
+
+        for attachment in message.fileAttachments {
+            guard attachment.binaryBase64 == nil else { continue }
+            guard let path = sanitizeRelativePath(attachment.fileName) else { continue }
+            let content = normalizeFileContent(
+                unwrapSingleFencedTaggedFileContent(attachment.textContent)
+            )
+            guard !content.isEmpty else { continue }
+            files.append(ParsedWebFile(path: path, content: content))
+        }
+
+        let text = message.content.replacingOccurrences(of: "\r\n", with: "\n")
+        files.append(contentsOf: parseTaggedFiles(in: text))
+        return mergeParsedFiles(files)
+    }
+
     private static func storeCanGenerateCache(_ value: Bool, for messageID: UUID) {
         canGenerateCache[messageID] = value
         canGenerateCacheOrder.removeAll(where: { $0 == messageID })
@@ -816,6 +961,27 @@ enum FrontendProjectBuilder {
             }
         }
         return false
+    }
+
+    private static func explicitTaggedPaths(in text: String) -> [String] {
+        let pattern = #"\[\[file:(.+?)\]\]"#
+        guard let regex = try? NSRegularExpression(
+            pattern: pattern,
+            options: [.caseInsensitive]
+        ) else {
+            return []
+        }
+
+        let nsRange = NSRange(text.startIndex..<text.endIndex, in: text)
+        let matches = regex.matches(in: text, range: nsRange)
+        var paths: [String] = []
+        for match in matches {
+            guard let range = Range(match.range(at: 1), in: text) else { continue }
+            let rawPath = String(text[range])
+            guard let normalized = sanitizeRelativePath(rawPath)?.lowercased() else { continue }
+            paths.append(normalized)
+        }
+        return Array(Set(paths))
     }
 
     private static func containsLikelyProjectFencedBlock(in text: String) -> Bool {

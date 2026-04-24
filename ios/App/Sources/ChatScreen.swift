@@ -175,7 +175,18 @@ struct ChatScreen: View {
         .navigationBarHidden(true)
         .simultaneousGesture(sidebarDragGesture)
         .onChange(of: viewModel.errorMessage) { _, newValue in
-            showErrorAlert = !newValue.isEmpty
+            if shouldSuppressGlobalErrorAlert(newValue) {
+                showErrorAlert = false
+                if !newValue.isEmpty {
+                    DispatchQueue.main.async {
+                        if viewModel.errorMessage == newValue {
+                            viewModel.errorMessage = ""
+                        }
+                    }
+                }
+            } else {
+                showErrorAlert = !newValue.isEmpty
+            }
         }
         .onAppear {
             refreshStarterPromptsIfNeeded()
@@ -373,6 +384,7 @@ struct ChatScreen: View {
                 onRunTerminalCommand: nil
             )
         }
+        .background(MinisTheme.appBackground.ignoresSafeArea())
     }
 
     private var mainContent: some View {
@@ -1130,9 +1142,10 @@ struct ChatScreen: View {
         let shouldAttemptBuild =
             shouldAttemptAutoProjectBuild(for: latestAssistant, in: newMessages)
             || assistantContainsExplicitProjectPayload(latestAssistant)
+        let hasExplicitPayload = assistantContainsExplicitProjectPayload(latestAssistant)
 
         if latestAssistant.isStreaming {
-            if shouldAttemptBuild {
+            if hasExplicitPayload {
                 autoBuildInFlightAssistantIDs.insert(latestAssistant.id)
                 noFileDirectiveAssistantIDs.remove(latestAssistant.id)
             } else {
@@ -1167,7 +1180,7 @@ struct ChatScreen: View {
         }
         noFileDirectiveAssistantIDs.remove(latestAssistant.id)
 
-        guard FrontendProjectBuilder.canGenerateProject(from: latestAssistant) else {
+        guard hasExplicitPayload else {
             autoBuildEligibleAssistantIDs.remove(latestAssistant.id)
             cancelPendingAutoProjectBuild(for: latestAssistant.id)
             if shouldAttemptBuild {
@@ -1492,19 +1505,7 @@ struct ChatScreen: View {
     }
 
     private func assistantContainsExplicitProjectPayload(_ assistant: ChatMessage) -> Bool {
-        let normalized = assistant.content.replacingOccurrences(of: "\r\n", with: "\n")
-        if normalized.range(
-            of: #"\[\[file:(.+?)\]\]"#,
-            options: [.regularExpression, .caseInsensitive]
-        ) != nil {
-            return true
-        }
-
-        return assistant.fileAttachments.contains { attachment in
-            attachment.binaryBase64 == nil
-                && !attachment.fileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                && !attachment.textContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }
+        FrontendProjectBuilder.hasExplicitProjectPayload(from: assistant)
     }
 
     private func containsProjectBuildIntent(_ raw: String) -> Bool {
@@ -1595,7 +1596,7 @@ struct ChatScreen: View {
         for message in messages.reversed() {
             guard message.role == .assistant else { continue }
             inspected += 1
-            if FrontendProjectBuilder.canGenerateProject(from: message) {
+            if FrontendProjectBuilder.hasExplicitProjectPayload(from: message) {
                 return true
             }
             if inspected >= 6 {
@@ -2277,14 +2278,14 @@ struct ChatScreen: View {
         if message.isStreaming {
             let detectedCount = max(
                 1,
-                FrontendProjectBuilder.chatProgressSnapshot(from: message)?.detectedFileCount ?? 0
+                FrontendProjectBuilder.explicitPayloadProgressSnapshot(from: message)?.detectedFileCount ?? 0
             )
             masked.content = "正在后台生成项目文件（\(detectedCount) 个），为保证流畅度暂不展开代码预览…"
         } else {
             let codeEntries = frontendOverlayCodeEntriesForOverlay(from: message)
             let detectedCount = max(
                 codeEntries.count,
-                FrontendProjectBuilder.chatProgressSnapshot(from: message)?.detectedFileCount ?? 0
+                FrontendProjectBuilder.explicitPayloadProgressSnapshot(from: message)?.detectedFileCount ?? 0
             )
             let hasPreview = latestProjectHasPreviewEntry
             if let current = codeEntries.last {
@@ -2825,8 +2826,7 @@ struct ChatScreen: View {
         if autoBuildInFlightAssistantIDs.contains(message.id) {
             return true
         }
-        return FrontendProjectBuilder.canGenerateProject(from: message)
-            && shouldAttemptAutoProjectBuild(for: message, in: messages)
+        return false
     }
 
     private var frontendBuildOverlayState: FrontendBuildOverlayState? {
@@ -2835,7 +2835,7 @@ struct ChatScreen: View {
         guard shouldMaskFrontendCode(for: assistant, in: viewModel.messages) else { return nil }
         guard !assistant.isImageGenerationPlaceholder, !assistant.isVideoGenerationPlaceholder else { return nil }
 
-        let snapshot = FrontendProjectBuilder.chatProgressSnapshot(from: assistant)
+        let snapshot = FrontendProjectBuilder.explicitPayloadProgressSnapshot(from: assistant)
             ?? FrontendProjectBuilder.ChatProgressSnapshot(
                 detectedFileCount: 0,
                 hasEntryHTML: false
@@ -3909,6 +3909,18 @@ struct ChatScreen: View {
         if sendAfterPaste {
             sendCurrentComposerMessage()
         }
+    }
+
+    private func shouldSuppressGlobalErrorAlert(_ message: String) -> Bool {
+        let normalized = message
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard !normalized.isEmpty else { return false }
+        return normalized == "cancelled"
+            || normalized == "canceled"
+            || normalized.contains("已取消")
+            || normalized.contains("cancelled")
+            || normalized.contains("canceled")
     }
 
     private func insertSlashCommandPrefix() {

@@ -203,6 +203,67 @@ final class ChatServiceTests: XCTestCase {
         XCTAssertTrue((projectMessages[1]["content"] as? String)?.contains("项目自动生成模式") == true)
     }
 
+    func testBuildRequestDoesNotInjectProjectOrWorkspacePromptsForGeneralChat() throws {
+        try? FrontendProjectBuilder.clearLatestProject()
+
+        let seededProject = ChatMessage(
+            role: .assistant,
+            content: """
+            [[file:index.html]]
+            <!doctype html>
+            <html><body>OK</body></html>
+            [[endfile]]
+            """
+        )
+        _ = try FrontendProjectBuilder.buildProject(from: seededProject, mode: .overwriteLatestProject)
+
+        let config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
+        let history = [seededProject]
+        let requestMessage = ChatMessage(role: .user, content: "详细介绍一下你自己")
+
+        let request = try ChatRequestBuilder.makeRequest(config: config, history: history, message: requestMessage)
+        let payload = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+        let messages = try XCTUnwrap(json["messages"] as? [[String: Any]])
+        let systemContents = messages
+            .filter { ($0["role"] as? String) == "system" }
+            .compactMap { $0["content"] as? String }
+
+        XCTAssertFalse(systemContents.contains(where: { $0.contains("项目自动生成模式") }))
+        XCTAssertFalse(systemContents.contains(where: { $0.contains("[当前工作区上下文]") }))
+        XCTAssertFalse(systemContents.contains(where: { $0.contains("当前任务更接近 agent 执行") }))
+    }
+
+    func testBuildRequestInjectsWorkspaceContextForProjectFollowup() throws {
+        try? FrontendProjectBuilder.clearLatestProject()
+
+        let seededProject = ChatMessage(
+            role: .assistant,
+            content: """
+            [[file:index.html]]
+            <!doctype html>
+            <html><body>OK</body></html>
+            [[endfile]]
+            """
+        )
+        _ = try FrontendProjectBuilder.buildProject(from: seededProject, mode: .overwriteLatestProject)
+
+        let config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
+        let history = [seededProject]
+        let requestMessage = ChatMessage(role: .user, content: "继续修一下这个项目的报错")
+
+        let request = try ChatRequestBuilder.makeRequest(config: config, history: history, message: requestMessage)
+        let payload = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+        let messages = try XCTUnwrap(json["messages"] as? [[String: Any]])
+        let systemContents = messages
+            .filter { ($0["role"] as? String) == "system" }
+            .compactMap { $0["content"] as? String }
+
+        XCTAssertTrue(systemContents.contains(where: { $0.contains("[当前工作区上下文]") }))
+        XCTAssertTrue(systemContents.contains(where: { $0.contains("当前任务更接近 agent 执行") }))
+    }
+
     func testBuildImagesGenerationRequestUsesConfiguredEndpoint() throws {
         var config = ChatConfig(apiURL: "https://example.com", apiKey: "token-123", model: "gpt-image", timeout: 30, streamEnabled: false)
         config.imagesGenerationsPath = "/v1/images/generations"

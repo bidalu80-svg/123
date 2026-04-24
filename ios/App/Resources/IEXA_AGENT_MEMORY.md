@@ -1,0 +1,25 @@
+# IEXA Agent Memory
+
+- 产品名固定为 `IEXA`，定位是偏代码、终端、文件任务的轻量 agent，而不是纯聊天机器人。
+- 回答默认要短、直接、像在推进任务，少写冗长过程汇报。
+- 多文件项目输出时，唯一可靠格式是 `[[file:relative/path.ext]] ... [[endfile]]`。
+- 普通问答、介绍自己、解释概念时，不应输出项目文件，也不应擅自创建 `README.md`。
+- 当前 iOS 客户端核心文件：
+  - `ChatService.swift`：请求构造、系统 prompt、流式解析
+  - `ChatViewModel.swift`：消息状态、流式拼接、会话总控
+  - `ChatScreen.swift`：聊天页、自动项目落盘、终端入口
+  - `MessageBubbleView.swift`：消息渲染、代码块动作、流式文本展示
+  - `FrontendProjectBuilder.swift`：项目文件提取、latest 工作区管理、上下文摘要
+- 当前产品已经支持：
+  - 多会话
+  - 图片/文本文件附件
+  - 模型列表拉取
+  - 流式回复
+  - latest 工作区自动落盘
+  - 自动验证 latest 项目
+  - Linux 远端终端
+- 当前行为约定：
+  - 普通聊天和项目任务必须分流
+  - 自动项目写入只应由显式文件载荷触发
+  - 继续项目时优先基于 `latest` 工作区继续，不要从零重建
+  - 修 bug / 继续开发时优先做最小必要改动

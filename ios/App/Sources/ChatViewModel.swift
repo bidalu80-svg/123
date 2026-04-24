@@ -328,6 +328,11 @@ final class ChatViewModel: ObservableObject {
             chatState = .idle
         } catch {
             flushAndStopActiveStreamingSession(applyRemaining: true)
+            if isNonCriticalCancellationError(error) {
+                finishCancellation(id: placeholderID, target: targetContext)
+                chatState = .idle
+                return
+            }
             if hasRenderableContent(for: placeholderID, target: targetContext) {
                 finishInterruption(id: placeholderID, error: error, target: targetContext)
             } else {
@@ -427,6 +432,11 @@ final class ChatViewModel: ObservableObject {
             chatState = .idle
         } catch {
             flushAndStopActiveStreamingSession(applyRemaining: true)
+            if isNonCriticalCancellationError(error) {
+                finishCancellation(id: placeholderID, target: targetContext)
+                chatState = .idle
+                return
+            }
             if hasRenderableContent(for: placeholderID, target: targetContext) {
                 finishInterruption(id: placeholderID, error: error, target: targetContext)
             } else {
@@ -663,7 +673,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     func addDraftImage(data: Data, mimeType: String) {
-        let attachment = ChatImageAttachment.fromImageData(data, mimeType: mimeType)
+        let attachment = normalizedDraftImageAttachment(from: data, mimeType: mimeType)
         draftImageAttachments.append(attachment)
         draftImageAttachments = deduplicateImages(draftImageAttachments)
     }
@@ -1035,6 +1045,34 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func finishInterruption(id: UUID, error: Error, target: StreamTargetContext) {
+        if isNonCriticalCancellationError(error) {
+            if target.isPrivateMode {
+                guard let msgIndex = privateMessages.firstIndex(where: { $0.id == id }) else { return }
+                privateMessages[msgIndex].isStreaming = false
+                privateMessages[msgIndex].isImageGenerationPlaceholder = false
+                privateMessages[msgIndex].isVideoGenerationPlaceholder = false
+                syncVisibleMessagesIfNeeded(for: target)
+                statusMessage = "已停止生成"
+                chatState = .idle
+                appendLog("私密聊天：收到取消信号，已保留当前内容。")
+                return
+            }
+
+            guard let index = sessionIndex(for: target),
+                  let msgIndex = sessions[index].messages.firstIndex(where: { $0.id == id }) else { return }
+
+            sessions[index].messages[msgIndex].isStreaming = false
+            sessions[index].messages[msgIndex].isImageGenerationPlaceholder = false
+            sessions[index].messages[msgIndex].isVideoGenerationPlaceholder = false
+            sessions[index].updatedAt = Date()
+            sessions[index].title = buildSessionTitle(from: sessions[index])
+            syncVisibleMessagesIfNeeded(for: target)
+            statusMessage = "已停止生成"
+            chatState = .idle
+            appendLog("聊天测试：收到取消信号，已保留当前内容。")
+            return
+        }
+
         if target.isPrivateMode {
             guard let msgIndex = privateMessages.firstIndex(where: { $0.id == id }) else { return }
             privateMessages[msgIndex].isStreaming = false
@@ -1259,6 +1297,75 @@ final class ChatViewModel: ObservableObject {
         let message = sessions[index].messages[msgIndex]
         let text = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
         return !text.isEmpty || !message.imageAttachments.isEmpty || !message.videoAttachments.isEmpty
+    }
+
+    private func isNonCriticalCancellationError(_ error: Error) -> Bool {
+        if error is CancellationError {
+            return true
+        }
+
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain,
+           nsError.code == URLError.cancelled.rawValue {
+            return true
+        }
+
+        let normalized = nsError.localizedDescription
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return normalized == "cancelled"
+            || normalized == "canceled"
+            || normalized.contains("已取消")
+            || normalized.contains("cancelled")
+            || normalized.contains("canceled")
+    }
+
+    private func normalizedDraftImageAttachment(from data: Data, mimeType: String) -> ChatImageAttachment {
+        let loweredMime = mimeType.lowercased()
+        guard let image = UIImage(data: data) else {
+            return ChatImageAttachment.fromImageData(data, mimeType: mimeType)
+        }
+
+        let maxDimension: CGFloat = 1536
+        let shouldTranscode = loweredMime.contains("heic")
+            || loweredMime.contains("heif")
+            || data.count > 1_400_000
+            || max(image.size.width, image.size.height) > maxDimension
+
+        guard shouldTranscode else {
+            return ChatImageAttachment.fromImageData(data, mimeType: mimeType)
+        }
+
+        let prepared = resizedImageIfNeeded(image, maxDimension: maxDimension)
+        if loweredMime.contains("png"),
+           let pngData = prepared.pngData(),
+           pngData.count <= 2_500_000 {
+            return ChatImageAttachment.fromImageData(pngData, mimeType: "image/png")
+        }
+        if let jpegData = prepared.jpegData(compressionQuality: 0.86) {
+            return ChatImageAttachment.fromImageData(jpegData, mimeType: "image/jpeg")
+        }
+        return ChatImageAttachment.fromImageData(data, mimeType: mimeType)
+    }
+
+    private func resizedImageIfNeeded(_ image: UIImage, maxDimension: CGFloat) -> UIImage {
+        let originalSize = image.size
+        let longestSide = max(originalSize.width, originalSize.height)
+        guard longestSide > maxDimension, longestSide > 0 else { return image }
+
+        let scale = maxDimension / longestSide
+        let targetSize = CGSize(
+            width: max(1, floor(originalSize.width * scale)),
+            height: max(1, floor(originalSize.height * scale))
+        )
+
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        format.opaque = true
+        let renderer = UIGraphicsImageRenderer(size: targetSize, format: format)
+        return renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: targetSize))
+        }
     }
 
     private func beginBackgroundSendTask() {
