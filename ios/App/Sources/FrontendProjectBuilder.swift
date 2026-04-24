@@ -45,6 +45,11 @@ enum FrontendProjectBuilder {
         let content: String
     }
 
+    private struct ExistingProjectSnapshot {
+        let files: [ParsedWebFile]
+        let preferredEntryPath: String?
+    }
+
     private struct LatestValidationSnapshot: Codable {
         let command: String
         let exitCode: Int
@@ -545,6 +550,7 @@ enum FrontendProjectBuilder {
         mode: BuildMode,
         useParseCache: Bool = true
     ) throws -> BuildResult {
+        let existingProject = mode == .overwriteLatestProject ? existingLatestProjectSnapshot() : nil
         var parsedFiles = useParseCache
             ? extractProjectFiles(from: message)
             : extractProjectFilesWithoutCache(from: message)
@@ -562,6 +568,18 @@ enum FrontendProjectBuilder {
 
         var merged: [String: String] = [:]
         var orderedPaths: [String] = []
+        if let existingProject {
+            for item in existingProject.files {
+                let normalizedPath = item.path.trimmingCharacters(in: .whitespacesAndNewlines)
+                let normalizedContent = normalizeFileContent(item.content)
+                guard !normalizedPath.isEmpty, !normalizedContent.isEmpty else { continue }
+                if merged[normalizedPath] == nil {
+                    orderedPaths.append(normalizedPath)
+                }
+                merged[normalizedPath] = normalizedContent
+            }
+        }
+
         for item in parsedFiles {
             let normalizedPath = item.path.trimmingCharacters(in: .whitespacesAndNewlines)
             let normalizedContent = normalizeFileContent(item.content)
@@ -583,15 +601,22 @@ enum FrontendProjectBuilder {
         let scriptPaths = orderedPaths.filter { isScriptPath($0) }
 
         if !hadNaturalPreviewEntry {
-            let synthesized = synthesizedIndexHTML(
-                stylePaths: stylePaths,
-                scriptPaths: scriptPaths,
-                projectPaths: orderedPaths
-            )
-            if merged["index.html"] == nil {
-                orderedPaths.insert("index.html", at: 0)
+            if let existingEntryPath = existingProject?.preferredEntryPath,
+               merged[existingEntryPath] != nil {
+                if !orderedPaths.contains(existingEntryPath) {
+                    orderedPaths.insert(existingEntryPath, at: 0)
+                }
+            } else {
+                let synthesized = synthesizedIndexHTML(
+                    stylePaths: stylePaths,
+                    scriptPaths: scriptPaths,
+                    projectPaths: orderedPaths
+                )
+                if merged["index.html"] == nil {
+                    orderedPaths.insert("index.html", at: 0)
+                }
+                merged["index.html"] = synthesized
             }
-            merged["index.html"] = synthesized
         }
 
         guard let entryRelativePath = preferredEntryPath(from: orderedPaths) else {
@@ -681,6 +706,55 @@ enum FrontendProjectBuilder {
         let fileURL = latest.appendingPathComponent(latestValidationSnapshotFileName, isDirectory: false)
         guard let data = try? Data(contentsOf: fileURL) else { return nil }
         return try? JSONDecoder().decode(LatestValidationSnapshot.self, from: data)
+    }
+
+    private static func existingLatestProjectSnapshot() -> ExistingProjectSnapshot? {
+        guard let latest = latestProjectURL() else { return nil }
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: latest.path) else { return nil }
+
+        guard let enumerator = fileManager.enumerator(
+            at: latest,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return nil
+        }
+
+        var files: [ParsedWebFile] = []
+        for case let fileURL as URL in enumerator {
+            guard let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey]),
+                  values.isRegularFile == true else {
+                continue
+            }
+            guard let content = try? String(contentsOf: fileURL, encoding: .utf8) else {
+                continue
+            }
+            let absolute = fileURL.standardizedFileURL.path
+            let root = latest.standardizedFileURL.path
+            let relative = absolute.hasPrefix(root + "/")
+                ? String(absolute.dropFirst(root.count + 1))
+                : fileURL.lastPathComponent
+            guard let normalized = sanitizeRelativePath(relative) else { continue }
+            let normalizedContent = normalizeFileContent(content)
+            guard !normalizedContent.isEmpty else { continue }
+            files.append(ParsedWebFile(path: normalized, content: normalizedContent))
+        }
+
+        let preferredEntryPath: String? = {
+            guard let entryURL = latestEntryFileURL() else { return nil }
+            let absolute = entryURL.standardizedFileURL.path
+            let root = latest.standardizedFileURL.path
+            let relative = absolute.hasPrefix(root + "/")
+                ? String(absolute.dropFirst(root.count + 1))
+                : entryURL.lastPathComponent
+            return sanitizeRelativePath(relative)
+        }()
+
+        if files.isEmpty, preferredEntryPath == nil {
+            return nil
+        }
+        return ExistingProjectSnapshot(files: files, preferredEntryPath: preferredEntryPath)
     }
 
     private static func suggestedValidationCommand(
@@ -1865,9 +1939,6 @@ enum FrontendProjectBuilder {
         switch mode {
         case .overwriteLatestProject:
             let latest = root.appendingPathComponent("latest", isDirectory: true)
-            if fileManager.fileExists(atPath: latest.path) {
-                try fileManager.removeItem(at: latest)
-            }
             try fileManager.createDirectory(at: latest, withIntermediateDirectories: true)
             return latest
         case .createNewProject:

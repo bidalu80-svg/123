@@ -1689,93 +1689,80 @@ struct MessageBubbleView: View {
         let canRunHTML = supportsHTMLPreview(language: language, title: title, content: actionContent)
         let runOutput = codeRunOutputs[copyToken]
         let runError = codeRunErrors[copyToken]
+        let isStandaloneSnippet = !title.hasPrefix("FILE ·")
+        let badgeTitle = codeBlockBadgeTitle(title: title, language: language)
+        let topChromeHeight: CGFloat = isStandaloneSnippet ? 30 : 0
+        let codeViewportContentHeight = codeViewportInnerMaxHeight - topChromeHeight
 
         return VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                Text(title)
-                    .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(Color.white.opacity(0.68))
-                Spacer()
-                if canRunShell {
-                    Button {
-                        if isRunning {
-                            stopShellRun(token: copyToken)
-                        } else {
-                            requestRemoteShellRun(actionContent, token: copyToken)
+            if !isStandaloneSnippet {
+                HStack(spacing: 10) {
+                    Text(title)
+                        .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(Color.white.opacity(0.68))
+                    Spacer()
+                    if canRunShell {
+                        Button {
+                            if isRunning {
+                                stopShellRun(token: copyToken)
+                            } else {
+                                requestRemoteShellRun(actionContent, token: copyToken)
+                            }
+                        } label: {
+                            Image(systemName: isRunning ? "stop.fill" : "terminal")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(Color.white.opacity(0.92))
+                                .frame(width: 28, height: 28)
                         }
+                        .buttonStyle(MiniIconButtonStyle())
+                        .accessibilityLabel(isRunning ? "停止终端运行" : "运行终端命令")
+                    }
+                    if canRunPython {
+                        Button {
+                            if isRunning {
+                                stopPythonRun(token: copyToken)
+                            } else {
+                                requestPythonRun(actionContent, token: copyToken)
+                            }
+                        } label: {
+                            Image(systemName: isRunning ? "stop.fill" : "play.fill")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(Color.white.opacity(0.92))
+                                .frame(width: 28, height: 28)
+                        }
+                        .buttonStyle(MiniIconButtonStyle())
+                        .accessibilityLabel(isRunning ? "停止 Python 运行" : "运行 Python")
+                    }
+                    if canRunHTML {
+                        Button {
+                            openHTMLPreview(title: title, content: actionContent)
+                        } label: {
+                            Image(systemName: "globe")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(Color.white.opacity(0.92))
+                                .frame(width: 28, height: 28)
+                        }
+                        .buttonStyle(MiniIconButtonStyle())
+                        .accessibilityLabel("打开网页预览")
+                    }
+                    Button {
+                        openCodeViewer(
+                            title: title,
+                            language: language,
+                            displayContent: content
+                        )
                     } label: {
-                        Image(systemName: isRunning ? "stop.fill" : "terminal")
+                        Image(systemName: "doc.text")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(Color.white.opacity(0.92))
                             .frame(width: 28, height: 28)
                     }
                     .buttonStyle(MiniIconButtonStyle())
-                    .accessibilityLabel(isRunning ? "停止终端运行" : "运行终端命令")
+                    .disabled(actionContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    copyCodeButton(copyToken: copyToken, actionContent: actionContent, isCopied: isCopied)
                 }
-                if canRunPython {
-                    Button {
-                        if isRunning {
-                            stopPythonRun(token: copyToken)
-                        } else {
-                            requestPythonRun(actionContent, token: copyToken)
-                        }
-                    } label: {
-                        Image(systemName: isRunning ? "stop.fill" : "play.fill")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Color.white.opacity(0.92))
-                            .frame(width: 28, height: 28)
-                    }
-                    .buttonStyle(MiniIconButtonStyle())
-                    .accessibilityLabel(isRunning ? "停止 Python 运行" : "运行 Python")
-                }
-                if canRunHTML {
-                    Button {
-                        openHTMLPreview(title: title, content: actionContent)
-                    } label: {
-                        Image(systemName: "globe")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Color.white.opacity(0.92))
-                            .frame(width: 28, height: 28)
-                    }
-                    .buttonStyle(MiniIconButtonStyle())
-                    .accessibilityLabel("打开网页预览")
-                }
-                Button {
-                    openCodeViewer(
-                        title: title,
-                        language: language,
-                        displayContent: content
-                    )
-                } label: {
-                    Image(systemName: "doc.text")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Color.white.opacity(0.92))
-                        .frame(width: 28, height: 28)
-                }
-                .buttonStyle(MiniIconButtonStyle())
-                .disabled(actionContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                Button {
-                    UIPasteboard.general.string = actionContent
-                    UINotificationFeedbackGenerator().notificationOccurred(.success)
-                    withAnimation(.easeInOut(duration: 0.16)) {
-                        copiedCodeToken = copyToken
-                    }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                        guard copiedCodeToken == copyToken else { return }
-                        withAnimation(.easeInOut(duration: 0.16)) {
-                            copiedCodeToken = nil
-                        }
-                    }
-                } label: {
-                    Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(isCopied ? MinisTheme.accentGreen : Color.white.opacity(0.92))
-                        .frame(width: 28, height: 28)
-                }
-                .buttonStyle(MiniIconButtonStyle())
-                .animation(.easeInOut(duration: 0.16), value: isCopied)
+                .padding(.horizontal, 2)
             }
-            .padding(.horizontal, 2)
 
             ZStack(alignment: .bottomTrailing) {
                 RoundedRectangle(cornerRadius: 11, style: .continuous)
@@ -1790,13 +1777,75 @@ struct MessageBubbleView: View {
                     codeThemeMode: codeThemeMode,
                     isDarkMode: colorScheme == .dark,
                     isScrollEnabled: true,
-                    maximumHeight: codeViewportInnerMaxHeight,
+                    maximumHeight: codeViewportContentHeight,
                     autoFollowTail: shouldAutoFollowTail,
                     disableSyntaxHighlighting: disableSyntaxHighlighting
                 )
-                .frame(maxWidth: .infinity, maxHeight: codeViewportInnerMaxHeight, alignment: .topLeading)
+                .frame(maxWidth: .infinity, maxHeight: codeViewportContentHeight, alignment: .topLeading)
                 .padding(.horizontal, 10)
-                .padding(.vertical, 10)
+                .padding(.top, 10 + topChromeHeight)
+                .padding(.bottom, 10)
+
+                if isStandaloneSnippet {
+                    HStack(alignment: .center, spacing: 8) {
+                        Text(badgeTitle)
+                            .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(Color(red: 0.39, green: 0.93, blue: 0.62))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(
+                                Capsule(style: .continuous)
+                                    .fill(Color.white.opacity(colorScheme == .dark ? 0.05 : 0.08))
+                            )
+
+                        Spacer(minLength: 0)
+
+                        if canRunShell {
+                            Button {
+                                if isRunning {
+                                    stopShellRun(token: copyToken)
+                                } else {
+                                    requestRemoteShellRun(actionContent, token: copyToken)
+                                }
+                            } label: {
+                                Image(systemName: isRunning ? "stop.fill" : "terminal")
+                                    .font(.system(size: 12.5, weight: .semibold))
+                                    .foregroundStyle(Color.white.opacity(0.92))
+                                    .frame(width: 28, height: 28)
+                            }
+                            .buttonStyle(MiniIconButtonStyle())
+                        } else if canRunPython {
+                            Button {
+                                if isRunning {
+                                    stopPythonRun(token: copyToken)
+                                } else {
+                                    requestPythonRun(actionContent, token: copyToken)
+                                }
+                            } label: {
+                                Image(systemName: isRunning ? "stop.fill" : "play.fill")
+                                    .font(.system(size: 12.5, weight: .semibold))
+                                    .foregroundStyle(Color.white.opacity(0.92))
+                                    .frame(width: 28, height: 28)
+                            }
+                            .buttonStyle(MiniIconButtonStyle())
+                        } else if canRunHTML {
+                            Button {
+                                openHTMLPreview(title: title, content: actionContent)
+                            } label: {
+                                Image(systemName: "globe")
+                                    .font(.system(size: 12.5, weight: .semibold))
+                                    .foregroundStyle(Color.white.opacity(0.92))
+                                    .frame(width: 28, height: 28)
+                            }
+                            .buttonStyle(MiniIconButtonStyle())
+                        }
+
+                        copyCodeButton(copyToken: copyToken, actionContent: actionContent, isCopied: isCopied)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.top, 8)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                }
 
                 if shouldShowScrollHint {
                     HStack(spacing: 4) {
@@ -1897,6 +1946,43 @@ struct MessageBubbleView: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(codeCardBorderColor, lineWidth: 1)
         )
+    }
+
+    private func copyCodeButton(
+        copyToken: String,
+        actionContent: String,
+        isCopied: Bool
+    ) -> some View {
+        Button {
+            UIPasteboard.general.string = actionContent
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            withAnimation(.easeInOut(duration: 0.16)) {
+                copiedCodeToken = copyToken
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                guard copiedCodeToken == copyToken else { return }
+                withAnimation(.easeInOut(duration: 0.16)) {
+                    copiedCodeToken = nil
+                }
+            }
+        } label: {
+            Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(isCopied ? MinisTheme.accentGreen : Color.white.opacity(0.92))
+                .frame(width: 28, height: 28)
+        }
+        .buttonStyle(MiniIconButtonStyle())
+        .animation(.easeInOut(duration: 0.16), value: isCopied)
+    }
+
+    private func codeBlockBadgeTitle(title: String, language: String?) -> String {
+        if let language {
+            let trimmed = language.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                return trimmed.lowercased()
+            }
+        }
+        return title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
     private func openCodeViewer(
