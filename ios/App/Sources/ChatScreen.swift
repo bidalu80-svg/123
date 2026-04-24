@@ -594,12 +594,15 @@ struct ChatScreen: View {
                                 : MinisTheme.softPill
                         )
 
-                    Image("PrivateModeIcon")
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: 30, height: 30)
-                        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                        .opacity(viewModel.isPrivateMode ? 1 : 0.72)
+                    IEXASparkleMark(
+                        primarySize: 16,
+                        secondarySize: 8.5,
+                        width: 24,
+                        height: 20,
+                        secondaryOffsetX: -4.5,
+                        secondaryOffsetY: -2
+                    )
+                    .opacity(viewModel.isPrivateMode ? 1 : 0.82)
                 }
                 .frame(width: 36, height: 36)
                 .overlay {
@@ -607,7 +610,7 @@ struct ChatScreen: View {
                         .stroke(
                             viewModel.isPrivateMode
                                 ? Color(red: 0.29, green: 0.44, blue: 0.78)
-                                : Color.black.opacity(0.1),
+                                : MinisTheme.strongStroke,
                             lineWidth: 0.9
                         )
                 }
@@ -4419,12 +4422,12 @@ private final class NativeStreamingMessageView: UIView {
 
         let primarySparkle = UIImageView(image: UIImage(systemName: "sparkles"))
         primarySparkle.translatesAutoresizingMaskIntoConstraints = false
-        primarySparkle.tintColor = UIColor(red: 0.79, green: 0.74, blue: 0.58, alpha: 1)
+        primarySparkle.tintColor = MinisTheme.sparklePrimaryUIColor
         primarySparkle.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 18, weight: .semibold)
 
         let secondarySparkle = UIImageView(image: UIImage(systemName: "sparkles"))
         secondarySparkle.translatesAutoresizingMaskIntoConstraints = false
-        secondarySparkle.tintColor = UIColor(red: 0.84, green: 0.80, blue: 0.66, alpha: 1)
+        secondarySparkle.tintColor = MinisTheme.sparkleSecondaryUIColor
         secondarySparkle.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 10, weight: .bold)
 
         iconContainer.addSubview(primarySparkle)

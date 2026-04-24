@@ -177,17 +177,7 @@ struct MessageBubbleView: View {
     }
 
     private var assistantIdentityIcon: some View {
-        ZStack(alignment: .topLeading) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(Color(red: 0.79, green: 0.74, blue: 0.58))
-
-            Image(systemName: "sparkles")
-                .font(.system(size: 9.5, weight: .bold))
-                .foregroundStyle(Color(red: 0.84, green: 0.80, blue: 0.66))
-                .offset(x: -5, y: -2)
-        }
-        .frame(width: 26, height: 22)
+        IEXASparkleMark()
     }
 
     private var assistantActionBar: some View {
