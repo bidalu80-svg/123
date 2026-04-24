@@ -11,6 +11,8 @@ enum FrontendProjectBuilder {
         let entryFileURL: URL
         let entryHTML: String
         let writtenRelativePaths: [String]
+        let writtenFiles: [String: String]
+        let suggestedValidationCommand: String?
         let createdNewProject: Bool
         let shouldAutoOpenPreview: Bool
         let hadNaturalPreviewEntry: Bool
@@ -41,6 +43,13 @@ enum FrontendProjectBuilder {
     private struct ParsedWebFile {
         let path: String
         let content: String
+    }
+
+    private struct LatestValidationSnapshot: Codable {
+        let command: String
+        let exitCode: Int
+        let output: String
+        let updatedAt: Date
     }
 
     private static let knownLanguageDescriptors: Set<String> = [
@@ -83,6 +92,7 @@ enum FrontendProjectBuilder {
         ".gitignore", ".gitattributes", ".editorconfig", ".env", ".env.example"
     ]
     private static let latestEntryPointerFileName = ".iexa-latest-entry"
+    private static let latestValidationSnapshotFileName = ".iexa-latest-validation.json"
     private static let canGenerateCacheLimit = 64
     private static let progressSnapshotCacheLimit = 36
     private static let parsedFilesCacheLimit = 6
@@ -314,6 +324,83 @@ enum FrontendProjectBuilder {
         latestProjectURL()?.path ?? "不可用"
     }
 
+    static func latestProjectConversationContext() -> String? {
+        guard let latest = latestProjectURL() else { return nil }
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: latest.path) else { return nil }
+
+        let entryPath = latestEntryFileURL()?.lastPathComponent ?? "无"
+
+        let relativePaths: [String] = {
+            guard let enumerator = fileManager.enumerator(
+                at: latest,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            ) else {
+                return []
+            }
+
+            var collected: [String] = []
+            for case let fileURL as URL in enumerator {
+                guard let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey]),
+                      values.isRegularFile == true else {
+                    continue
+                }
+                let absolute = fileURL.standardizedFileURL.path
+                let root = latest.standardizedFileURL.path
+                let relative = absolute.hasPrefix(root + "/")
+                    ? String(absolute.dropFirst(root.count + 1))
+                    : fileURL.lastPathComponent
+                collected.append(relative)
+            }
+            return collected.sorted()
+        }()
+
+        var parts: [String] = []
+        parts.append("当前 latest 工作区已有项目。")
+        parts.append("入口文件：\(entryPath)")
+        if !relativePaths.isEmpty {
+            let filesText = relativePaths.prefix(20).map { "- \($0)" }.joined(separator: "\n")
+            parts.append("文件列表：\n\(filesText)")
+        }
+        if let validation = loadLatestValidationSnapshot() {
+            parts.append("""
+            最近一次自动验证：
+            - 命令：\(validation.command)
+            - 退出码：\(validation.exitCode)
+            - 输出摘要：
+            \(validation.output)
+            """)
+        }
+        return parts.joined(separator: "\n\n")
+    }
+
+    static func saveLatestValidationResult(command: String, result: ShellExecutionResult) {
+        guard let latest = latestProjectURL() else { return }
+        let trimmedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedCommand.isEmpty else { return }
+
+        let trimmedOutput = result.output
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let snapshot = LatestValidationSnapshot(
+            command: trimmedCommand,
+            exitCode: result.exitCode,
+            output: String(trimmedOutput.prefix(2400)),
+            updatedAt: Date()
+        )
+
+        let fileURL = latest.appendingPathComponent(latestValidationSnapshotFileName, isDirectory: false)
+        if let data = try? JSONEncoder().encode(snapshot) {
+            try? data.write(to: fileURL, options: .atomic)
+        }
+    }
+
+    static func clearLatestValidationResult() {
+        guard let latest = latestProjectURL() else { return }
+        let fileURL = latest.appendingPathComponent(latestValidationSnapshotFileName, isDirectory: false)
+        try? FileManager.default.removeItem(at: fileURL)
+    }
+
     static func clearLatestProject() throws {
         let fileManager = FileManager.default
         guard let latest = latestProjectURL() else {
@@ -410,6 +497,14 @@ enum FrontendProjectBuilder {
 
         let projectDirectoryURL = try prepareProjectDirectory(mode: mode)
         let fileManager = FileManager.default
+        let suggestedValidationCommand = suggestedValidationCommand(
+            orderedPaths: orderedPaths,
+            files: merged
+        )
+
+        if mode == .overwriteLatestProject {
+            clearLatestValidationResult()
+        }
 
         for relativePath in orderedPaths {
             guard let content = merged[relativePath] else { continue }
@@ -434,6 +529,8 @@ enum FrontendProjectBuilder {
             entryFileURL: projectDirectoryURL.appendingPathComponent(entryRelativePath, isDirectory: false),
             entryHTML: finalizedEntryHTML,
             writtenRelativePaths: orderedPaths,
+            writtenFiles: merged,
+            suggestedValidationCommand: suggestedValidationCommand,
             createdNewProject: mode == .createNewProject,
             shouldAutoOpenPreview: hadNaturalPreviewEntry || !stylePaths.isEmpty || !scriptPaths.isEmpty,
             hadNaturalPreviewEntry: hadNaturalPreviewEntry
@@ -450,6 +547,75 @@ enum FrontendProjectBuilder {
 
         let pointerURL = projectDirectoryURL.appendingPathComponent(latestEntryPointerFileName, isDirectory: false)
         try? "\(normalized)\n".write(to: pointerURL, atomically: true, encoding: .utf8)
+    }
+
+    private static func loadLatestValidationSnapshot() -> LatestValidationSnapshot? {
+        guard let latest = latestProjectURL() else { return nil }
+        let fileURL = latest.appendingPathComponent(latestValidationSnapshotFileName, isDirectory: false)
+        guard let data = try? Data(contentsOf: fileURL) else { return nil }
+        return try? JSONDecoder().decode(LatestValidationSnapshot.self, from: data)
+    }
+
+    private static func suggestedValidationCommand(
+        orderedPaths: [String],
+        files: [String: String]
+    ) -> String? {
+        let loweredPaths = orderedPaths.map { $0.lowercased() }
+        let loweredSet = Set(loweredPaths)
+        let normalizedFiles = Dictionary(uniqueKeysWithValues: files.map { key, value in
+            (key.lowercased(), value)
+        })
+
+        if let packagePath = loweredPaths.first(where: { $0.hasSuffix("package.json") }),
+           let package = normalizedFiles[packagePath]?.lowercased() {
+            if package.contains("\"build\"") {
+                return "npm install && npm run build"
+            }
+            if package.contains("\"test\""), !package.contains("no test specified") {
+                return "npm install && npm test"
+            }
+            return "npm install"
+        }
+
+        if loweredSet.contains("cargo.toml") {
+            return "cargo test"
+        }
+
+        if loweredSet.contains("go.mod") {
+            return "go test ./..."
+        }
+
+        if loweredSet.contains("package.swift") {
+            return "swift test"
+        }
+
+        if loweredSet.contains("cmakelists.txt") {
+            return "cmake -S . -B build && cmake --build build && ctest --test-dir build --output-on-failure"
+        }
+
+        if loweredSet.contains("pom.xml") {
+            return "mvn test"
+        }
+
+        if loweredSet.contains("build.gradle") || loweredSet.contains("build.gradle.kts") {
+            return "./gradlew test || gradle test"
+        }
+
+        if loweredSet.contains("composer.json") {
+            return "composer validate"
+        }
+
+        if loweredPaths.contains(where: { $0.hasSuffix(".py") }) {
+            let hasPytest = loweredPaths.contains(where: {
+                $0.contains("/tests/")
+                    || $0.hasPrefix("tests/")
+                    || $0.hasPrefix("test_")
+                    || $0.hasSuffix("_test.py")
+            })
+            return hasPytest ? "python3 -m pytest" : "python3 -m compileall ."
+        }
+
+        return nil
     }
 
     private static func extractProjectFiles(from message: ChatMessage) -> [ParsedWebFile] {

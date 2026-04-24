@@ -1226,6 +1226,7 @@ struct ChatScreen: View {
                 case .success(let buildResult):
                     autoBuildEligibleAssistantIDs.insert(sourceAssistant.id)
                     latestProjectHasPreviewEntry = true
+                    runLatestProjectValidationIfPossible(buildResult)
                     if buildResult.shouldAutoOpenPreview {
                         let previewHTML = sanitizedFrontendPreviewHTML(buildResult.entryHTML)
                         autoFrontendPreview = AutoFrontendPreviewPayload(
@@ -1247,6 +1248,103 @@ struct ChatScreen: View {
                 }
             }
         }
+    }
+
+    private func runLatestProjectValidationIfPossible(_ buildResult: FrontendProjectBuilder.BuildResult) {
+        guard let command = buildResult.suggestedValidationCommand else { return }
+
+        let endpoint = viewModel.config.shellExecutionURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !endpoint.isEmpty else { return }
+
+        let workingDirectory = {
+            let trimmed = viewModel.config.shellExecutionWorkingDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? "latest" : trimmed
+        }()
+        let apiKey = viewModel.config.apiKey
+        let timeout = viewModel.config.shellExecutionTimeout
+        let files = buildResult.writtenFiles
+
+        Task.detached(priority: .utility) {
+            await MainActor.run {
+                viewModel.statusMessage = "项目已落盘，正在自动同步到工作区并执行验证…"
+            }
+
+            do {
+                try await syncProjectFilesToRemoteWorkspace(
+                    files: files,
+                    endpoint: endpoint,
+                    apiKey: apiKey,
+                    workingDirectory: workingDirectory,
+                    timeout: timeout
+                )
+
+                let validationResult = try await RemoteShellExecutionService.shared.run(
+                    command: command,
+                    endpoint: endpoint,
+                    apiKey: apiKey,
+                    workingDirectory: workingDirectory,
+                    timeout: timeout
+                )
+                FrontendProjectBuilder.saveLatestValidationResult(command: command, result: validationResult)
+
+                await MainActor.run {
+                    if validationResult.exitCode == 0 {
+                        viewModel.statusMessage = "项目已自动验证通过：\(command)"
+                    } else {
+                        viewModel.statusMessage = "项目已自动验证失败，可继续让 AI 按日志修复：\(command)"
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    viewModel.statusMessage = "项目已落盘，但自动验证失败：\(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func syncProjectFilesToRemoteWorkspace(
+        files: [String: String],
+        endpoint: String,
+        apiKey: String,
+        workingDirectory: String,
+        timeout: Double
+    ) async throws {
+        let orderedPaths = files.keys.sorted { lhs, rhs in
+            lhs.localizedStandardCompare(rhs) == .orderedAscending
+        }
+
+        for path in orderedPaths {
+            guard let content = files[path] else { continue }
+            let normalizedPath = path.replacingOccurrences(of: "\\", with: "/")
+            let parentPath = (normalizedPath as NSString).deletingLastPathComponent
+            let mkdirCommand: String
+            if parentPath.isEmpty || parentPath == "." {
+                mkdirCommand = "true"
+            } else {
+                mkdirCommand = "mkdir -p \(shellSingleQuoted(parentPath))"
+            }
+
+            let base64 = Data(content.utf8).base64EncodedString()
+            let syncCommand = """
+            \(mkdirCommand)
+            cat <<'__IEXA_B64__' | base64 --decode > \(shellSingleQuoted(normalizedPath))
+            \(base64)
+            __IEXA_B64__
+            """
+
+            _ = try await RemoteShellExecutionService.shared.run(
+                command: syncCommand,
+                endpoint: endpoint,
+                apiKey: apiKey,
+                workingDirectory: workingDirectory,
+                timeout: timeout
+            )
+        }
+    }
+
+    private func shellSingleQuoted(_ value: String) -> String {
+        let escaped = value.replacingOccurrences(of: "'", with: "'\"'\"'")
+        return "'\(escaped)'"
     }
 
     private func normalizedTerminalCommandForExecution(_ raw: String) -> String {

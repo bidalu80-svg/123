@@ -156,8 +156,9 @@ enum MessageContentParser {
 
         segments.append(contentsOf: parseTextContent(message.content, allowUnclosedFencedCode: message.isStreaming))
         let merged = mergeAdjacentTextSegments(segments)
+        let stitched = mergeTrailingCodeLikeTextSegments(merged)
         let sectioned = sectionizeAssistantLongTextSegments(
-            merged,
+            stitched,
             role: message.role,
             isStreaming: message.isStreaming
         )
@@ -1387,6 +1388,61 @@ enum MessageContentParser {
                 merged.append(segment)
             }
         }
+        return merged
+    }
+
+    private static func mergeTrailingCodeLikeTextSegments(_ segments: [MessageSegment]) -> [MessageSegment] {
+        guard !segments.isEmpty else { return [] }
+
+        var merged: [MessageSegment] = []
+        merged.reserveCapacity(segments.count)
+
+        for segment in segments {
+            switch segment {
+            case .text(let text):
+                guard let last = merged.last else {
+                    merged.append(segment)
+                    continue
+                }
+
+                switch last {
+                case .code(let language, let content):
+                    let split = splitLikelyCodePrefix(from: text, languageHint: language)
+                    if !split.code.isEmpty,
+                       isLikelyStructuredCodeContent(languageHint: language, content: split.code) {
+                        merged.removeLast()
+                        let combined = content.trimmingCharacters(in: .whitespacesAndNewlines) + "\n" + split.code.trimmingCharacters(in: .whitespacesAndNewlines)
+                        merged.append(.code(language: language, content: combined.trimmingCharacters(in: .whitespacesAndNewlines)))
+                        if !split.remainder.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            merged.append(.text(split.remainder))
+                        }
+                        continue
+                    }
+                    merged.append(segment)
+
+                case .file(let name, let language, let content):
+                    let split = splitLikelyCodePrefix(from: text, languageHint: language)
+                    if !split.code.isEmpty,
+                       isLikelyStructuredCodeContent(languageHint: language, content: split.code) {
+                        merged.removeLast()
+                        let combined = content.trimmingCharacters(in: .whitespacesAndNewlines) + "\n" + split.code.trimmingCharacters(in: .whitespacesAndNewlines)
+                        merged.append(.file(name: name, language: language, content: combined.trimmingCharacters(in: .whitespacesAndNewlines)))
+                        if !split.remainder.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            merged.append(.text(split.remainder))
+                        }
+                        continue
+                    }
+                    merged.append(segment)
+
+                default:
+                    merged.append(segment)
+                }
+
+            default:
+                merged.append(segment)
+            }
+        }
+
         return merged
     }
 

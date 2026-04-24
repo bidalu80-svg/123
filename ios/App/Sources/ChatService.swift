@@ -139,6 +139,18 @@ struct ChatRequestBuilder {
             ])
         }
 
+        if shouldInjectLatestProjectContext(message: message, history: history),
+           let latestProjectContext = FrontendProjectBuilder.latestProjectConversationContext(),
+           !latestProjectContext.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            prefix.append([
+                "role": "system",
+                "content": """
+                [当前工作区上下文]
+                \(latestProjectContext)
+                """
+            ])
+        }
+
         if shouldInjectFrontendAutoBuildPrompt(
             enabled: frontendAutoBuildEnabled,
             message: message,
@@ -452,6 +464,32 @@ struct ChatRequestBuilder {
             }
         }
         return matched >= 2
+    }
+
+    private static func shouldInjectLatestProjectContext(
+        message: ChatMessage,
+        history: [ChatMessage]
+    ) -> Bool {
+        guard message.role == .user else { return false }
+
+        let raw = message.copyableText
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard !raw.isEmpty else { return false }
+
+        let followupMarkers = [
+            "继续", "修改", "修复", "优化", "完善", "重构", "接着", "顺便",
+            "项目", "网站", "页面", "前端", "后端", "代码", "文件", "目录",
+            "运行", "执行", "测试", "编译", "构建", "报错", "错误", "日志",
+            "continue", "modify", "update", "fix", "improve", "refactor",
+            "run", "test", "build", "compile", "error", "log", "project", "workspace"
+        ]
+        if followupMarkers.contains(where: { raw.contains($0) }) {
+            return true
+        }
+
+        return recentConversationContainsProjectContext(history: history)
     }
 
     private static func compactHistoryForRequest(_ history: [ChatMessage]) -> [ChatMessage] {
