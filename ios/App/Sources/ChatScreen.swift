@@ -594,15 +594,12 @@ struct ChatScreen: View {
                                 : MinisTheme.softPill
                         )
 
-                    IEXASparkleMark(
-                        primarySize: 16,
-                        secondarySize: 8.5,
-                        width: 24,
-                        height: 20,
-                        secondaryOffsetX: -4.5,
-                        secondaryOffsetY: -2
-                    )
-                    .opacity(viewModel.isPrivateMode ? 1 : 0.82)
+                    Image("PrivateModeIcon")
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 30, height: 30)
+                        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        .opacity(viewModel.isPrivateMode ? 1 : 0.72)
                 }
                 .frame(width: 36, height: 36)
                 .overlay {

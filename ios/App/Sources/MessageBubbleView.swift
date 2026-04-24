@@ -571,39 +571,16 @@ struct MessageBubbleView: View {
     }
 
     private var streamingWaitingDot: some View {
-        TimelineView(.animation(minimumInterval: 0.09, paused: false)) { timeline in
-            let timestamp = timeline.date.timeIntervalSinceReferenceDate
-            HStack(spacing: 0) {
-                Text("正在思考")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.secondary)
+        HStack(spacing: 4) {
+            Text("正在思考")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.secondary)
 
-                Spacer(minLength: 0)
-
-                HStack(spacing: 12) {
-                    ForEach(0..<3, id: \.self) { index in
-                        Circle()
-                            .fill(Color.secondary.opacity(0.82))
-                            .frame(width: 12, height: 12)
-                            .offset(y: thinkingWaveOffset(at: timestamp, index: index))
-                            .opacity(thinkingWaveOpacity(at: timestamp, index: index))
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityLabel("正在思考")
+            ThinkingDotsWaveView(dotSize: 6, spacing: 4)
+                .frame(width: 28, height: 12)
         }
-    }
-
-    private func thinkingWaveOffset(at time: TimeInterval, index: Int) -> CGFloat {
-        let phase = time * 5.6 - Double(index) * 0.45
-        return CGFloat(sin(phase)) * -5.2
-    }
-
-    private func thinkingWaveOpacity(at time: TimeInterval, index: Int) -> Double {
-        let phase = time * 5.6 - Double(index) * 0.45
-        let normalized = (sin(phase) + 1) / 2
-        return 0.28 + normalized * 0.72
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityLabel("正在思考")
     }
 
     private var frontendProgressPayload: FrontendProgressPayload? {
@@ -4468,6 +4445,126 @@ private struct MiniIconButtonStyle: ButtonStyle {
             )
             .scaleEffect(configuration.isPressed ? 0.94 : 1)
             .opacity(configuration.isPressed ? 0.72 : 1)
+    }
+}
+
+private struct ThinkingDotsWaveView: UIViewRepresentable {
+    let dotSize: CGFloat
+    let spacing: CGFloat
+
+    func makeUIView(context: Context) -> DotWaveContainerView {
+        let view = DotWaveContainerView()
+        view.configure(dotSize: dotSize, spacing: spacing)
+        return view
+    }
+
+    func updateUIView(_ uiView: DotWaveContainerView, context: Context) {
+        uiView.configure(dotSize: dotSize, spacing: spacing)
+        uiView.startAnimatingIfNeeded()
+    }
+
+    final class DotWaveContainerView: UIView {
+        private var dotLayers: [CALayer] = []
+        private var configuredDotSize: CGFloat = 0
+        private var configuredSpacing: CGFloat = 0
+
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            backgroundColor = .clear
+            isOpaque = false
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
+
+        func configure(dotSize: CGFloat, spacing: CGFloat) {
+            let normalizedDotSize = max(3, dotSize)
+            let normalizedSpacing = max(1, spacing)
+            guard normalizedDotSize != configuredDotSize || normalizedSpacing != configuredSpacing || dotLayers.isEmpty else {
+                return
+            }
+
+            configuredDotSize = normalizedDotSize
+            configuredSpacing = normalizedSpacing
+
+            layer.sublayers?.forEach { $0.removeFromSuperlayer() }
+            dotLayers.removeAll()
+
+            let totalWidth = normalizedDotSize * 3 + normalizedSpacing * 2
+            let startX = max(0, (bounds.width > 0 ? bounds.width : totalWidth) - totalWidth) * 0.5
+            let originY = max(0, (bounds.height > 0 ? bounds.height : normalizedDotSize) - normalizedDotSize) * 0.5
+
+            for index in 0..<3 {
+                let dotLayer = CALayer()
+                dotLayer.backgroundColor = UIColor.secondaryLabel.withAlphaComponent(0.52).cgColor
+                dotLayer.cornerRadius = normalizedDotSize * 0.5
+                dotLayer.frame = CGRect(
+                    x: startX + CGFloat(index) * (normalizedDotSize + normalizedSpacing),
+                    y: originY,
+                    width: normalizedDotSize,
+                    height: normalizedDotSize
+                )
+                layer.addSublayer(dotLayer)
+                dotLayers.append(dotLayer)
+            }
+            startAnimatingIfNeeded()
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            guard !dotLayers.isEmpty else { return }
+
+            let totalWidth = configuredDotSize * 3 + configuredSpacing * 2
+            let startX = max(0, bounds.width - totalWidth) * 0.5
+            let originY = max(0, bounds.height - configuredDotSize) * 0.5
+
+            for (index, dotLayer) in dotLayers.enumerated() {
+                CATransaction.begin()
+                CATransaction.setDisableActions(true)
+                dotLayer.frame = CGRect(
+                    x: startX + CGFloat(index) * (configuredDotSize + configuredSpacing),
+                    y: originY,
+                    width: configuredDotSize,
+                    height: configuredDotSize
+                )
+                CATransaction.commit()
+            }
+        }
+
+        func startAnimatingIfNeeded() {
+            guard !dotLayers.isEmpty else { return }
+
+            for (index, dotLayer) in dotLayers.enumerated() {
+                guard dotLayer.animation(forKey: "iexa.wave.offset") == nil else { continue }
+
+                let begin = CACurrentMediaTime() + Double(index) * 0.12
+
+                let position = CABasicAnimation(keyPath: "transform.translation.y")
+                position.fromValue = 0
+                position.toValue = -3.5
+                position.duration = 0.36
+                position.autoreverses = true
+                position.repeatCount = .infinity
+                position.beginTime = begin
+                position.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                position.isRemovedOnCompletion = false
+
+                let opacity = CABasicAnimation(keyPath: "opacity")
+                opacity.fromValue = 0.38
+                opacity.toValue = 1.0
+                opacity.duration = 0.36
+                opacity.autoreverses = true
+                opacity.repeatCount = .infinity
+                opacity.beginTime = begin
+                opacity.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                opacity.isRemovedOnCompletion = false
+
+                dotLayer.add(position, forKey: "iexa.wave.offset")
+                dotLayer.add(opacity, forKey: "iexa.wave.opacity")
+            }
+        }
     }
 }
 
