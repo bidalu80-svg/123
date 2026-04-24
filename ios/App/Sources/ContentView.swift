@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct ContentView: View {
     @EnvironmentObject private var viewModel: ChatViewModel
@@ -17,36 +18,26 @@ struct ContentView: View {
                 }
             }
             .background(MinisTheme.appBackground.ignoresSafeArea())
-
-            WindowThemeBackgroundBridge()
-                .allowsHitTesting(false)
         }
         .tint(.primary)
         .preferredColorScheme(viewModel.preferredColorScheme)
-    }
-}
-
-private struct WindowThemeBackgroundBridge: UIViewRepresentable {
-    func makeUIView(context: Context) -> ResolverView {
-        ResolverView()
-    }
-
-    func updateUIView(_ uiView: ResolverView, context: Context) {
-        uiView.applyThemeBackground()
-    }
-
-    final class ResolverView: UIView {
-        override func didMoveToWindow() {
-            super.didMoveToWindow()
-            applyThemeBackground()
+        .onAppear {
+            applyWindowThemeBackground()
         }
+        .onChange(of: viewModel.preferredColorScheme) { _, _ in
+            applyWindowThemeBackground()
+        }
+    }
 
-        func applyThemeBackground() {
-            let color = MinisTheme.appBackgroundUIColor
-            backgroundColor = .clear
-            window?.backgroundColor = color
-            window?.rootViewController?.view.backgroundColor = color
-            superview?.backgroundColor = color
+    private func applyWindowThemeBackground() {
+        let color = MinisTheme.appBackgroundUIColor
+        let windowScenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        for scene in windowScenes {
+            for window in scene.windows {
+                window.backgroundColor = color
+                window.rootViewController?.view.backgroundColor = color
+                window.rootViewController?.view.isOpaque = false
+            }
         }
     }
 }
