@@ -1,19 +1,6 @@
 import SwiftUI
 import UIKit
 
-private struct LinuxShellTranscriptEntry: Identifiable, Equatable {
-    enum Kind: Equatable {
-        case prompt
-        case output
-        case error
-        case meta
-    }
-
-    let id = UUID()
-    let kind: Kind
-    let text: String
-}
-
 struct LinuxShellScreen: View {
     @EnvironmentObject private var viewModel: ChatViewModel
     @Environment(\.dismiss) private var dismiss
@@ -21,46 +8,51 @@ struct LinuxShellScreen: View {
 
     @AppStorage("chatapp.linux-shell.cwd") private var persistedWorkingDirectory = ""
 
-    @State private var transcript: [LinuxShellTranscriptEntry] = []
+    @State private var sessionID: String?
+    @State private var terminalOutput = ""
     @State private var commandDraft = ""
-    @State private var isRunning = false
-    @State private var bootstrapCompleted = false
-    @State private var activeTask: Task<Void, Never>?
     @State private var currentWorkingDirectory = ""
+    @State private var isConnecting = false
+    @State private var isSending = false
+    @State private var connectionError: String?
+    @State private var pollTask: Task<Void, Never>?
 
     private let promptHost = "root@minis"
+    private let maxTerminalCharacters = 160_000
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ZStack {
-                Color.black.ignoresSafeArea()
+        VStack(spacing: 0) {
+            header
 
-                VStack(spacing: 0) {
-                    header
-
-                    transcriptScrollView(proxy: proxy)
+            terminalViewport
+        }
+        .background(Color.black.ignoresSafeArea())
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            bottomPanel
+        }
+        .preferredColorScheme(.dark)
+        .onAppear {
+            startSessionIfNeeded()
+        }
+        .onDisappear {
+            let capturedSessionID = sessionID
+            pollTask?.cancel()
+            pollTask = nil
+            if let capturedSessionID {
+                Task {
+                    try? await RemoteShellSessionService.shared.stopSession(
+                        sessionID: capturedSessionID,
+                        endpoint: viewModel.config.shellExecutionURLString,
+                        apiKey: viewModel.config.apiKey
+                    )
                 }
-            }
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                bottomPanel
-            }
-            .preferredColorScheme(.dark)
-            .onAppear {
-                prepareShellIfNeeded()
-            }
-            .onDisappear {
-                activeTask?.cancel()
-                activeTask = nil
-            }
-            .onChange(of: transcript.count) { _, _ in
-                scrollToBottom(with: proxy)
             }
         }
     }
 
     private var header: some View {
-        HStack(spacing: 16) {
-            shellCircleButton(systemName: "xmark") {
+        HStack(spacing: 14) {
+            shellHeaderButton(systemName: "xmark") {
                 dismiss()
             }
 
@@ -72,102 +64,53 @@ struct LinuxShellScreen: View {
 
             Spacer(minLength: 0)
 
-            shellCircleButton(systemName: "paintbrush") {
-                clearTranscript()
+            shellHeaderButton(systemName: "arrow.counterclockwise") {
+                restartSession()
             }
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 14)
         .padding(.top, 10)
         .padding(.bottom, 12)
         .background(Color.black)
     }
 
-    private func transcriptScrollView(proxy: ScrollViewProxy) -> some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 10) {
-                if transcript.isEmpty {
-                    Text(currentPromptLine)
-                        .font(.system(size: 18, weight: .regular, design: .monospaced))
-                        .foregroundStyle(Color.white.opacity(0.92))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 14)
-                        .padding(.top, 8)
-                } else {
-                    ForEach(transcript) { entry in
-                        transcriptEntryView(entry)
-                    }
-                }
-
-                if isRunning {
-                    HStack(spacing: 10) {
-                        ProgressView()
-                            .tint(Color(red: 0.27, green: 0.88, blue: 0.47))
-                            .scaleEffect(0.82)
-                        Text("命令执行中…")
-                            .font(.system(size: 15.5, weight: .medium, design: .monospaced))
-                            .foregroundStyle(Color.white.opacity(0.76))
-                    }
+    private var terminalViewport: some View {
+        ScrollViewReader { proxy in
+            ScrollView([.vertical, .horizontal], showsIndicators: true) {
+                Text(displayedTerminalText)
+                    .font(.system(size: 18, weight: .regular, design: .monospaced))
+                    .foregroundStyle(terminalTextColor)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
                     .padding(.horizontal, 14)
-                }
-
-                Color.clear
-                    .frame(height: 1)
-                    .id("linux-shell-bottom")
+                    .padding(.top, 8)
+                    .padding(.bottom, 18)
+                    .id("linux-shell-output")
             }
-            .padding(.top, 6)
-            .padding(.bottom, 18)
-        }
-        .background(Color.black)
-        .onAppear {
-            scrollToBottom(with: proxy, animated: false)
-        }
-    }
-
-    @ViewBuilder
-    private func transcriptEntryView(_ entry: LinuxShellTranscriptEntry) -> some View {
-        switch entry.kind {
-        case .prompt:
-            Text(entry.text)
-                .font(.system(size: 18, weight: .regular, design: .monospaced))
-                .foregroundStyle(Color.white.opacity(0.94))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 14)
-        case .output:
-            Text(entry.text)
-                .font(.system(size: 17, weight: .regular, design: .monospaced))
-                .foregroundStyle(Color(red: 0.34, green: 0.94, blue: 0.56))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 14)
-                .textSelection(.enabled)
-        case .error:
-            Text(entry.text)
-                .font(.system(size: 17, weight: .regular, design: .monospaced))
-                .foregroundStyle(Color(red: 1.0, green: 0.42, blue: 0.42))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 14)
-                .textSelection(.enabled)
-        case .meta:
-            Text(entry.text)
-                .font(.system(size: 13.5, weight: .medium, design: .monospaced))
-                .foregroundStyle(Color.white.opacity(0.54))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 14)
+            .background(Color.black)
+            .onChange(of: terminalOutput) { _, _ in
+                DispatchQueue.main.async {
+                    withAnimation(.easeOut(duration: 0.18)) {
+                        proxy.scrollTo("linux-shell-output", anchor: .bottom)
+                    }
+                }
+            }
         }
     }
 
     private var bottomPanel: some View {
         VStack(spacing: 10) {
-            quickActionsRow
+            quickActions
 
             VStack(alignment: .leading, spacing: 10) {
-                Text(currentPromptLine)
-                    .font(.system(size: 16, weight: .regular, design: .monospaced))
-                    .foregroundStyle(Color.white.opacity(0.88))
+                Text("当前目录：\(displayWorkingDirectory)")
+                    .font(.system(size: 14, weight: .medium, design: .monospaced))
+                    .foregroundStyle(Color.white.opacity(0.66))
                     .lineLimit(1)
 
                 HStack(spacing: 12) {
                     TextField(
-                        "输入命令，例如 npm install、git status、python main.py",
+                        "输入命令，例如 npm install、pnpm dev、python main.py",
                         text: $commandDraft
                     )
                     .textInputAutocapitalization(.never)
@@ -175,29 +118,27 @@ struct LinuxShellScreen: View {
                     .keyboardType(.asciiCapable)
                     .submitLabel(.go)
                     .focused($isCommandFieldFocused)
-                    .disabled(!shellReady || isRunning)
+                    .font(.system(size: 17, weight: .regular, design: .monospaced))
+                    .foregroundStyle(.white)
+                    .disabled(!shellReady || isConnecting || isSending)
                     .onSubmit {
                         submitCurrentCommand()
                     }
-                    .font(.system(size: 17, weight: .regular, design: .monospaced))
-                    .foregroundStyle(Color.white)
 
                     Button {
                         submitCurrentCommand()
                     } label: {
-                        Image(systemName: isRunning ? "stop.fill" : "arrow.up")
+                        Image(systemName: "arrow.up")
                             .font(.system(size: 16, weight: .bold))
                             .foregroundStyle(Color.black)
-                            .frame(width: 38, height: 38)
+                            .frame(width: 40, height: 40)
                             .background(
                                 Circle()
-                                    .fill(shellReady && !commandDraftTrimmed.isEmpty && !isRunning
-                                        ? Color(red: 0.32, green: 0.93, blue: 0.52)
-                                        : Color.white.opacity(0.18))
+                                    .fill(canSubmitCommand ? Color(red: 0.31, green: 0.93, blue: 0.52) : Color.white.opacity(0.18))
                             )
                     }
                     .buttonStyle(.plain)
-                    .disabled(!shellReady || commandDraftTrimmed.isEmpty || isRunning)
+                    .disabled(!canSubmitCommand)
                 }
             }
             .padding(.horizontal, 14)
@@ -217,33 +158,30 @@ struct LinuxShellScreen: View {
         .background(Color.black)
     }
 
-    private var quickActionsRow: some View {
+    private var quickActions: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 10) {
                 quickActionButton(title: "隐藏") {
                     isCommandFieldFocused = false
                 }
                 quickActionButton(title: "粘贴") {
-                    let text = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                    guard !text.isEmpty else { return }
-                    if commandDraftTrimmed.isEmpty {
-                        commandDraft = text
-                    } else {
-                        commandDraft += text
-                    }
+                    let pasted = UIPasteboard.general.string ?? ""
+                    guard !pasted.isEmpty else { return }
+                    commandDraft += pasted
                     isCommandFieldFocused = true
                 }
                 quickActionButton(title: "清屏") {
-                    clearTranscript()
+                    terminalOutput = ""
+                    connectionError = nil
+                }
+                quickActionButton(title: "Ctrl+C") {
+                    sendControlSignal("interrupt")
                 }
                 quickActionButton(title: "pwd") {
                     runPresetCommand("pwd")
                 }
                 quickActionButton(title: "ls") {
                     runPresetCommand("ls")
-                }
-                quickActionButton(title: "cd ..") {
-                    runPresetCommand("cd ..")
                 }
                 quickActionButton(title: "git status") {
                     runPresetCommand("git status")
@@ -257,7 +195,7 @@ struct LinuxShellScreen: View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(Color(red: 0.32, green: 0.93, blue: 0.52))
+                .foregroundStyle(Color(red: 0.31, green: 0.93, blue: 0.52))
                 .padding(.horizontal, 18)
                 .padding(.vertical, 11)
                 .background(
@@ -266,11 +204,11 @@ struct LinuxShellScreen: View {
                 )
         }
         .buttonStyle(.plain)
-        .disabled(isRunning)
-        .opacity(isRunning ? 0.45 : 1)
+        .disabled(isConnecting || sessionID == nil)
+        .opacity((isConnecting || sessionID == nil) ? 0.45 : 1)
     }
 
-    private func shellCircleButton(systemName: String, action: @escaping () -> Void) -> some View {
+    private func shellHeaderButton(systemName: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: 21, weight: .medium))
@@ -285,11 +223,11 @@ struct LinuxShellScreen: View {
             && !viewModel.config.shellExecutionURLString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private var commandDraftTrimmed: String {
-        commandDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    private var canSubmitCommand: Bool {
+        shellReady && !isConnecting && !isSending && !commandDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private var effectiveWorkingDirectory: String {
+    private var displayWorkingDirectory: String {
         let candidates = [
             currentWorkingDirectory,
             persistedWorkingDirectory,
@@ -301,160 +239,203 @@ struct LinuxShellScreen: View {
                 return trimmed
             }
         }
-        return "."
+        return "/"
     }
 
-    private var currentPromptLine: String {
-        "\(promptHost):\(displayPromptPath(effectiveWorkingDirectory))#"
-    }
-
-    private func displayPromptPath(_ path: String) -> String {
-        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            return "/"
+    private var displayedTerminalText: String {
+        if let connectionError, !connectionError.isEmpty {
+            return connectionError
         }
-        return trimmed
+
+        let trimmed = terminalOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            return terminalOutput
+        }
+
+        if isConnecting {
+            return "正在连接 \(promptHost)…"
+        }
+
+        return "\(promptHost):\(displayWorkingDirectory)# "
     }
 
-    private func prepareShellIfNeeded() {
-        guard !bootstrapCompleted else { return }
-        bootstrapCompleted = true
-        isCommandFieldFocused = true
+    private var terminalTextColor: Color {
+        if connectionError != nil {
+            return Color(red: 1.0, green: 0.42, blue: 0.42)
+        }
+        return Color(red: 0.34, green: 0.94, blue: 0.56)
+    }
 
+    private func startSessionIfNeeded() {
         guard shellReady else {
-            transcript = [
-                LinuxShellTranscriptEntry(
-                    kind: .error,
-                    text: "当前还没有可用的 Linux Shell。请先在设置里启用远端 Linux Shell，并配置真实可用的接口地址。"
-                )
-            ]
+            connectionError = "当前还没有可用的 Linux 终端。请先在设置里启用远端 Linux Shell，并配置真实可用的终端地址。"
             return
         }
+        guard sessionID == nil, !isConnecting else { return }
+        startSession()
+    }
 
-        activeTask?.cancel()
-        activeTask = Task {
+    private func restartSession() {
+        let oldSessionID = sessionID
+        sessionID = nil
+        terminalOutput = ""
+        connectionError = nil
+        pollTask?.cancel()
+        pollTask = nil
+
+        if let oldSessionID {
+            Task {
+                try? await RemoteShellSessionService.shared.stopSession(
+                    sessionID: oldSessionID,
+                    endpoint: viewModel.config.shellExecutionURLString,
+                    apiKey: viewModel.config.apiKey
+                )
+            }
+        }
+
+        startSession()
+    }
+
+    private func startSession() {
+        isConnecting = true
+        connectionError = nil
+        isCommandFieldFocused = true
+
+        Task {
             do {
-                let result = try await RemoteShellExecutionService.shared.run(
-                    command: "pwd",
+                let snapshot = try await RemoteShellSessionService.shared.startSession(
                     endpoint: viewModel.config.shellExecutionURLString,
                     apiKey: viewModel.config.apiKey,
-                    workingDirectory: effectiveWorkingDirectory,
-                    timeout: min(max(viewModel.config.shellExecutionTimeout, 5), 60)
+                    workingDirectory: displayWorkingDirectory
                 )
                 await MainActor.run {
-                    let resolved = result.finalWorkingDirectory?.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if let resolved, !resolved.isEmpty {
-                        currentWorkingDirectory = resolved
-                        persistedWorkingDirectory = resolved
-                    }
+                    apply(snapshot: snapshot)
+                    sessionID = snapshot.sessionID
+                    isConnecting = false
+                    startPolling(sessionID: snapshot.sessionID)
                 }
             } catch {
                 await MainActor.run {
-                    transcript = [
-                        LinuxShellTranscriptEntry(
-                            kind: .error,
-                            text: "连接 Linux Shell 失败：\(error.localizedDescription)"
-                        )
-                    ]
+                    connectionError = "连接 Linux 终端失败：\(error.localizedDescription)"
+                    isConnecting = false
                 }
             }
         }
     }
 
-    private func clearTranscript() {
-        transcript.removeAll()
+    private func startPolling(sessionID: String) {
+        pollTask?.cancel()
+        pollTask = Task {
+            while !Task.isCancelled {
+                do {
+                    let snapshot = try await RemoteShellSessionService.shared.pollSession(
+                        sessionID: sessionID,
+                        endpoint: viewModel.config.shellExecutionURLString,
+                        apiKey: viewModel.config.apiKey
+                    )
+                    await MainActor.run {
+                        apply(snapshot: snapshot)
+                        if !snapshot.isRunning {
+                            self.sessionID = nil
+                        }
+                    }
+                    if !snapshot.isRunning {
+                        break
+                    }
+                } catch {
+                    await MainActor.run {
+                        if self.connectionError == nil {
+                            self.connectionError = "终端会话中断：\(error.localizedDescription)"
+                        }
+                        self.sessionID = nil
+                    }
+                    break
+                }
+
+                try? await Task.sleep(nanoseconds: 220_000_000)
+            }
+        }
+    }
+
+    private func submitCurrentCommand() {
+        guard let sessionID else { return }
+        let command = commandDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !command.isEmpty else { return }
+        commandDraft = ""
+        isSending = true
+
+        Task {
+            do {
+                let snapshot = try await RemoteShellSessionService.shared.sendInput(
+                    sessionID: sessionID,
+                    input: command,
+                    endpoint: viewModel.config.shellExecutionURLString,
+                    apiKey: viewModel.config.apiKey
+                )
+                await MainActor.run {
+                    apply(snapshot: snapshot)
+                    isSending = false
+                    isCommandFieldFocused = true
+                }
+            } catch {
+                await MainActor.run {
+                    appendTerminalOutput("\n[error] \(error.localizedDescription)\n")
+                    isSending = false
+                    isCommandFieldFocused = true
+                }
+            }
+        }
     }
 
     private func runPresetCommand(_ command: String) {
-        guard !isRunning else { return }
         commandDraft = command
         submitCurrentCommand()
     }
 
-    private func submitCurrentCommand() {
-        let command = commandDraftTrimmed
-        guard !command.isEmpty else { return }
-        commandDraft = ""
+    private func sendControlSignal(_ signal: String) {
+        guard let sessionID else { return }
 
-        if command == "clear" || command == "cls" {
-            clearTranscript()
-            return
-        }
-
-        if command == "exit" || command == "quit" {
-            dismiss()
-            return
-        }
-
-        runCommand(command)
-    }
-
-    private func runCommand(_ command: String) {
-        guard shellReady else { return }
-
-        let displayedCommand = "\(currentPromptLine) \(command)"
-        transcript.append(.init(kind: .prompt, text: displayedCommand))
-        isRunning = true
-
-        activeTask?.cancel()
-        activeTask = Task {
+        Task {
             do {
-                let result = try await RemoteShellExecutionService.shared.run(
-                    command: command,
+                let snapshot = try await RemoteShellSessionService.shared.sendSignal(
+                    sessionID: sessionID,
+                    signal: signal,
                     endpoint: viewModel.config.shellExecutionURLString,
-                    apiKey: viewModel.config.apiKey,
-                    workingDirectory: effectiveWorkingDirectory,
-                    timeout: viewModel.config.shellExecutionTimeout
+                    apiKey: viewModel.config.apiKey
                 )
-
                 await MainActor.run {
-                    if let finalWorkingDirectory = result.finalWorkingDirectory?.trimmingCharacters(in: .whitespacesAndNewlines),
-                       !finalWorkingDirectory.isEmpty {
-                        currentWorkingDirectory = finalWorkingDirectory
-                        persistedWorkingDirectory = finalWorkingDirectory
-                    }
-
-                    let normalizedOutput = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !normalizedOutput.isEmpty {
-                        transcript.append(
-                            .init(
-                                kind: result.exitCode == 0 ? .output : .error,
-                                text: normalizedOutput
-                            )
-                        )
-                    }
-
-                    let meta = result.durationMs.map { "退出码 \(result.exitCode) · \($0)ms" } ?? "退出码 \(result.exitCode)"
-                    transcript.append(.init(kind: .meta, text: meta))
-                    isRunning = false
-                    isCommandFieldFocused = true
-                }
-            } catch is CancellationError {
-                await MainActor.run {
-                    transcript.append(.init(kind: .meta, text: "命令已结束"))
-                    isRunning = false
+                    apply(snapshot: snapshot)
                     isCommandFieldFocused = true
                 }
             } catch {
                 await MainActor.run {
-                    transcript.append(
-                        .init(
-                            kind: .error,
-                            text: "执行失败：\(error.localizedDescription)"
-                        )
-                    )
-                    isRunning = false
-                    isCommandFieldFocused = true
+                    appendTerminalOutput("\n[error] \(error.localizedDescription)\n")
                 }
             }
         }
     }
 
-    private func scrollToBottom(with proxy: ScrollViewProxy, animated: Bool = true) {
-        DispatchQueue.main.async {
-            withAnimation(animated ? .easeOut(duration: 0.18) : nil) {
-                proxy.scrollTo("linux-shell-bottom", anchor: .bottom)
-            }
+    private func apply(snapshot: RemoteShellSessionSnapshot) {
+        let cwd = snapshot.workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !cwd.isEmpty {
+            currentWorkingDirectory = cwd
+            persistedWorkingDirectory = cwd
+        }
+
+        if !snapshot.output.isEmpty {
+            appendTerminalOutput(snapshot.output)
+        }
+
+        if !snapshot.isRunning, let exitCode = snapshot.exitCode {
+            appendTerminalOutput("\n[session exited] code=\(exitCode)\n")
+        }
+    }
+
+    private func appendTerminalOutput(_ text: String) {
+        guard !text.isEmpty else { return }
+        terminalOutput += text
+        if terminalOutput.count > maxTerminalCharacters {
+            terminalOutput = String(terminalOutput.suffix(maxTerminalCharacters))
         }
     }
 }

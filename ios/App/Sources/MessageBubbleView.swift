@@ -179,15 +179,15 @@ struct MessageBubbleView: View {
     private var assistantIdentityIcon: some View {
         ZStack(alignment: .topLeading) {
             Image(systemName: "sparkles")
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(Color(red: 0.79, green: 0.74, blue: 0.58))
 
             Image(systemName: "sparkles")
-                .font(.system(size: 9, weight: .bold))
+                .font(.system(size: 9.5, weight: .bold))
                 .foregroundStyle(Color(red: 0.84, green: 0.80, blue: 0.66))
-                .offset(x: -4, y: -2)
+                .offset(x: -5, y: -2)
         }
-        .frame(width: 18, height: 18)
+        .frame(width: 26, height: 22)
     }
 
     private var assistantActionBar: some View {
@@ -583,16 +583,18 @@ struct MessageBubbleView: View {
     private var streamingWaitingDot: some View {
         TimelineView(.animation(minimumInterval: 0.09, paused: false)) { timeline in
             let timestamp = timeline.date.timeIntervalSinceReferenceDate
-            HStack(spacing: 8) {
+            HStack(spacing: 0) {
                 Text("正在思考")
-                    .font(.system(size: 15.5, weight: .medium))
+                    .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(.secondary)
 
-                HStack(spacing: 5) {
+                Spacer(minLength: 0)
+
+                HStack(spacing: 12) {
                     ForEach(0..<3, id: \.self) { index in
                         Circle()
-                            .fill(colorScheme == .dark ? Color.white.opacity(0.92) : Color.black.opacity(0.86))
-                            .frame(width: 7, height: 7)
+                            .fill(Color.secondary.opacity(0.82))
+                            .frame(width: 12, height: 12)
                             .offset(y: thinkingWaveOffset(at: timestamp, index: index))
                             .opacity(thinkingWaveOpacity(at: timestamp, index: index))
                     }
@@ -605,13 +607,13 @@ struct MessageBubbleView: View {
 
     private func thinkingWaveOffset(at time: TimeInterval, index: Int) -> CGFloat {
         let phase = time * 5.6 - Double(index) * 0.45
-        return CGFloat(sin(phase)) * -4.6
+        return CGFloat(sin(phase)) * -5.2
     }
 
     private func thinkingWaveOpacity(at time: TimeInterval, index: Int) -> Double {
         let phase = time * 5.6 - Double(index) * 0.45
         let normalized = (sin(phase) + 1) / 2
-        return 0.34 + normalized * 0.66
+        return 0.28 + normalized * 0.72
     }
 
     private var frontendProgressPayload: FrontendProgressPayload? {

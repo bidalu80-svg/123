@@ -4387,25 +4387,29 @@ private final class NativeStreamingMessageView: UIView {
         headerStack.translatesAutoresizingMaskIntoConstraints = false
 
         iconContainer.translatesAutoresizingMaskIntoConstraints = false
-        iconContainer.backgroundColor = .black
-        iconContainer.layer.cornerRadius = 5
-        iconContainer.layer.borderWidth = 0.8
-        iconContainer.layer.borderColor = UIColor.white.withAlphaComponent(0.16).cgColor
+        iconContainer.backgroundColor = .clear
         NSLayoutConstraint.activate([
-            iconContainer.widthAnchor.constraint(equalToConstant: 18),
-            iconContainer.heightAnchor.constraint(equalToConstant: 18)
+            iconContainer.widthAnchor.constraint(equalToConstant: 26),
+            iconContainer.heightAnchor.constraint(equalToConstant: 22)
         ])
 
-        let iconLabel = UILabel()
-        iconLabel.translatesAutoresizingMaskIntoConstraints = false
-        iconLabel.text = "✦"
-        iconLabel.font = .systemFont(ofSize: 9, weight: .semibold)
-        iconLabel.textColor = .white
-        iconLabel.textAlignment = .center
-        iconContainer.addSubview(iconLabel)
+        let primarySparkle = UIImageView(image: UIImage(systemName: "sparkles"))
+        primarySparkle.translatesAutoresizingMaskIntoConstraints = false
+        primarySparkle.tintColor = UIColor(red: 0.79, green: 0.74, blue: 0.58, alpha: 1)
+        primarySparkle.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 18, weight: .semibold)
+
+        let secondarySparkle = UIImageView(image: UIImage(systemName: "sparkles"))
+        secondarySparkle.translatesAutoresizingMaskIntoConstraints = false
+        secondarySparkle.tintColor = UIColor(red: 0.84, green: 0.80, blue: 0.66, alpha: 1)
+        secondarySparkle.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 10, weight: .bold)
+
+        iconContainer.addSubview(primarySparkle)
+        iconContainer.addSubview(secondarySparkle)
         NSLayoutConstraint.activate([
-            iconLabel.centerXAnchor.constraint(equalTo: iconContainer.centerXAnchor),
-            iconLabel.centerYAnchor.constraint(equalTo: iconContainer.centerYAnchor)
+            primarySparkle.centerXAnchor.constraint(equalTo: iconContainer.centerXAnchor, constant: 2),
+            primarySparkle.centerYAnchor.constraint(equalTo: iconContainer.centerYAnchor, constant: 1),
+            secondarySparkle.leadingAnchor.constraint(equalTo: iconContainer.leadingAnchor),
+            secondarySparkle.topAnchor.constraint(equalTo: iconContainer.topAnchor)
         ])
 
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
