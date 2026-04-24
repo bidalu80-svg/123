@@ -822,7 +822,6 @@ struct ChatScreen: View {
                 codeThemeMode: viewModel.config.codeThemeMode,
                 apiKey: viewModel.config.apiKey,
                 apiBaseURL: viewModel.config.normalizedBaseURL,
-                shellExecutionEnabled: viewModel.config.shellExecutionEnabled,
                 shellExecutionURLString: viewModel.config.shellExecutionURLString,
                 shellExecutionTimeout: viewModel.config.shellExecutionTimeout,
                 shellExecutionWorkingDirectory: viewModel.config.shellExecutionWorkingDirectory,
@@ -895,7 +894,6 @@ struct ChatScreen: View {
                         codeThemeMode: viewModel.config.codeThemeMode,
                         apiKey: viewModel.config.apiKey,
                         apiBaseURL: viewModel.config.normalizedBaseURL,
-                        shellExecutionEnabled: viewModel.config.shellExecutionEnabled,
                         shellExecutionURLString: viewModel.config.shellExecutionURLString,
                         shellExecutionTimeout: viewModel.config.shellExecutionTimeout,
                         shellExecutionWorkingDirectory: viewModel.config.shellExecutionWorkingDirectory,
@@ -2072,7 +2070,6 @@ struct ChatScreen: View {
                 codeThemeMode: viewModel.config.codeThemeMode,
                 apiKey: viewModel.config.apiKey,
                 apiBaseURL: viewModel.config.normalizedBaseURL,
-                shellExecutionEnabled: viewModel.config.shellExecutionEnabled,
                 shellExecutionURLString: viewModel.config.shellExecutionURLString,
                 shellExecutionTimeout: viewModel.config.shellExecutionTimeout,
                 shellExecutionWorkingDirectory: viewModel.config.shellExecutionWorkingDirectory,
@@ -2091,7 +2088,6 @@ struct ChatScreen: View {
                 codeThemeMode: viewModel.config.codeThemeMode,
                 apiKey: viewModel.config.apiKey,
                 apiBaseURL: viewModel.config.normalizedBaseURL,
-                shellExecutionEnabled: viewModel.config.shellExecutionEnabled,
                 shellExecutionURLString: viewModel.config.shellExecutionURLString,
                 shellExecutionTimeout: viewModel.config.shellExecutionTimeout,
                 shellExecutionWorkingDirectory: viewModel.config.shellExecutionWorkingDirectory,
@@ -4702,7 +4698,6 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
     let codeThemeMode: CodeThemeMode
     let apiKey: String
     let apiBaseURL: String
-    let shellExecutionEnabled: Bool
     let shellExecutionURLString: String
     let shellExecutionTimeout: Double
     let shellExecutionWorkingDirectory: String
@@ -4725,7 +4720,6 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             codeThemeMode: codeThemeMode,
             apiKey: apiKey,
             apiBaseURL: apiBaseURL,
-            shellExecutionEnabled: shellExecutionEnabled,
             shellExecutionURLString: shellExecutionURLString,
             shellExecutionTimeout: shellExecutionTimeout,
             shellExecutionWorkingDirectory: shellExecutionWorkingDirectory,
@@ -4847,7 +4841,6 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             codeThemeMode: CodeThemeMode,
             apiKey: String,
             apiBaseURL: String,
-            shellExecutionEnabled: Bool,
             shellExecutionURLString: String,
             shellExecutionTimeout: Double,
             shellExecutionWorkingDirectory: String,

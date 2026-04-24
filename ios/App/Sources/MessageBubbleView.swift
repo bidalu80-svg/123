@@ -10,7 +10,6 @@ struct MessageBubbleView: View {
     let codeThemeMode: CodeThemeMode
     let apiKey: String
     let apiBaseURL: String
-    let shellExecutionEnabled: Bool
     let shellExecutionURLString: String
     let shellExecutionTimeout: Double
     let shellExecutionWorkingDirectory: String
@@ -55,7 +54,6 @@ struct MessageBubbleView: View {
         codeThemeMode: CodeThemeMode,
         apiKey: String,
         apiBaseURL: String,
-        shellExecutionEnabled: Bool = false,
         shellExecutionURLString: String = "",
         shellExecutionTimeout: Double = 90,
         shellExecutionWorkingDirectory: String = "",
@@ -68,7 +66,6 @@ struct MessageBubbleView: View {
         self.codeThemeMode = codeThemeMode
         self.apiKey = apiKey
         self.apiBaseURL = apiBaseURL
-        self.shellExecutionEnabled = shellExecutionEnabled
         self.shellExecutionURLString = shellExecutionURLString
         self.shellExecutionTimeout = shellExecutionTimeout
         self.shellExecutionWorkingDirectory = shellExecutionWorkingDirectory
@@ -2181,7 +2178,6 @@ struct MessageBubbleView: View {
     }
 
     private func supportsRemoteShellRun(language: String?, title: String, content: String) -> Bool {
-        guard shellExecutionEnabled else { return false }
         let normalizedLanguage = (language ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
@@ -2243,10 +2239,6 @@ struct MessageBubbleView: View {
             return
         }
 
-        guard shellExecutionEnabled else {
-            feedback(.light, "请先在设置里启用远端终端运行")
-            return
-        }
         guard !shellExecutionURLString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             feedback(.light, "请先配置终端执行接口地址")
             return

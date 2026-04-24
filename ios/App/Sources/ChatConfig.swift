@@ -272,7 +272,6 @@ struct ChatConfig: Codable, Equatable {
     var timeout: Double
     var streamEnabled: Bool
     var frontendAutoBuildEnabled: Bool
-    var shellExecutionEnabled: Bool
     var shellExecutionPath: String
     var shellExecutionTimeout: Double
     var shellExecutionWorkingDirectory: String
@@ -310,7 +309,6 @@ struct ChatConfig: Codable, Equatable {
         timeout: 30,
         streamEnabled: true,
         frontendAutoBuildEnabled: true,
-        shellExecutionEnabled: true,
         shellExecutionPath: ChatConfig.defaultShellExecutionPath,
         shellExecutionTimeout: 90,
         shellExecutionWorkingDirectory: "latest",
@@ -349,7 +347,6 @@ struct ChatConfig: Codable, Equatable {
         timeout: Double,
         streamEnabled: Bool,
         frontendAutoBuildEnabled: Bool = true,
-        shellExecutionEnabled: Bool = true,
         shellExecutionPath: String = ChatConfig.defaultShellExecutionPath,
         shellExecutionTimeout: Double = 90,
         shellExecutionWorkingDirectory: String = "latest",
@@ -387,7 +384,6 @@ struct ChatConfig: Codable, Equatable {
         self.streamEnabled = streamEnabled
         _ = frontendAutoBuildEnabled
         self.frontendAutoBuildEnabled = true
-        self.shellExecutionEnabled = shellExecutionEnabled
         self.shellExecutionPath = shellExecutionPath
         self.shellExecutionTimeout = shellExecutionTimeout
         self.shellExecutionWorkingDirectory = shellExecutionWorkingDirectory
@@ -427,7 +423,6 @@ struct ChatConfig: Codable, Equatable {
         timeout = try c.decode(Double.self, forKey: .timeout)
         streamEnabled = try c.decode(Bool.self, forKey: .streamEnabled)
         frontendAutoBuildEnabled = true
-        shellExecutionEnabled = try c.decodeIfPresent(Bool.self, forKey: .shellExecutionEnabled) ?? true
         shellExecutionPath = try c.decodeIfPresent(String.self, forKey: .shellExecutionPath) ?? ChatConfig.defaultShellExecutionPath
         shellExecutionTimeout = try c.decodeIfPresent(Double.self, forKey: .shellExecutionTimeout) ?? 90
         shellExecutionWorkingDirectory = try c.decodeIfPresent(String.self, forKey: .shellExecutionWorkingDirectory) ?? "latest"
@@ -601,7 +596,6 @@ enum ChatConfigStore {
             timeout: ChatConfig.default.timeout,
             streamEnabled: ChatConfig.default.streamEnabled,
             frontendAutoBuildEnabled: ChatConfig.default.frontendAutoBuildEnabled,
-            shellExecutionEnabled: ChatConfig.default.shellExecutionEnabled,
             shellExecutionPath: ChatConfig.default.shellExecutionPath,
             shellExecutionTimeout: ChatConfig.default.shellExecutionTimeout,
             shellExecutionWorkingDirectory: ChatConfig.default.shellExecutionWorkingDirectory,
@@ -750,7 +744,6 @@ enum ChatConfigStore {
             timeout: min(max(config.timeout, 5), 120),
             streamEnabled: config.streamEnabled,
             frontendAutoBuildEnabled: true,
-            shellExecutionEnabled: config.shellExecutionEnabled,
             shellExecutionPath: normalizeEndpointPath(config.shellExecutionPath, fallback: ChatConfig.defaultShellExecutionPath),
             shellExecutionTimeout: min(max(config.shellExecutionTimeout, 5), 300),
             shellExecutionWorkingDirectory: config.shellExecutionWorkingDirectory.trimmingCharacters(in: .whitespacesAndNewlines),

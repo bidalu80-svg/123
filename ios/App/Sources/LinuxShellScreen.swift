@@ -252,7 +252,7 @@ struct LinuxShellScreen: View {
 
     private func startSessionIfNeeded() {
         guard shellReady else {
-            connectionError = "当前还没有可用的 Linux 终端。请先在设置里启用远端 Linux Shell，并配置真实可用的终端地址。"
+            connectionError = "当前还没有可用的 Linux 终端。请先配置真实可用的远端终端地址。"
             return
         }
         guard sessionID == nil, !isConnecting else { return }

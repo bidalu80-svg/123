@@ -8,6 +8,11 @@ struct StreamingMarkdownTextView: UIViewRepresentable {
     var font: UIFont = MinisTheme.assistantUIFont
 
     private static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+    private static let renderQueue = DispatchQueue(
+        label: "chatapp.streaming.markdown.render",
+        qos: .userInitiated,
+        attributes: .concurrent
+    )
 
     static func renderedAttributedText(
         text: String,
@@ -59,27 +64,57 @@ struct StreamingMarkdownTextView: UIViewRepresentable {
             return
         }
 
-        let rendered = Self.renderedAttributedText(
-            text: text,
-            textColor: textColor,
-            linkColor: linkColor,
-            font: font
-        )
-        UIView.performWithoutAnimation {
-            uiView.attributedText = rendered
-            uiView.linkTextAttributes = [
-                .foregroundColor: linkColor,
-                .underlineStyle: 0
-            ]
-            uiView.invalidateIntrinsicContentSize()
-            uiView.setNeedsLayout()
+        let textSnapshot = text
+        let textColorSnapshot = textColor
+        let linkColorSnapshot = linkColor
+        let fontSnapshot = font
+        let renderToken = coordinator.beginRender()
+
+        if textSnapshot.isEmpty {
+            UIView.performWithoutAnimation {
+                uiView.attributedText = NSAttributedString()
+                uiView.linkTextAttributes = [
+                    .foregroundColor: linkColorSnapshot,
+                    .underlineStyle: 0
+                ]
+                uiView.invalidateIntrinsicContentSize()
+                uiView.setNeedsLayout()
+            }
+            coordinator.record(
+                text: textSnapshot,
+                font: fontSnapshot,
+                textColor: textColorSnapshot,
+                linkColor: linkColorSnapshot
+            )
+            return
         }
-        coordinator.record(
-            text: text,
-            font: font,
-            textColor: textColor,
-            linkColor: linkColor
-        )
+
+        Self.renderQueue.async {
+            let rendered = Self.renderedAttributedText(
+                text: textSnapshot,
+                textColor: textColorSnapshot,
+                linkColor: linkColorSnapshot,
+                font: fontSnapshot
+            )
+            DispatchQueue.main.async {
+                guard coordinator.isCurrentRenderToken(renderToken) else { return }
+                UIView.performWithoutAnimation {
+                    uiView.attributedText = rendered
+                    uiView.linkTextAttributes = [
+                        .foregroundColor: linkColorSnapshot,
+                        .underlineStyle: 0
+                    ]
+                    uiView.invalidateIntrinsicContentSize()
+                    uiView.setNeedsLayout()
+                }
+                coordinator.record(
+                    text: textSnapshot,
+                    font: fontSnapshot,
+                    textColor: textColorSnapshot,
+                    linkColor: linkColorSnapshot
+                )
+            }
+        }
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
@@ -113,6 +148,7 @@ struct StreamingMarkdownTextView: UIViewRepresentable {
         private var lastFontPointSize: CGFloat = 0
         private var lastTextColor: UIColor = .clear
         private var lastLinkColor: UIColor = .clear
+        private var renderToken: Int = 0
         private var lastMeasuredWidth: CGFloat = 0
         private var lastMeasuredHeight: CGFloat = 0
         private var lastMeasuredTextCount: Int = 0
@@ -123,6 +159,15 @@ struct StreamingMarkdownTextView: UIViewRepresentable {
                 || lastFontPointSize != font.pointSize
                 || !lastTextColor.isEqual(textColor)
                 || !lastLinkColor.isEqual(linkColor)
+        }
+
+        func beginRender() -> Int {
+            renderToken &+= 1
+            return renderToken
+        }
+
+        func isCurrentRenderToken(_ token: Int) -> Bool {
+            token == renderToken
         }
 
         func record(text: String, font: UIFont, textColor: UIColor, linkColor: UIColor) {

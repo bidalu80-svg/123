@@ -23,8 +23,8 @@ final class ChatViewModel: ObservableObject {
     }
 
     private final class ActiveStreamState {
-        private static let maxCharactersPerCommit = 240
-        private static let minimumCommitInterval: TimeInterval = 0.16
+        private static let maxCharactersPerCommit = 160
+        private static let minimumCommitInterval: TimeInterval = 0.10
 
         let messageID: UUID
         let target: StreamTargetContext
@@ -808,9 +808,9 @@ final class ChatViewModel: ObservableObject {
         let buffer = StreamBuffer(maxBufferedCharacters: 120_000)
         let state = ActiveStreamState(messageID: messageID, target: target, buffer: buffer)
         let isLowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
-        let refreshInterval: TimeInterval = isLowPowerMode ? 0.12 : 0.09
-        let maxCharactersPerFrame = isLowPowerMode ? 120 : 180
-        let maxCharactersFetchedPerTick = isLowPowerMode ? 1_200 : 1_800
+        let refreshInterval: TimeInterval = isLowPowerMode ? 0.10 : 0.075
+        let maxCharactersPerFrame = isLowPowerMode ? 96 : 120
+        let maxCharactersFetchedPerTick = isLowPowerMode ? 1_000 : 1_400
 
         let renderer = StreamRenderer(
             buffer: buffer,
@@ -1298,7 +1298,6 @@ final class ChatViewModel: ObservableObject {
             timeout: min(max(input.timeout, 5), 120),
             streamEnabled: input.streamEnabled,
             frontendAutoBuildEnabled: true,
-            shellExecutionEnabled: input.shellExecutionEnabled,
             shellExecutionPath: ChatConfigStore.normalizeEndpointPath(input.shellExecutionPath, fallback: ChatConfig.defaultShellExecutionPath),
             shellExecutionTimeout: min(max(input.shellExecutionTimeout, 5), 300),
             shellExecutionWorkingDirectory: input.shellExecutionWorkingDirectory.trimmingCharacters(in: .whitespacesAndNewlines),
