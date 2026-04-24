@@ -2472,10 +2472,15 @@ final class ChatService {
 
         let likelyProtocolLeak =
             lowered.contains("to=shell")
+            || lowered.contains("to=update_plan")
             || lowered.contains("to=functions.")
             || lowered.contains("to=multi_tool_use.")
+            || lowered.contains("\"steps\":[{\"step\"")
+            || lowered.contains("\"status\":\"in_progress\"")
+            || lowered.contains("\"status\":\"pending\"")
             || lowered.contains("\"recipient_name\"")
             || lowered.contains("functions.shell_command")
+            || lowered.contains("functions.update_plan")
             || lowered.contains("multi_tool_use.parallel")
             || lowered.contains("{\"command\":[\"bash\"")
             || lowered.contains("{\"command\":[\"powershell\"")
@@ -2490,15 +2495,23 @@ final class ChatService {
                     .lowercased()
                 guard !trimmedLower.isEmpty else { return true }
 
-                if trimmedLower.hasPrefix("to=shell")
-                    || trimmedLower.hasPrefix("to=functions.")
-                    || trimmedLower.hasPrefix("to=multi_tool_use.") {
+                if trimmedLower.hasPrefix("to=")
+                    || trimmedLower.hasPrefix("recipient=")
+                    || trimmedLower.hasPrefix("stream=") {
                     return false
                 }
 
                 if trimmedLower.contains("functions.shell_command")
+                    || trimmedLower.contains("functions.update_plan")
                     || trimmedLower.contains("multi_tool_use.parallel")
                     || trimmedLower.contains("\"recipient_name\"") {
+                    return false
+                }
+
+                if trimmedLower.hasPrefix("{")
+                    && ((trimmedLower.contains("\"step\"") && trimmedLower.contains("\"status\""))
+                        || trimmedLower.contains("\"steps\":[{\"step\"")
+                        || (trimmedLower.contains("\"command\"") && (trimmedLower.contains("\"bash\"") || trimmedLower.contains("\"powershell\"") || trimmedLower.contains("\"sh\"")))) {
                     return false
                 }
 
@@ -2974,14 +2987,23 @@ enum ResponseCleaner {
                     .lowercased()
 
                 if trimmedLower.hasPrefix("to=shell")
+                    || trimmedLower.hasPrefix("to=update_plan")
                     || trimmedLower.hasPrefix("to=functions.")
                     || trimmedLower.hasPrefix("to=multi_tool_use.") {
                     return false
                 }
 
                 if trimmedLower.contains("functions.shell_command")
+                    || trimmedLower.contains("functions.update_plan")
                     || trimmedLower.contains("multi_tool_use.parallel")
                     || trimmedLower.contains("\"recipient_name\"") {
+                    return false
+                }
+
+                if trimmedLower.hasPrefix("{")
+                    && ((trimmedLower.contains("\"step\"") && trimmedLower.contains("\"status\""))
+                        || trimmedLower.contains("\"steps\":[{\"step\"")
+                        || (trimmedLower.contains("\"command\"") && (trimmedLower.contains("\"bash\"") || trimmedLower.contains("\"powershell\"") || trimmedLower.contains("\"sh\"")))) {
                     return false
                 }
 
