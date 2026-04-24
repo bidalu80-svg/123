@@ -1519,7 +1519,9 @@ struct MessageBubbleView: View {
     private func decoratedAssistantListText(_ text: String) -> String {
         guard message.role == .assistant, !text.isEmpty else { return text }
 
-        let lines = text.components(separatedBy: "\n")
+        let normalizedReadableText = readableAssistantNarration(text)
+
+        let lines = normalizedReadableText.components(separatedBy: "\n")
         guard !lines.isEmpty else { return text }
 
         var output: [String] = []
@@ -1562,6 +1564,90 @@ struct MessageBubbleView: View {
         }
 
         return output.joined(separator: "\n")
+    }
+
+    private func readableAssistantNarration(_ text: String) -> String {
+        let normalized = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard normalized.count >= 120 else { return text }
+        guard !normalized.contains("\n\n") else { return text }
+        guard !normalized.contains("```"), !normalized.contains("[[file:") else { return text }
+
+        if normalized.range(of: #"(?m)^\s*(?:[-*•]|\d+\.)\s+"#, options: .regularExpression) != nil {
+            return text
+        }
+
+        let sentences = splitAssistantSentences(normalized)
+        guard sentences.count >= 3 else { return text }
+
+        let processMarkers = [
+            "我先", "先看", "先确认", "然后", "接着", "再", "接下来",
+            "我会", "我再", "我直接", "我现在", "确认一下", "创建", "写入", "搭一个"
+        ]
+        let processSentenceCount = sentences.reduce(into: 0) { count, sentence in
+            if processMarkers.contains(where: { sentence.contains($0) }) {
+                count += 1
+            }
+        }
+
+        if processSentenceCount >= 2 {
+            return sentences.enumerated().map { index, sentence in
+                "\(index + 1). \(sentence)"
+            }
+            .joined(separator: "\n")
+        }
+
+        var paragraphs: [String] = []
+        var buffer: [String] = []
+        var bufferLength = 0
+
+        func flushBuffer() {
+            guard !buffer.isEmpty else { return }
+            paragraphs.append(buffer.joined())
+            buffer.removeAll(keepingCapacity: true)
+            bufferLength = 0
+        }
+
+        for sentence in sentences {
+            let candidateLength = bufferLength + sentence.count
+            if !buffer.isEmpty && candidateLength > 44 {
+                flushBuffer()
+            }
+            buffer.append(sentence)
+            bufferLength += sentence.count
+        }
+        flushBuffer()
+
+        if paragraphs.count >= 2 {
+            return paragraphs.joined(separator: "\n\n")
+        }
+
+        return text
+    }
+
+    private func splitAssistantSentences(_ text: String) -> [String] {
+        var sentences: [String] = []
+        var current = ""
+
+        for character in text {
+            current.append(character)
+            if "。！？；!?;".contains(character) {
+                let trimmed = current.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    sentences.append(trimmed)
+                }
+                current.removeAll(keepingCapacity: true)
+            }
+        }
+
+        let trailing = current.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trailing.isEmpty {
+            sentences.append(trailing)
+        }
+
+        return sentences
     }
 
     private func isLikelyFileTreeLine(_ raw: String) -> Bool {
