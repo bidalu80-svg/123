@@ -5,6 +5,7 @@ struct ShellExecutionResult: Equatable {
     let output: String
     let exitCode: Int
     let durationMs: Int?
+    let finalWorkingDirectory: String?
 }
 
 enum RemoteShellExecutionError: LocalizedError, Equatable {
@@ -35,6 +36,7 @@ enum RemoteShellExecutionError: LocalizedError, Equatable {
 
 final class RemoteShellExecutionService {
     static let shared = RemoteShellExecutionService()
+    private let finalWorkingDirectoryMarker = "__IEXA_FINAL_CWD__="
 
     private init() {}
 
@@ -58,8 +60,9 @@ final class RemoteShellExecutionService {
 
         let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let requestTimeout = min(max(timeout, 5), 300)
+        let wrappedCommand = wrappedCommandForWorkingDirectory(trimmedCommand)
         var payload: [String: Any] = [
-            "command": trimmedCommand,
+            "command": wrappedCommand,
             "timeout": Int(requestTimeout)
         ]
         if let workingDirectory {
@@ -148,7 +151,14 @@ final class RemoteShellExecutionService {
         if let text = String(data: data, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
            !text.isEmpty {
-            return ShellExecutionResult(command: command, output: text, exitCode: 0, durationMs: nil)
+            let (cleanedOutput, finalWorkingDirectory) = extractFinalWorkingDirectory(from: text)
+            return ShellExecutionResult(
+                command: command,
+                output: cleanedOutput,
+                exitCode: 0,
+                durationMs: nil,
+                finalWorkingDirectory: finalWorkingDirectory
+            )
         }
 
         throw RemoteShellExecutionError.invalidResponse("既不是 JSON，也不是可读文本")
@@ -159,7 +169,7 @@ final class RemoteShellExecutionService {
             return parseDictionaryResult(nested, command: command)
         }
 
-        let stdout = firstString(
+        let stdoutRaw = firstString(
             keys: ["output", "stdout", "text", "combined_output", "combinedOutput", "logs"],
             in: object
         )
@@ -185,6 +195,11 @@ final class RemoteShellExecutionService {
             in: object
         ).map { Int($0 * 1000) }
 
+        let parsedFinalWorkingDirectory = firstString(
+            keys: ["finalCwd", "final_cwd", "pwd", "workingDirectory", "working_directory"],
+            in: object
+        )
+        let (stdout, derivedFinalWorkingDirectory) = extractFinalWorkingDirectory(from: stdoutRaw)
         let mergedOutput = mergeOutput(stdout: stdout, stderr: stderr, fallback: message)
         let normalized = mergedOutput.isEmpty ? "命令执行完成（无输出）" : mergedOutput
 
@@ -192,8 +207,46 @@ final class RemoteShellExecutionService {
             command: command,
             output: normalized,
             exitCode: exitCode,
-            durationMs: durationMs
+            durationMs: durationMs,
+            finalWorkingDirectory: parsedFinalWorkingDirectory.isEmpty ? derivedFinalWorkingDirectory : parsedFinalWorkingDirectory
         )
+    }
+
+    private func wrappedCommandForWorkingDirectory(_ command: String) -> String {
+        """
+        \(command)
+        __iexa_status=$?
+        printf '\\n\(finalWorkingDirectoryMarker)%s\\n' "$PWD"
+        exit $__iexa_status
+        """
+    }
+
+    private func extractFinalWorkingDirectory(from output: String) -> (String, String?) {
+        guard output.contains(finalWorkingDirectoryMarker) else {
+            return (output, nil)
+        }
+
+        let lines = output.components(separatedBy: .newlines)
+        var cleanedLines: [String] = []
+        var finalWorkingDirectory: String?
+
+        for line in lines {
+            if line.hasPrefix(finalWorkingDirectoryMarker) {
+                let path = String(line.dropFirst(finalWorkingDirectoryMarker.count))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if !path.isEmpty {
+                    finalWorkingDirectory = path
+                }
+                continue
+            }
+            cleanedLines.append(line)
+        }
+
+        var cleanedOutput = cleanedLines.joined(separator: "\n")
+        while cleanedOutput.contains("\n\n\n") {
+            cleanedOutput = cleanedOutput.replacingOccurrences(of: "\n\n\n", with: "\n\n")
+        }
+        return (cleanedOutput.trimmingCharacters(in: .whitespacesAndNewlines), finalWorkingDirectory)
     }
 
     private func mergeOutput(stdout: String, stderr: String, fallback: String) -> String {

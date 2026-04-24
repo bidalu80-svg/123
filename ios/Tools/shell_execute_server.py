@@ -17,6 +17,7 @@ Request JSON:
 
 import json
 import os
+import shutil
 import subprocess
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -31,6 +32,7 @@ MAX_COMMAND_LENGTH = int(os.getenv("SHELL_EXEC_MAX_COMMAND_LENGTH", "8000"))
 DEFAULT_TIMEOUT = int(os.getenv("SHELL_EXEC_DEFAULT_TIMEOUT", "90"))
 MAX_TIMEOUT = int(os.getenv("SHELL_EXEC_MAX_TIMEOUT", "300"))
 ROOT_DIR = Path(os.getenv("SHELL_EXEC_ROOT", os.getcwd())).resolve()
+FINAL_CWD_MARKER = "__IEXA_FINAL_CWD__="
 
 
 def clamp_timeout(raw_timeout: Any) -> int:
@@ -116,17 +118,18 @@ class ShellExecuteHandler(BaseHTTPRequestHandler):
 
         started = time.time()
         try:
+            shell_argv = build_shell_command(command)
             completed = subprocess.run(
-                command,
-                shell=True,
+                shell_argv,
                 cwd=str(cwd),
                 capture_output=True,
                 text=True,
                 timeout=timeout,
             )
             duration_ms = int((time.time() - started) * 1000)
-            stdout = completed.stdout or ""
+            stdout_raw = completed.stdout or ""
             stderr = completed.stderr or ""
+            stdout, final_cwd = split_final_cwd(stdout_raw)
             output = stdout.strip()
             if stderr.strip():
                 output = f"{output}\n\n[stderr]\n{stderr}".strip()
@@ -141,12 +144,14 @@ class ShellExecuteHandler(BaseHTTPRequestHandler):
                     "output": output,
                     "durationMs": duration_ms,
                     "cwd": str(cwd),
+                    "finalCwd": final_cwd or str(cwd),
                 },
             )
         except subprocess.TimeoutExpired as error:
             duration_ms = int((time.time() - started) * 1000)
-            stdout = (error.stdout or "") if isinstance(error.stdout, str) else ""
+            stdout_raw = (error.stdout or "") if isinstance(error.stdout, str) else ""
             stderr = (error.stderr or "") if isinstance(error.stderr, str) else ""
+            stdout, final_cwd = split_final_cwd(stdout_raw)
             merged = f"{stdout}\n\n[stderr]\n{stderr}".strip()
             if not merged:
                 merged = f"Command timed out after {timeout}s."
@@ -160,6 +165,7 @@ class ShellExecuteHandler(BaseHTTPRequestHandler):
                     "output": merged,
                     "durationMs": duration_ms,
                     "cwd": str(cwd),
+                    "finalCwd": final_cwd or str(cwd),
                 },
             )
         except Exception as error:
@@ -176,6 +182,42 @@ class ShellExecuteHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+
+
+def build_shell_command(command: str) -> list[str]:
+    shell = shutil.which("bash") or shutil.which("sh")
+    if not shell:
+        raise RuntimeError("bash/sh not found on server")
+
+    wrapper = (
+        f"{command}\n"
+        "__iexa_status=$?\n"
+        f"printf '\\n{FINAL_CWD_MARKER}%s\\n' \"$PWD\"\n"
+        "exit $__iexa_status"
+    )
+    return [shell, "-lc", wrapper]
+
+
+def split_final_cwd(stdout: str) -> tuple[str, str | None]:
+    if FINAL_CWD_MARKER not in stdout:
+        return stdout, None
+
+    lines = stdout.splitlines()
+    final_cwd = None
+    kept_lines: list[str] = []
+
+    for line in lines:
+        if line.startswith(FINAL_CWD_MARKER):
+            candidate = line[len(FINAL_CWD_MARKER):].strip()
+            if candidate:
+                final_cwd = candidate
+            continue
+        kept_lines.append(line)
+
+    rebuilt = "\n".join(kept_lines)
+    if stdout.endswith("\n") and rebuilt and not rebuilt.endswith("\n"):
+        rebuilt += "\n"
+    return rebuilt, final_cwd
 
 
 def main() -> None:

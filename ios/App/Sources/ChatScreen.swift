@@ -91,6 +91,7 @@ struct ChatScreen: View {
     @State private var isSidebarOpen = false
     @State private var showSettingsSheet = false
     @State private var showTestSheet = false
+    @State private var showLinuxShell = false
     @State private var isPinnedToBottom = true
     @State private var starterPromptDeck: [(title: String, subtitle: String)] = []
     @State private var sidebarDragOffset: CGFloat = 0
@@ -340,6 +341,10 @@ struct ChatScreen: View {
                 TestCenterScreen()
             }
             .environmentObject(viewModel)
+        }
+        .fullScreenCover(isPresented: $showLinuxShell) {
+            LinuxShellScreen()
+                .environmentObject(viewModel)
         }
         .sheet(isPresented: $showInitialConfigSheet) {
             NavigationStack {
@@ -619,6 +624,9 @@ struct ChatScreen: View {
                 }
                 Button("测试中心", systemImage: "checkmark.circle") {
                     showTestSheet = true
+                }
+                Button("Linux 终端", systemImage: "terminal") {
+                    showLinuxShell = true
                 }
                 Divider()
                 Button("示例", systemImage: "wand.and.stars") {
@@ -4293,7 +4301,10 @@ private final class NativeStreamingMessageView: UIView {
     private let titleLabel = UILabel()
     private let noticeLabel = UILabel()
     private let textView = UITextView()
-    private let waitingLabel = UILabel()
+    private let waitingContainer = UIStackView()
+    private let waitingTitleLabel = UILabel()
+    private let waitingDotsStack = UIStackView()
+    private var waitingDotLabels: [UILabel] = []
     private let mediaLabel = UILabel()
     private let textFont = UIFont(name: "PingFangSC-Medium", size: 16) ?? UIFont.systemFont(ofSize: 16, weight: .medium)
     private var lastSignature: String?
@@ -4326,9 +4337,15 @@ private final class NativeStreamingMessageView: UIView {
         lastSignature = signature
 
         noticeLabel.isHidden = !slice.isTruncated
-        waitingLabel.isHidden = !displayText.isEmpty
+        let shouldShowWaiting = displayText.isEmpty
+        waitingContainer.isHidden = !shouldShowWaiting
         textView.isHidden = displayText.isEmpty
         mediaLabel.isHidden = mediaCount == 0
+        if shouldShowWaiting {
+            startWaitingAnimationIfNeeded()
+        } else {
+            stopWaitingAnimation()
+        }
 
         if !displayText.isEmpty {
             textView.attributedText = StreamingMarkdownTextView.renderedAttributedText(
@@ -4353,8 +4370,9 @@ private final class NativeStreamingMessageView: UIView {
         lastSignature = nil
         textView.attributedText = NSAttributedString()
         noticeLabel.isHidden = true
-        waitingLabel.isHidden = false
+        waitingContainer.isHidden = false
         mediaLabel.isHidden = true
+        startWaitingAnimationIfNeeded()
         invalidateIntrinsicContentSize()
         setNeedsLayout()
     }
@@ -4406,11 +4424,35 @@ private final class NativeStreamingMessageView: UIView {
         noticeLabel.text = "长文本生成中，当前仅渲染最新片段以保持流畅；完成后自动展示全文。"
         noticeLabel.isHidden = true
 
-        waitingLabel.translatesAutoresizingMaskIntoConstraints = false
-        waitingLabel.font = .systemFont(ofSize: 14, weight: .medium)
-        waitingLabel.textColor = .secondaryLabel
-        waitingLabel.text = "正在接收流式内容…"
-        waitingLabel.numberOfLines = 1
+        waitingContainer.translatesAutoresizingMaskIntoConstraints = false
+        waitingContainer.axis = .horizontal
+        waitingContainer.alignment = .center
+        waitingContainer.spacing = 6
+
+        waitingTitleLabel.translatesAutoresizingMaskIntoConstraints = false
+        waitingTitleLabel.font = .systemFont(ofSize: 14, weight: .medium)
+        waitingTitleLabel.textColor = .secondaryLabel
+        waitingTitleLabel.text = "正在思考"
+        waitingTitleLabel.numberOfLines = 1
+
+        waitingDotsStack.translatesAutoresizingMaskIntoConstraints = false
+        waitingDotsStack.axis = .horizontal
+        waitingDotsStack.alignment = .center
+        waitingDotsStack.spacing = 4
+
+        for _ in 0..<3 {
+            let dotLabel = UILabel()
+            dotLabel.translatesAutoresizingMaskIntoConstraints = false
+            dotLabel.text = "•"
+            dotLabel.font = .systemFont(ofSize: 18, weight: .bold)
+            dotLabel.textColor = .secondaryLabel
+            dotLabel.textAlignment = .center
+            waitingDotLabels.append(dotLabel)
+            waitingDotsStack.addArrangedSubview(dotLabel)
+        }
+
+        waitingContainer.addArrangedSubview(waitingTitleLabel)
+        waitingContainer.addArrangedSubview(waitingDotsStack)
 
         textView.translatesAutoresizingMaskIntoConstraints = false
         textView.isEditable = false
@@ -4438,7 +4480,7 @@ private final class NativeStreamingMessageView: UIView {
 
         rootStack.addArrangedSubview(headerStack)
         rootStack.addArrangedSubview(noticeLabel)
-        rootStack.addArrangedSubview(waitingLabel)
+        rootStack.addArrangedSubview(waitingContainer)
         rootStack.addArrangedSubview(textView)
         rootStack.addArrangedSubview(mediaLabel)
 
@@ -4448,6 +4490,50 @@ private final class NativeStreamingMessageView: UIView {
             rootStack.topAnchor.constraint(equalTo: topAnchor, constant: 6),
             rootStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6)
         ])
+
+        startWaitingAnimationIfNeeded()
+    }
+
+    private func startWaitingAnimationIfNeeded() {
+        guard !waitingDotLabels.isEmpty else { return }
+
+        for (index, label) in waitingDotLabels.enumerated() {
+            if label.layer.animation(forKey: "iexa.waiting.wave") != nil {
+                continue
+            }
+
+            let offsetAnimation = CABasicAnimation(keyPath: "transform.translation.y")
+            offsetAnimation.fromValue = 0
+            offsetAnimation.toValue = -4.5
+            offsetAnimation.duration = 0.46
+            offsetAnimation.autoreverses = true
+            offsetAnimation.repeatCount = .infinity
+            offsetAnimation.beginTime = CACurrentMediaTime() + Double(index) * 0.11
+            offsetAnimation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            offsetAnimation.isRemovedOnCompletion = false
+
+            let opacityAnimation = CABasicAnimation(keyPath: "opacity")
+            opacityAnimation.fromValue = 0.34
+            opacityAnimation.toValue = 1.0
+            opacityAnimation.duration = 0.46
+            opacityAnimation.autoreverses = true
+            opacityAnimation.repeatCount = .infinity
+            opacityAnimation.beginTime = offsetAnimation.beginTime
+            opacityAnimation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            opacityAnimation.isRemovedOnCompletion = false
+
+            label.layer.add(offsetAnimation, forKey: "iexa.waiting.wave")
+            label.layer.add(opacityAnimation, forKey: "iexa.waiting.opacity")
+        }
+    }
+
+    private func stopWaitingAnimation() {
+        for label in waitingDotLabels {
+            label.layer.removeAnimation(forKey: "iexa.waiting.wave")
+            label.layer.removeAnimation(forKey: "iexa.waiting.opacity")
+            label.layer.opacity = 1
+            label.transform = .identity
+        }
     }
 
     private func streamingDisplaySlice(from raw: String) -> (text: String, isTruncated: Bool) {

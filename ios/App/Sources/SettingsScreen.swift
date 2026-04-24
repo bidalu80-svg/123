@@ -325,6 +325,10 @@ struct SettingsScreen: View {
                     Slider(value: $viewModel.config.shellExecutionTimeout, in: 5...300, step: 5)
                 }
 
+                NavigationLink("打开 Linux 终端") {
+                    LinuxShellScreen()
+                }
+
                 NavigationLink("Agent 测试台") {
                     AgentLabScreen()
                 }

@@ -34,7 +34,6 @@ struct MessageBubbleView: View {
     @State private var activeVideoPreview: VideoPreviewPayload?
     @State private var activeCodeViewer: CodeViewerPayload?
     @State private var pendingPythonRun: PendingPythonRun?
-    @State private var waitingDotPulse = false
     @State private var frontendProgressPulse = false
     @State private var isGeneratingPPT = false
     @State private var generatedPPTPayload: GeneratedPPTPayload?
@@ -582,20 +581,37 @@ struct MessageBubbleView: View {
     }
 
     private var streamingWaitingDot: some View {
-        Circle()
-            .fill(colorScheme == .dark ? Color.white : Color.black)
-            .frame(width: 9, height: 9)
-            .scaleEffect(waitingDotPulse ? 1.0 : 0.68)
-            .opacity(waitingDotPulse ? 1.0 : 0.45)
-            .animation(.easeInOut(duration: 0.62).repeatForever(autoreverses: true), value: waitingDotPulse)
-            .onAppear {
-                waitingDotPulse = true
-            }
-            .onDisappear {
-                waitingDotPulse = false
+        TimelineView(.animation(minimumInterval: 0.09, paused: false)) { timeline in
+            let timestamp = timeline.date.timeIntervalSinceReferenceDate
+            HStack(spacing: 8) {
+                Text("正在思考")
+                    .font(.system(size: 15.5, weight: .medium))
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 5) {
+                    ForEach(0..<3, id: \.self) { index in
+                        Circle()
+                            .fill(colorScheme == .dark ? Color.white.opacity(0.92) : Color.black.opacity(0.86))
+                            .frame(width: 7, height: 7)
+                            .offset(y: thinkingWaveOffset(at: timestamp, index: index))
+                            .opacity(thinkingWaveOpacity(at: timestamp, index: index))
+                    }
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityLabel("正在接收流式内容")
+            .accessibilityLabel("正在思考")
+        }
+    }
+
+    private func thinkingWaveOffset(at time: TimeInterval, index: Int) -> CGFloat {
+        let phase = time * 5.6 - Double(index) * 0.45
+        return CGFloat(sin(phase)) * -4.6
+    }
+
+    private func thinkingWaveOpacity(at time: TimeInterval, index: Int) -> Double {
+        let phase = time * 5.6 - Double(index) * 0.45
+        let normalized = (sin(phase) + 1) / 2
+        return 0.34 + normalized * 0.66
     }
 
     private var frontendProgressPayload: FrontendProgressPayload? {
