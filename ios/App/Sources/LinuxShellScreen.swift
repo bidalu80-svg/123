@@ -28,7 +28,7 @@ struct LinuxShellScreen: View {
         }
         .background(Color.black.ignoresSafeArea())
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            bottomPanel
+            inputAccessoryPanel
         }
         .preferredColorScheme(.dark)
         .onAppear {
@@ -64,8 +64,9 @@ struct LinuxShellScreen: View {
 
             Spacer(minLength: 0)
 
-            shellHeaderButton(systemName: "arrow.counterclockwise") {
-                restartSession()
+            shellHeaderButton(systemName: "paintbrush") {
+                terminalOutput = ""
+                connectionError = nil
             }
         }
         .padding(.horizontal, 14)
@@ -88,6 +89,10 @@ struct LinuxShellScreen: View {
                     .id("linux-shell-output")
             }
             .background(Color.black)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                isCommandFieldFocused = true
+            }
             .onChange(of: terminalOutput) { _, _ in
                 DispatchQueue.main.async {
                     withAnimation(.easeOut(duration: 0.18)) {
@@ -95,65 +100,21 @@ struct LinuxShellScreen: View {
                     }
                 }
             }
+            .onChange(of: commandDraft) { _, _ in
+                DispatchQueue.main.async {
+                    proxy.scrollTo("linux-shell-output", anchor: .bottom)
+                }
+            }
         }
     }
 
-    private var bottomPanel: some View {
+    private var inputAccessoryPanel: some View {
         VStack(spacing: 10) {
             quickActions
 
-            VStack(alignment: .leading, spacing: 10) {
-                Text("当前目录：\(displayWorkingDirectory)")
-                    .font(.system(size: 14, weight: .medium, design: .monospaced))
-                    .foregroundStyle(Color.white.opacity(0.66))
-                    .lineLimit(1)
-
-                HStack(spacing: 12) {
-                    TextField(
-                        "输入命令，例如 npm install、pnpm dev、python main.py",
-                        text: $commandDraft
-                    )
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .keyboardType(.asciiCapable)
-                    .submitLabel(.go)
-                    .focused($isCommandFieldFocused)
-                    .font(.system(size: 17, weight: .regular, design: .monospaced))
-                    .foregroundStyle(.white)
-                    .disabled(!shellReady || isConnecting || isSending)
-                    .onSubmit {
-                        submitCurrentCommand()
-                    }
-
-                    Button {
-                        submitCurrentCommand()
-                    } label: {
-                        Image(systemName: "arrow.up")
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundStyle(Color.black)
-                            .frame(width: 40, height: 40)
-                            .background(
-                                Circle()
-                                    .fill(canSubmitCommand ? Color(red: 0.31, green: 0.93, blue: 0.52) : Color.white.opacity(0.18))
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!canSubmitCommand)
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 14)
-            .background(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(Color(red: 0.10, green: 0.10, blue: 0.11))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .stroke(Color.white.opacity(0.08), lineWidth: 0.8)
-            )
-            .padding(.horizontal, 12)
-            .padding(.bottom, 8)
-            .background(Color.black)
+            hiddenInputBridge
+                .padding(.horizontal, 12)
+                .padding(.bottom, 6)
         }
         .background(Color.black)
     }
@@ -174,9 +135,9 @@ struct LinuxShellScreen: View {
                     terminalOutput = ""
                     connectionError = nil
                 }
-                quickActionButton(title: "Ctrl+C") {
-                    sendControlSignal("interrupt")
-                }
+                quickActionButton(title: "Esc") { sendRawInput("\u{1B}") }
+                quickActionButton(title: "Tab") { sendRawInput("\t") }
+                quickActionButton(title: "Ctrl+C") { sendControlSignal("interrupt") }
                 quickActionButton(title: "pwd") {
                     runPresetCommand("pwd")
                 }
@@ -208,6 +169,21 @@ struct LinuxShellScreen: View {
         .opacity((isConnecting || sessionID == nil) ? 0.45 : 1)
     }
 
+    private var hiddenInputBridge: some View {
+        TextField("", text: $commandDraft)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .keyboardType(.asciiCapable)
+            .submitLabel(.go)
+            .focused($isCommandFieldFocused)
+            .disabled(!shellReady || isConnecting || isSending)
+            .onSubmit {
+                submitCurrentCommand()
+            }
+            .frame(height: 1)
+            .opacity(0.01)
+    }
+
     private func shellHeaderButton(systemName: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
@@ -219,8 +195,7 @@ struct LinuxShellScreen: View {
     }
 
     private var shellReady: Bool {
-        viewModel.config.shellExecutionEnabled
-            && !viewModel.config.shellExecutionURLString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !viewModel.config.shellExecutionURLString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var canSubmitCommand: Bool {
@@ -247,16 +222,25 @@ struct LinuxShellScreen: View {
             return connectionError
         }
 
-        let trimmed = terminalOutput.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty {
-            return terminalOutput
+        var output = terminalOutput
+
+        if output.isEmpty {
+            if isConnecting {
+                output = "正在连接 \(promptHost)…\n"
+            } else {
+                output = "\(promptHost):\(displayWorkingDirectory)# "
+            }
         }
 
-        if isConnecting {
-            return "正在连接 \(promptHost)…"
+        if !commandDraft.isEmpty {
+            output += commandDraft
         }
 
-        return "\(promptHost):\(displayWorkingDirectory)# "
+        if shellReady && !isConnecting {
+            output += "█"
+        }
+
+        return output
     }
 
     private var terminalTextColor: Color {
@@ -390,6 +374,30 @@ struct LinuxShellScreen: View {
     private func runPresetCommand(_ command: String) {
         commandDraft = command
         submitCurrentCommand()
+    }
+
+    private func sendRawInput(_ input: String) {
+        guard let sessionID else { return }
+
+        Task {
+            do {
+                let snapshot = try await RemoteShellSessionService.shared.sendInput(
+                    sessionID: sessionID,
+                    input: input,
+                    endpoint: viewModel.config.shellExecutionURLString,
+                    apiKey: viewModel.config.apiKey,
+                    appendNewline: false
+                )
+                await MainActor.run {
+                    apply(snapshot: snapshot)
+                    isCommandFieldFocused = true
+                }
+            } catch {
+                await MainActor.run {
+                    appendTerminalOutput("\n[error] \(error.localizedDescription)\n")
+                }
+            }
+        }
     }
 
     private func sendControlSignal(_ signal: String) {

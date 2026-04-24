@@ -15,6 +15,8 @@ Routes:
 - POST /shell/session/stop
 - GET  /v1/shell/session/poll?sessionId=...
 - GET  /shell/session/poll?sessionId=...
+- GET  /v1/shell/capabilities
+- GET  /shell/capabilities
 - GET  /healthz
 """
 
@@ -55,6 +57,33 @@ SESSION_INPUT_ROUTES = {"/v1/shell/session/input", "/shell/session/input"}
 SESSION_SIGNAL_ROUTES = {"/v1/shell/session/signal", "/shell/session/signal"}
 SESSION_STOP_ROUTES = {"/v1/shell/session/stop", "/shell/session/stop"}
 SESSION_POLL_ROUTES = {"/v1/shell/session/poll", "/shell/session/poll"}
+CAPABILITIES_ROUTES = {"/v1/shell/capabilities", "/shell/capabilities"}
+
+SHELL_CANDIDATES = ["bash", "sh", "zsh", "fish", "pwsh"]
+RUNTIME_CANDIDATES = {
+    "python": ["python3", "python"],
+    "node": ["node"],
+    "npm": ["npm"],
+    "pnpm": ["pnpm"],
+    "yarn": ["yarn"],
+    "bun": ["bun"],
+    "deno": ["deno"],
+    "php": ["php"],
+    "ruby": ["ruby"],
+    "go": ["go"],
+    "java": ["java"],
+    "javac": ["javac"],
+    "cargo": ["cargo"],
+    "rustc": ["rustc"],
+    "swift": ["swift"],
+    "gcc": ["gcc"],
+    "g++": ["g++"],
+    "clang": ["clang"],
+    "cmake": ["cmake"],
+    "make": ["make"],
+    "git": ["git"],
+    "docker": ["docker"],
+}
 
 
 def clamp_timeout(raw_timeout: Any) -> int:
@@ -124,6 +153,30 @@ def trailing_partial_marker(text: str) -> str:
         if FINAL_CWD_MARKER.startswith(suffix):
             return suffix
     return ""
+
+
+def discover_capabilities() -> Dict[str, Any]:
+    shells: list[dict[str, str]] = []
+    for candidate in SHELL_CANDIDATES:
+        resolved = shutil.which(candidate)
+        if resolved:
+            shells.append({"name": candidate, "path": resolved})
+
+    runtimes: dict[str, dict[str, str]] = {}
+    for runtime, commands in RUNTIME_CANDIDATES.items():
+        for command in commands:
+            resolved = shutil.which(command)
+            if resolved:
+                runtimes[runtime] = {"command": command, "path": resolved}
+                break
+
+    return {
+        "ok": True,
+        "rootDir": str(ROOT_DIR),
+        "defaultShell": DEFAULT_SESSION_SHELL,
+        "shells": shells,
+        "runtimes": runtimes,
+    }
 
 
 class PtyShellSession:
@@ -261,6 +314,7 @@ class PtyShellSession:
             "cwd": cwd,
             "isRunning": not closed,
             "exitCode": exit_code,
+            "shell": self.shell_name,
         }
 
     def send_input(self, input_text: str, append_newline: bool = True) -> None:
@@ -360,6 +414,12 @@ class ShellExecuteHandler(BaseHTTPRequestHandler):
 
         if path in ("/healthz", "/health"):
             self._send_json(200, {"ok": True, "service": "shell-execute"})
+            return
+
+        if path in CAPABILITIES_ROUTES:
+            if not self._authorize_if_needed():
+                return
+            self._send_json(200, discover_capabilities())
             return
 
         if path in SESSION_POLL_ROUTES:

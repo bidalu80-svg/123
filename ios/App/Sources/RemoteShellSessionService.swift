@@ -6,6 +6,25 @@ struct RemoteShellSessionSnapshot: Equatable {
     let workingDirectory: String
     let isRunning: Bool
     let exitCode: Int?
+    let shellName: String
+}
+
+struct RemoteShellCapabilities: Equatable {
+    struct ShellEntry: Equatable {
+        let name: String
+        let path: String
+    }
+
+    struct RuntimeEntry: Equatable {
+        let runtime: String
+        let command: String
+        let path: String
+    }
+
+    let rootDirectory: String
+    let defaultShell: String
+    let shells: [ShellEntry]
+    let runtimes: [RuntimeEntry]
 }
 
 enum RemoteShellSessionError: LocalizedError, Equatable {
@@ -39,13 +58,20 @@ final class RemoteShellSessionService {
     func startSession(
         endpoint: String,
         apiKey: String,
-        workingDirectory: String?
+        workingDirectory: String?,
+        shell: String? = nil
     ) async throws -> RemoteShellSessionSnapshot {
         var payload: [String: Any] = [:]
         if let workingDirectory {
             let trimmed = workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty {
                 payload["cwd"] = trimmed
+            }
+        }
+        if let shell {
+            let trimmed = shell.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                payload["shell"] = trimmed
             }
         }
         return try await performPOST(
@@ -79,6 +105,39 @@ final class RemoteShellSessionService {
                 "appendNewline": appendNewline
             ]
         )
+    }
+
+    func fetchCapabilities(
+        endpoint: String,
+        apiKey: String
+    ) async throws -> RemoteShellCapabilities {
+        let candidates = sessionEndpointCandidates(from: endpoint, suffixes: [
+            "/v1/shell/capabilities",
+            "/shell/capabilities"
+        ])
+        guard !candidates.isEmpty else {
+            throw RemoteShellSessionError.invalidURL
+        }
+
+        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        var lastError: Error?
+
+        for candidate in candidates {
+            var request = URLRequest(url: candidate, timeoutInterval: 30)
+            request.httpMethod = "GET"
+            if !trimmedKey.isEmpty {
+                request.setValue("Bearer \(trimmedKey)", forHTTPHeaderField: "Authorization")
+            }
+
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                return try parseCapabilities(data: data, response: response)
+            } catch {
+                lastError = error
+            }
+        }
+
+        throw lastError ?? RemoteShellSessionError.invalidURL
     }
 
     func sendSignal(
@@ -226,13 +285,56 @@ final class RemoteShellSessionService {
         let workingDirectory = firstString(keys: ["cwd", "workingDirectory", "working_directory", "finalCwd"], in: object)
         let isRunning = firstBool(keys: ["isRunning", "running", "is_running"], in: object) ?? true
         let exitCode = firstInt(keys: ["exitCode", "exit_code", "code", "status"], in: object)
+        let shellName = firstString(keys: ["shell", "shellName", "shell_name"], in: object)
 
         return RemoteShellSessionSnapshot(
             sessionID: sessionID,
             output: output,
             workingDirectory: workingDirectory,
             isRunning: isRunning,
-            exitCode: exitCode
+            exitCode: exitCode,
+            shellName: shellName
+        )
+    }
+
+    private func parseCapabilities(data: Data, response: URLResponse) throws -> RemoteShellCapabilities {
+        guard let http = response as? HTTPURLResponse else {
+            throw RemoteShellSessionError.invalidResponse("缺少 HTTP 响应头")
+        }
+
+        guard (200...299).contains(http.statusCode) else {
+            let message = parsedErrorMessage(from: data)
+            throw RemoteShellSessionError.httpError(status: http.statusCode, message: message)
+        }
+
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw RemoteShellSessionError.invalidResponse("能力响应不是 JSON")
+        }
+
+        let rootDirectory = firstString(keys: ["rootDir", "root_dir"], in: object)
+        let defaultShell = firstString(keys: ["defaultShell", "default_shell"], in: object)
+
+        let shells: [RemoteShellCapabilities.ShellEntry] = (object["shells"] as? [[String: Any]] ?? []).compactMap { item in
+            let name = firstString(keys: ["name"], in: item)
+            let path = firstString(keys: ["path"], in: item)
+            guard !name.isEmpty, !path.isEmpty else { return nil }
+            return .init(name: name, path: path)
+        }
+
+        let runtimesDict = object["runtimes"] as? [String: [String: Any]] ?? [:]
+        let runtimes = runtimesDict.keys.sorted().compactMap { key -> RemoteShellCapabilities.RuntimeEntry? in
+            guard let item = runtimesDict[key] else { return nil }
+            let command = firstString(keys: ["command"], in: item)
+            let path = firstString(keys: ["path"], in: item)
+            guard !command.isEmpty, !path.isEmpty else { return nil }
+            return .init(runtime: key, command: command, path: path)
+        }
+
+        return RemoteShellCapabilities(
+            rootDirectory: rootDirectory,
+            defaultShell: defaultShell,
+            shells: shells,
+            runtimes: runtimes
         )
     }
 

@@ -282,58 +282,6 @@ struct SettingsScreen: View {
                 }
             }
 
-            Section("智能体工具") {
-                Toggle("启用远端 Linux Shell", isOn: $viewModel.config.shellExecutionEnabled)
-
-                Text("开启后，IEXA 可以更像 Open Minis 一样运行命令、处理文件、写代码并在工作区执行任务。需要在你的 Linux / workspace 机器上启动 `ios/Tools/shell_execute_server.py`。")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-
-                if viewModel.config.shellExecutionEnabled {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("终端执行路径（可填相对路径，也可直接填完整 URL）")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-
-                        TextField("例如 /v1/shell/execute", text: $viewModel.config.shellExecutionPath)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-
-                        Text("完整地址：\(viewModel.config.shellExecutionURLString)")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                            .lineLimit(2)
-                    }
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("默认工作目录")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-
-                        TextField("例如 latest / workspace / /var/minis/workspace", text: $viewModel.config.shellExecutionWorkingDirectory)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                    }
-
-                    HStack {
-                        Text("Shell 超时")
-                        Spacer()
-                        Text("\(Int(viewModel.config.shellExecutionTimeout)) 秒")
-                            .foregroundStyle(.secondary)
-                    }
-                    Slider(value: $viewModel.config.shellExecutionTimeout, in: 5...300, step: 5)
-                }
-
-                NavigationLink("打开 Linux 终端") {
-                    LinuxShellScreen()
-                }
-
-                NavigationLink("Agent 测试台") {
-                    AgentLabScreen()
-                }
-            }
-
             Section("项目文件") {
                 projectPathCard(
                     title: "项目根目录",
@@ -409,6 +357,10 @@ struct SettingsScreen: View {
             }
 
             Section("应用") {
+                NavigationLink("Linux 终端") {
+                    LinuxShellScreen()
+                }
+
                 NavigationLink("记忆管理") {
                     MemoryManagementScreen()
                 }
