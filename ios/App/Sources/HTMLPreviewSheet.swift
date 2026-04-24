@@ -24,7 +24,7 @@ struct HTMLPreviewSheet: View {
 
                 if let entryPathDisplay {
                     HStack(spacing: 10) {
-                        Text("preview")
+                        Text("预览")
                             .font(.system(size: 14, weight: .bold))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 16)
@@ -91,7 +91,7 @@ struct HTMLPreviewSheet: View {
 
     private var titleForDisplay: String {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "IEXA Computer" : trimmed
+        return trimmed.isEmpty ? "IEXA 电脑" : trimmed
     }
 
     private var entryPathDisplay: String? {

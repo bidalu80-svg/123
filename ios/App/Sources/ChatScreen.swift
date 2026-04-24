@@ -1047,9 +1047,9 @@ struct ChatScreen: View {
             return "请说话"
         }
         if viewModel.isPrivateMode {
-            return "Private IEXA"
+            return "私密 IEXA"
         }
-        return "Message IEXA"
+        return "发送给 IEXA"
     }
 
     private var primaryComposerButtonFill: Color {
@@ -1639,7 +1639,7 @@ struct ChatScreen: View {
     private var starterPromptStrip: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Start With IEXA")
+                Text("从这里开始")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(MinisTheme.secondaryText)
                 Spacer()

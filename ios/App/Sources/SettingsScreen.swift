@@ -282,7 +282,7 @@ struct SettingsScreen: View {
                 }
             }
 
-            Section("Agent 工具") {
+            Section("智能体工具") {
                 Toggle("启用远端 Linux Shell", isOn: $viewModel.config.shellExecutionEnabled)
 
                 Text("开启后，IEXA 可以更像 Open Minis 一样运行命令、处理文件、写代码并在工作区执行任务。需要在你的 Linux / workspace 机器上启动 `ios/Tools/shell_execute_server.py`。")
