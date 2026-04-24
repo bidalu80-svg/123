@@ -23,8 +23,10 @@ final class ChatViewModel: ObservableObject {
     }
 
     private final class ActiveStreamState {
-        private static let maxCharactersPerCommit = 160
-        private static let minimumCommitInterval: TimeInterval = 0.10
+        private static let maxCharactersPerCommit = 72
+        private static let minimumCommitInterval: TimeInterval = 0.055
+        private static let minimumNaturalBreakCharacters = 24
+        private static let maxNaturalBreakLookahead = 20
 
         let messageID: UUID
         let target: StreamTargetContext
@@ -80,9 +82,63 @@ final class ChatViewModel: ObservableObject {
 
             guard shouldCommit else { return "" }
 
-            let output = pendingText
-            pendingText.removeAll(keepingCapacity: true)
+            let output: String
+            if force {
+                output = pendingText
+                pendingText.removeAll(keepingCapacity: true)
+            } else {
+                output = consumePreferredStreamingChunk()
+            }
             lastCommitAt = now
+            return output
+        }
+
+        private func consumePreferredStreamingChunk() -> String {
+            guard !pendingText.isEmpty else { return "" }
+
+            let maxLength = min(
+                pendingText.count,
+                Self.maxCharactersPerCommit + Self.maxNaturalBreakLookahead
+            )
+            let endIndex = pendingText.index(
+                pendingText.startIndex,
+                offsetBy: maxLength,
+                limitedBy: pendingText.endIndex
+            ) ?? pendingText.endIndex
+            let candidate = String(pendingText[..<endIndex])
+
+            if let newlineIndex = candidate.firstIndex(of: "\n"),
+               candidate.distance(from: candidate.startIndex, to: newlineIndex) >= Self.minimumNaturalBreakCharacters {
+                let chunkEnd = pendingText.index(after: newlineIndex)
+                let output = String(pendingText[..<chunkEnd])
+                pendingText.removeSubrange(..<chunkEnd)
+                return output
+            }
+
+            let breakScalars = CharacterSet(charactersIn: "。！？!?；;，,、 ")
+            var preferredIndex: String.Index?
+            for index in candidate.indices.reversed() {
+                let distance = candidate.distance(from: candidate.startIndex, to: index)
+                guard distance >= Self.minimumNaturalBreakCharacters else { break }
+                let scalar = candidate[index].unicodeScalars
+                if scalar.allSatisfy({ breakScalars.contains($0) }) {
+                    preferredIndex = candidate.index(after: index)
+                    break
+                }
+            }
+
+            if let preferredIndex {
+                let length = candidate.distance(from: candidate.startIndex, to: preferredIndex)
+                let chunkEnd = pendingText.index(pendingText.startIndex, offsetBy: length)
+                let output = String(pendingText[..<chunkEnd])
+                pendingText.removeSubrange(..<chunkEnd)
+                return output
+            }
+
+            let fallbackLength = min(Self.maxCharactersPerCommit, pendingText.count)
+            let chunkEnd = pendingText.index(pendingText.startIndex, offsetBy: fallbackLength)
+            let output = String(pendingText[..<chunkEnd])
+            pendingText.removeSubrange(..<chunkEnd)
             return output
         }
     }
@@ -818,9 +874,9 @@ final class ChatViewModel: ObservableObject {
         let buffer = StreamBuffer(maxBufferedCharacters: 120_000)
         let state = ActiveStreamState(messageID: messageID, target: target, buffer: buffer)
         let isLowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
-        let refreshInterval: TimeInterval = isLowPowerMode ? 0.10 : 0.075
-        let maxCharactersPerFrame = isLowPowerMode ? 96 : 120
-        let maxCharactersFetchedPerTick = isLowPowerMode ? 1_000 : 1_400
+        let refreshInterval: TimeInterval = isLowPowerMode ? 0.08 : 0.05
+        let maxCharactersPerFrame = isLowPowerMode ? 40 : 32
+        let maxCharactersFetchedPerTick = isLowPowerMode ? 720 : 900
 
         let renderer = StreamRenderer(
             buffer: buffer,

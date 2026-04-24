@@ -2,12 +2,15 @@ import SwiftUI
 import UIKit
 
 enum MinisTheme {
-    static let appBackground = Color(
-        UIColor { trait in
+    static let appBackgroundUIColor = UIColor(
+        dynamicProvider: { trait in
             trait.userInterfaceStyle == .dark
                 ? UIColor(red: 0.05, green: 0.055, blue: 0.06, alpha: 1)
                 : UIColor(red: 0.985, green: 0.985, blue: 0.975, alpha: 1)
         }
+    )
+    static let appBackground = Color(
+        appBackgroundUIColor
     )
     static let panelBackground = Color(
         UIColor { trait in
