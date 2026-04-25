@@ -229,4 +229,61 @@ final class MessageContentParserTests: XCTestCase {
         XCTAssertTrue(text.contains("动态类型（鸭子类型）"))
         XCTAssertTrue(text.contains("变量不需要声明类型"))
     }
+
+    func testParseKeepsExampleHeadingOutsideCodeAndMergesImplicitExampleRun() {
+        let message = ChatMessage(
+            role: .assistant,
+            content: """
+            Python 代码：
+
+            ```python
+            for right, ch in enumerate(s):
+                if ch in last and last[ch] >= left:
+                    left = last[ch] + 1
+                last[ch] = right
+                ans = max(ans, right - left + 1)
+
+            return ans
+
+            **例子：**
+            ```
+
+            python
+            s = "abcbb"
+            print(lengthOfLongestSubstring(s)) # 3
+            """
+        )
+
+        let segments = MessageContentParser.parse(message)
+
+        XCTAssertTrue(segments.contains {
+            if case let .text(text) = $0 {
+                return text.contains("Python 代码：")
+            }
+            return false
+        })
+
+        XCTAssertTrue(segments.contains {
+            if case let .text(text) = $0 {
+                return text.contains("例子：")
+            }
+            return false
+        })
+
+        let codeSegments = segments.compactMap { segment -> (String?, String)? in
+            if case let .code(language, content) = segment {
+                return (language, content)
+            }
+            return nil
+        }
+
+        XCTAssertEqual(codeSegments.count, 2)
+        XCTAssertEqual(codeSegments.first?.0, "python")
+        XCTAssertTrue(codeSegments.first?.1.contains("for right, ch in enumerate(s):") == true)
+        XCTAssertFalse(codeSegments.first?.1.contains("例子：") == true)
+
+        XCTAssertEqual(codeSegments.last?.0, "python")
+        XCTAssertTrue(codeSegments.last?.1.contains(#"s = "abcbb""#) == true)
+        XCTAssertTrue(codeSegments.last?.1.contains("print(lengthOfLongestSubstring(s)) # 3") == true)
+    }
 }

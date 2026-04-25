@@ -23,6 +23,24 @@ final class ChatConfigStoreTests: XCTestCase {
         )
     }
 
+    func testShellExecutionURLAllowsAbsoluteOverride() {
+        var config = ChatConfig(apiURL: "https://chat.example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
+        config.shellExecutionPath = "http://192.168.1.20:8787/v1/shell/execute"
+
+        XCTAssertEqual(
+            config.shellExecutionURLString,
+            "http://192.168.1.20:8787/v1/shell/execute"
+        )
+    }
+
+    func testResolvedShellExecutionAPIKeyFallsBackToChatAPIKey() {
+        var config = ChatConfig(apiURL: "https://example.com", apiKey: "chat-token", model: "gpt-test", timeout: 30, streamEnabled: true)
+        XCTAssertEqual(config.resolvedShellExecutionAPIKey, "chat-token")
+
+        config.shellExecutionAPIKey = "shell-token"
+        XCTAssertEqual(config.resolvedShellExecutionAPIKey, "shell-token")
+    }
+
     func testDecodeLegacyConfigDefaultsRealtimeFields() throws {
         let legacyJSON = """
         {

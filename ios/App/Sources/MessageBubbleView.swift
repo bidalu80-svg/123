@@ -10,6 +10,7 @@ struct MessageBubbleView: View {
     let precedingUserMessage: ChatMessage?
     let codeThemeMode: CodeThemeMode
     let apiKey: String
+    let shellExecutionAPIKey: String
     let apiBaseURL: String
     let shellExecutionURLString: String
     let shellExecutionTimeout: Double
@@ -56,6 +57,7 @@ struct MessageBubbleView: View {
         precedingUserMessage: ChatMessage? = nil,
         codeThemeMode: CodeThemeMode,
         apiKey: String,
+        shellExecutionAPIKey: String = "",
         apiBaseURL: String,
         shellExecutionURLString: String = "",
         shellExecutionTimeout: Double = 90,
@@ -69,6 +71,7 @@ struct MessageBubbleView: View {
         self.precedingUserMessage = precedingUserMessage
         self.codeThemeMode = codeThemeMode
         self.apiKey = apiKey
+        self.shellExecutionAPIKey = shellExecutionAPIKey
         self.apiBaseURL = apiBaseURL
         self.shellExecutionURLString = shellExecutionURLString
         self.shellExecutionTimeout = shellExecutionTimeout
@@ -2347,7 +2350,7 @@ struct MessageBubbleView: View {
         let endpoint = shellExecutionURLString
         let timeout = shellExecutionTimeout
         let workingDirectory = shellExecutionWorkingDirectory
-        let key = apiKey
+        let key = shellExecutionAPIKey
 
         let task = Task {
             defer {

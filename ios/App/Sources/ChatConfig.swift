@@ -273,6 +273,7 @@ struct ChatConfig: Codable, Equatable {
     var streamEnabled: Bool
     var frontendAutoBuildEnabled: Bool
     var shellExecutionPath: String
+    var shellExecutionAPIKey: String
     var shellExecutionTimeout: Double
     var shellExecutionWorkingDirectory: String
     var themeMode: AppThemeMode
@@ -310,6 +311,7 @@ struct ChatConfig: Codable, Equatable {
         streamEnabled: true,
         frontendAutoBuildEnabled: true,
         shellExecutionPath: ChatConfig.defaultShellExecutionPath,
+        shellExecutionAPIKey: "",
         shellExecutionTimeout: 90,
         shellExecutionWorkingDirectory: "latest",
         themeMode: .system,
@@ -348,6 +350,7 @@ struct ChatConfig: Codable, Equatable {
         streamEnabled: Bool,
         frontendAutoBuildEnabled: Bool = true,
         shellExecutionPath: String = ChatConfig.defaultShellExecutionPath,
+        shellExecutionAPIKey: String = "",
         shellExecutionTimeout: Double = 90,
         shellExecutionWorkingDirectory: String = "latest",
         themeMode: AppThemeMode = .system,
@@ -385,6 +388,7 @@ struct ChatConfig: Codable, Equatable {
         _ = frontendAutoBuildEnabled
         self.frontendAutoBuildEnabled = true
         self.shellExecutionPath = shellExecutionPath
+        self.shellExecutionAPIKey = shellExecutionAPIKey
         self.shellExecutionTimeout = shellExecutionTimeout
         self.shellExecutionWorkingDirectory = shellExecutionWorkingDirectory
         self.themeMode = themeMode
@@ -424,6 +428,7 @@ struct ChatConfig: Codable, Equatable {
         streamEnabled = try c.decode(Bool.self, forKey: .streamEnabled)
         frontendAutoBuildEnabled = true
         shellExecutionPath = try c.decodeIfPresent(String.self, forKey: .shellExecutionPath) ?? ChatConfig.defaultShellExecutionPath
+        shellExecutionAPIKey = try c.decodeIfPresent(String.self, forKey: .shellExecutionAPIKey) ?? ""
         shellExecutionTimeout = try c.decodeIfPresent(Double.self, forKey: .shellExecutionTimeout) ?? 90
         shellExecutionWorkingDirectory = try c.decodeIfPresent(String.self, forKey: .shellExecutionWorkingDirectory) ?? "latest"
         themeMode = try c.decodeIfPresent(AppThemeMode.self, forKey: .themeMode) ?? .system
@@ -517,6 +522,14 @@ struct ChatConfig: Codable, Equatable {
         ChatConfigStore.endpointURL(apiURL, path: shellExecutionPath, fallback: ChatConfig.defaultShellExecutionPath)
     }
 
+    var resolvedShellExecutionAPIKey: String {
+        let shellKey = shellExecutionAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !shellKey.isEmpty {
+            return shellKey
+        }
+        return apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     var activeEndpointURLString: String {
         switch endpointMode {
         case .chatCompletions:
@@ -597,6 +610,7 @@ enum ChatConfigStore {
             streamEnabled: ChatConfig.default.streamEnabled,
             frontendAutoBuildEnabled: ChatConfig.default.frontendAutoBuildEnabled,
             shellExecutionPath: ChatConfig.default.shellExecutionPath,
+            shellExecutionAPIKey: ChatConfig.default.shellExecutionAPIKey,
             shellExecutionTimeout: ChatConfig.default.shellExecutionTimeout,
             shellExecutionWorkingDirectory: ChatConfig.default.shellExecutionWorkingDirectory,
             themeMode: ChatConfig.default.themeMode,
@@ -745,6 +759,7 @@ enum ChatConfigStore {
             streamEnabled: config.streamEnabled,
             frontendAutoBuildEnabled: true,
             shellExecutionPath: normalizeEndpointPath(config.shellExecutionPath, fallback: ChatConfig.defaultShellExecutionPath),
+            shellExecutionAPIKey: config.shellExecutionAPIKey.trimmingCharacters(in: .whitespacesAndNewlines),
             shellExecutionTimeout: min(max(config.shellExecutionTimeout, 5), 300),
             shellExecutionWorkingDirectory: config.shellExecutionWorkingDirectory.trimmingCharacters(in: .whitespacesAndNewlines),
             themeMode: config.themeMode,

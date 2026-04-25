@@ -25,7 +25,6 @@ from __future__ import annotations
 import errno
 import json
 import os
-import pty
 import select
 import shutil
 import signal
@@ -37,6 +36,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict
 from urllib.parse import parse_qs, urlparse
+
+try:
+    import pty
+except ModuleNotFoundError as error:
+    if os.name == "nt" and error.name in {"pty", "termios"}:
+        raise SystemExit(
+            "shell_execute_server.py 需要在 Linux / macOS / WSL 中运行；"
+            "Windows 原生 Python 不支持 pty/termios。"
+            "请改用 WSL，并执行 ios/Tools/start_shell_execute_server_wsl.ps1。"
+        ) from error
+    raise
 
 
 HOST = os.getenv("SHELL_EXEC_HOST", "0.0.0.0")

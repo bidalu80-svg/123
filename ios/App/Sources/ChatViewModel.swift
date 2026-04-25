@@ -803,6 +803,7 @@ final class ChatViewModel: ObservableObject {
         inflightSendTask = nil
         inflightTargetContext = nil
         endBackgroundSendTask()
+        MessageContentParser.clearCaches()
         draftMessage = ""
         draftImageAttachments = []
         draftFileAttachment = nil
@@ -1462,6 +1463,7 @@ final class ChatViewModel: ObservableObject {
             streamEnabled: input.streamEnabled,
             frontendAutoBuildEnabled: true,
             shellExecutionPath: ChatConfigStore.normalizeEndpointPath(input.shellExecutionPath, fallback: ChatConfig.defaultShellExecutionPath),
+            shellExecutionAPIKey: input.shellExecutionAPIKey.trimmingCharacters(in: .whitespacesAndNewlines),
             shellExecutionTimeout: min(max(input.shellExecutionTimeout, 5), 300),
             shellExecutionWorkingDirectory: input.shellExecutionWorkingDirectory.trimmingCharacters(in: .whitespacesAndNewlines),
             themeMode: input.themeMode,

@@ -536,14 +536,17 @@ enum MessageContentParser {
                 break
             }
 
-            if isLikelyCodeLine(trimmed)
+            let strongCode = isStrongCodeLine(trimmed)
+            let weakCode = isLikelyCodeLine(trimmed) || isLikelyInlineCommentedCodeLine(trimmed)
+            if strongCode
+                || weakCode
                 || isLikelyCodeContinuationLine(trimmed)
                 || isLikelyIndentedCodeContinuationLine(rawLine: rawLine, trimmed: trimmed) {
                 collected.append(rawLine)
                 nonEmptyCount += 1
-                if isStrongCodeLine(trimmed) {
+                if strongCode {
                     strongCodeLineCount += 1
-                } else if isLikelyCodeLine(trimmed) {
+                } else if weakCode {
                     weakCodeLineCount += 1
                 }
                 cursor += 1
@@ -673,6 +676,20 @@ enum MessageContentParser {
         guard !trimmed.isEmpty else { return false }
         if looksLikeNaturalLanguageSentence(trimmed) { return false }
 
+        if let stripped = stripInlineCommentForCodeDetection(from: trimmed),
+           stripped != trimmed {
+            if isStrongCodeLine(stripped) {
+                return true
+            }
+
+            if stripped.range(
+                of: #"^[A-Za-z_][A-Za-z0-9_\.]*\s*\([^)]*\)$"#,
+                options: .regularExpression
+            ) != nil {
+                return true
+            }
+        }
+
         if trimmed.range(
             of: #"^(func|def|class|interface|struct|enum|import|from|package|public|private|protected|return|if|for|while|switch|case|try|catch|finally)\b"#,
             options: [.regularExpression, .caseInsensitive]
@@ -696,6 +713,13 @@ enum MessageContentParser {
         }
 
         if trimmed.hasSuffix(";") {
+            return true
+        }
+
+        if trimmed.range(
+            of: #"^[A-Za-z_][A-Za-z0-9_\.]*\s*\([^)]*\)$"#,
+            options: .regularExpression
+        ) != nil {
             return true
         }
 
@@ -1029,7 +1053,11 @@ enum MessageContentParser {
                 count += 1
             }
         }
-        guard naturalLineCount >= 2 else { return nil }
+        let allowsSingleNarrativeHeading =
+            naturalLineCount >= 1
+            && remainderLines.count == 1
+            && isLikelyNarrativeHeadingLine(remainderLines[0])
+        guard naturalLineCount >= 2 || allowsSingleNarrativeHeading else { return nil }
         return (code, remainder)
     }
 
@@ -1124,6 +1152,26 @@ enum MessageContentParser {
             return true
         }
         return false
+    }
+
+    private static func isLikelyNarrativeHeadingLine(_ text: String) -> Bool {
+        let normalized = text
+            .trimmingCharacters(
+                in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "*_`"))
+            )
+        guard !normalized.isEmpty else { return false }
+
+        let lowered = normalized.lowercased()
+        let markers = ["例子", "例如", "示例", "样例", "输出", "说明", "结果", "demo", "example", "usage"]
+        if markers.contains(lowered) {
+            return true
+        }
+
+        if markers.contains(where: { lowered == "\($0):" || lowered == "\($0)：" }) {
+            return true
+        }
+
+        return normalized.count <= 24 && (normalized.hasSuffix(":") || normalized.hasSuffix("："))
     }
 
     private static func sanitizeCodeContent(_ raw: String) -> String {
@@ -1713,6 +1761,12 @@ enum MessageContentParser {
             String(message.fileAttachments.count),
             message.isStreaming ? "1" : "0"
         ].joined(separator: "|")
+    }
+
+    static func clearCaches() {
+        parseCache.removeAll(keepingCapacity: false)
+        parseCacheOrder.removeAll(keepingCapacity: false)
+        streamingSnapshots.removeAll(keepingCapacity: false)
     }
 
     private static func storeParseCache(segments: [MessageSegment], signature: String) {

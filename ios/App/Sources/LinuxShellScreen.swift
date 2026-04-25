@@ -43,7 +43,7 @@ struct LinuxShellScreen: View {
                     try? await RemoteShellSessionService.shared.stopSession(
                         sessionID: capturedSessionID,
                         endpoint: viewModel.config.shellExecutionURLString,
-                        apiKey: viewModel.config.apiKey
+                        apiKey: viewModel.config.resolvedShellExecutionAPIKey
                     )
                 }
             }
@@ -272,7 +272,7 @@ struct LinuxShellScreen: View {
                 try? await RemoteShellSessionService.shared.stopSession(
                     sessionID: oldSessionID,
                     endpoint: viewModel.config.shellExecutionURLString,
-                    apiKey: viewModel.config.apiKey
+                    apiKey: viewModel.config.resolvedShellExecutionAPIKey
                 )
             }
         }
@@ -289,7 +289,7 @@ struct LinuxShellScreen: View {
             do {
                 let snapshot = try await RemoteShellSessionService.shared.startSession(
                     endpoint: viewModel.config.shellExecutionURLString,
-                    apiKey: viewModel.config.apiKey,
+                    apiKey: viewModel.config.resolvedShellExecutionAPIKey,
                     workingDirectory: displayWorkingDirectory
                 )
                 await MainActor.run {
@@ -315,7 +315,7 @@ struct LinuxShellScreen: View {
                     let snapshot = try await RemoteShellSessionService.shared.pollSession(
                         sessionID: sessionID,
                         endpoint: viewModel.config.shellExecutionURLString,
-                        apiKey: viewModel.config.apiKey
+                        apiKey: viewModel.config.resolvedShellExecutionAPIKey
                     )
                     await MainActor.run {
                         apply(snapshot: snapshot)
@@ -354,7 +354,7 @@ struct LinuxShellScreen: View {
                     sessionID: sessionID,
                     input: command,
                     endpoint: viewModel.config.shellExecutionURLString,
-                    apiKey: viewModel.config.apiKey
+                    apiKey: viewModel.config.resolvedShellExecutionAPIKey
                 )
                 await MainActor.run {
                     apply(snapshot: snapshot)
@@ -385,7 +385,7 @@ struct LinuxShellScreen: View {
                     sessionID: sessionID,
                     input: input,
                     endpoint: viewModel.config.shellExecutionURLString,
-                    apiKey: viewModel.config.apiKey,
+                    apiKey: viewModel.config.resolvedShellExecutionAPIKey,
                     appendNewline: false
                 )
                 await MainActor.run {
@@ -409,7 +409,7 @@ struct LinuxShellScreen: View {
                     sessionID: sessionID,
                     signal: signal,
                     endpoint: viewModel.config.shellExecutionURLString,
-                    apiKey: viewModel.config.apiKey
+                    apiKey: viewModel.config.resolvedShellExecutionAPIKey
                 )
                 await MainActor.run {
                     apply(snapshot: snapshot)

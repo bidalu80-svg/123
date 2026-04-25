@@ -927,6 +927,7 @@ struct ChatScreen: View {
                         precedingUserMessage: previousUserMessage,
                         codeThemeMode: viewModel.config.codeThemeMode,
                         apiKey: viewModel.config.apiKey,
+                        shellExecutionAPIKey: viewModel.config.resolvedShellExecutionAPIKey,
                         apiBaseURL: viewModel.config.normalizedBaseURL,
                         shellExecutionURLString: viewModel.config.shellExecutionURLString,
                         shellExecutionTimeout: viewModel.config.shellExecutionTimeout,
@@ -1387,7 +1388,7 @@ struct ChatScreen: View {
             let trimmed = viewModel.config.shellExecutionWorkingDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty ? "latest" : trimmed
         }()
-        let apiKey = viewModel.config.apiKey
+        let apiKey = viewModel.config.resolvedShellExecutionAPIKey
         let timeout = viewModel.config.shellExecutionTimeout
         let files = buildResult.writtenFiles
 
@@ -2315,6 +2316,7 @@ struct ChatScreen: View {
                 precedingUserMessage: nil,
                 codeThemeMode: viewModel.config.codeThemeMode,
                 apiKey: viewModel.config.apiKey,
+                shellExecutionAPIKey: viewModel.config.resolvedShellExecutionAPIKey,
                 apiBaseURL: viewModel.config.normalizedBaseURL,
                 shellExecutionURLString: viewModel.config.shellExecutionURLString,
                 shellExecutionTimeout: viewModel.config.shellExecutionTimeout,
@@ -2335,6 +2337,7 @@ struct ChatScreen: View {
                 precedingUserMessage: previousUserMessage,
                 codeThemeMode: viewModel.config.codeThemeMode,
                 apiKey: viewModel.config.apiKey,
+                shellExecutionAPIKey: viewModel.config.resolvedShellExecutionAPIKey,
                 apiBaseURL: viewModel.config.normalizedBaseURL,
                 shellExecutionURLString: viewModel.config.shellExecutionURLString,
                 shellExecutionTimeout: viewModel.config.shellExecutionTimeout,
@@ -4847,12 +4850,7 @@ private final class NativeStreamingMessageView: UIView {
         }
 
         if !displayText.isEmpty {
-            textView.attributedText = StreamingMarkdownTextView.renderedAttributedText(
-                text: displayText,
-                textColor: .label,
-                linkColor: .secondaryLabel,
-                font: textFont
-            )
+            textView.attributedText = lightweightStreamingAttributedText(displayText)
         } else {
             textView.attributedText = NSAttributedString()
         }
@@ -5039,11 +5037,61 @@ private final class NativeStreamingMessageView: UIView {
         }
     }
 
+    private func lightweightStreamingAttributedText(_ text: String) -> NSAttributedString {
+        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
+        let lines = normalized.components(separatedBy: "\n")
+
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = 4.6
+        paragraph.paragraphSpacing = 6
+
+        let codeParagraph = NSMutableParagraphStyle()
+        codeParagraph.lineSpacing = 3.4
+        codeParagraph.paragraphSpacing = 4
+
+        let baseAttributes: [NSAttributedString.Key: Any] = [
+            .font: textFont,
+            .foregroundColor: UIColor.label,
+            .paragraphStyle: paragraph
+        ]
+        let codeAttributes: [NSAttributedString.Key: Any] = [
+            .font: UIFont.monospacedSystemFont(ofSize: max(13.2, textFont.pointSize - 1.1), weight: .regular),
+            .foregroundColor: UIColor.label,
+            .paragraphStyle: codeParagraph
+        ]
+
+        let output = NSMutableAttributedString()
+        var inCodeFence = false
+
+        for (index, rawLine) in lines.enumerated() {
+            let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
+                inCodeFence.toggle()
+                if index < lines.count - 1 {
+                    output.append(NSAttributedString(string: "\n", attributes: baseAttributes))
+                }
+                continue
+            }
+
+            output.append(
+                NSAttributedString(
+                    string: rawLine,
+                    attributes: inCodeFence ? codeAttributes : baseAttributes
+                )
+            )
+            if index < lines.count - 1 {
+                output.append(NSAttributedString(string: "\n", attributes: baseAttributes))
+            }
+        }
+
+        return output
+    }
+
     private func streamingDisplaySlice(from raw: String) -> (text: String, isTruncated: Bool) {
         let normalized = raw.replacingOccurrences(of: "\r\n", with: "\n")
         let isCodeLikePayload = normalized.contains("```") || normalized.contains("[[file:")
-        let hardLimit = isCodeLikePayload ? 10_000 : 16_000
-        let tailLimit = isCodeLikePayload ? 4_800 : 9_000
+        let hardLimit = isCodeLikePayload ? 8_000 : 12_000
+        let tailLimit = isCodeLikePayload ? 3_200 : 5_200
         guard normalized.count > hardLimit else {
             return (normalized, false)
         }

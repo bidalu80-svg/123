@@ -505,7 +505,7 @@ final class MinimalAgentToolRuntime {
             let result = try await shellExecutionService.run(
                 command: trimmedCommand,
                 endpoint: config.shellExecutionURLString,
-                apiKey: config.apiKey,
+                apiKey: config.resolvedShellExecutionAPIKey,
                 workingDirectory: workingDirectory.isEmpty ? nil : workingDirectory,
                 timeout: timeoutSeconds
             )

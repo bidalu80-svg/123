@@ -9,6 +9,8 @@ struct SettingsScreen: View {
     @State private var latestPreviewPayload: LatestFrontendPreviewPayload?
     @State private var projectBrowserPayload: FrontendProjectBrowserPayload?
     @State private var expandedBuiltinSkillPromptIDs: Set<String> = []
+    @State private var shellConnectionSummary: String?
+    @State private var isTestingShellConnection = false
 
     var body: some View {
         Form {
@@ -130,6 +132,108 @@ struct SettingsScreen: View {
                         .foregroundStyle(.white)
                         .disabled(viewModel.isLoadingModels)
                     }
+                }
+            }
+
+            Section("Linux Shell") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("终端执行接口（可填相对路径，也可直接填完整 URL）")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    TextField("/v1/shell/execute 或 http://<server-ip>:8787/v1/shell/execute", text: $viewModel.config.shellExecutionPath)
+                        .keyboardType(.URL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+
+                    HStack(spacing: 10) {
+                        Button("默认 /v1") {
+                            viewModel.config.shellExecutionPath = ChatConfig.defaultShellExecutionPath
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button("清空", role: .destructive) {
+                            viewModel.config.shellExecutionPath = ""
+                            shellConnectionSummary = nil
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    Text("当前终端完整 URL：\(shellEndpointPreviewURL)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Text("真机调试时不要填 localhost；要填 iPhone 能访问到的 Linux / WSL 主机地址。")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("终端 Token（留空则复用上面的 API Key）")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    SecureField("输入终端 Token（可选）", text: $viewModel.config.shellExecutionAPIKey)
+
+                    HStack(spacing: 10) {
+                        Button("粘贴") {
+                            viewModel.config.shellExecutionAPIKey = UIPasteboard.general.string ?? ""
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button("清空", role: .destructive) {
+                            viewModel.config.shellExecutionAPIKey = ""
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("默认工作目录")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    TextField("例如 latest / /workspace / home/ubuntu/app", text: $viewModel.config.shellExecutionWorkingDirectory)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                }
+
+                HStack {
+                    Text("终端超时")
+                    Spacer()
+                    Text("\(Int(viewModel.config.shellExecutionTimeout)) 秒")
+                        .foregroundStyle(.secondary)
+                }
+                Slider(value: $viewModel.config.shellExecutionTimeout, in: 5...300, step: 5)
+
+                HStack {
+                    Button(isTestingShellConnection ? "检测中…" : "测试 Linux Shell") {
+                        Task { await testLinuxShellConnection() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.green)
+                    .foregroundStyle(.white)
+                    .disabled(isTestingShellConnection)
+
+                    if !viewModel.config.shellExecutionAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text("使用独立 Token")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("复用 API Key")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if let shellConnectionSummary, !shellConnectionSummary.isEmpty {
+                    Text(shellConnectionSummary)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
                 }
             }
 
@@ -430,6 +534,11 @@ struct SettingsScreen: View {
         viewModel.config.activeEndpointURLString
     }
 
+    private var shellEndpointPreviewURL: String {
+        let preview = viewModel.config.shellExecutionURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+        return preview.isEmpty ? "未配置" : preview
+    }
+
     private func applyEndpointPathPreset(includeV1: Bool) {
         if includeV1 {
             viewModel.config.chatCompletionsPath = ChatConfig.defaultChatCompletionsPath
@@ -447,6 +556,50 @@ struct SettingsScreen: View {
             viewModel.config.audioTranscriptionsPath = "/audio/transcriptions"
             viewModel.config.embeddingsPath = "/embeddings"
             viewModel.config.modelsPath = "/models"
+        }
+    }
+
+    @MainActor
+    private func testLinuxShellConnection() async {
+        let endpoint = viewModel.config.shellExecutionURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !endpoint.isEmpty else {
+            shellConnectionSummary = "请先填写终端执行接口地址。"
+            return
+        }
+
+        isTestingShellConnection = true
+        defer { isTestingShellConnection = false }
+
+        do {
+            let capabilities = try await RemoteShellSessionService.shared.fetchCapabilities(
+                endpoint: endpoint,
+                apiKey: viewModel.config.resolvedShellExecutionAPIKey
+            )
+
+            let shellText = capabilities.shells.isEmpty
+                ? "未发现可用 shell"
+                : capabilities.shells.map(\.name).joined(separator: ", ")
+            let runtimeText = capabilities.runtimes.isEmpty
+                ? "未发现运行时"
+                : capabilities.runtimes.map(\.runtime).joined(separator: ", ")
+            let rootText = capabilities.rootDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "-"
+                : capabilities.rootDirectory
+            let defaultShell = capabilities.defaultShell.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "-"
+                : capabilities.defaultShell
+
+            shellConnectionSummary = """
+            连接成功
+            root: \(rootText)
+            default shell: \(defaultShell)
+            shells: \(shellText)
+            runtimes: \(runtimeText)
+            """
+            viewModel.statusMessage = "Linux shell 已连接"
+        } catch {
+            shellConnectionSummary = "Linux shell 测试失败：\(error.localizedDescription)"
+            viewModel.statusMessage = "Linux shell 测试失败"
         }
     }
 
