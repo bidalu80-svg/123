@@ -1205,18 +1205,22 @@ struct ChatScreen: View {
         }
         noFileDirectiveAssistantIDs.remove(latestAssistant.id)
 
+        let latestUser = latestUserMessage(before: latestAssistant, in: newMessages)
+        let inferredWorkspaceOperations = latestUser.map {
+            FrontendProjectBuilder.inferredWorkspaceOperations(fromUserPrompt: $0.content)
+        } ?? []
+        let assistantHasExplicitWorkspaceOperations = FrontendProjectBuilder.hasExplicitWorkspaceOperationPayload(from: latestAssistant)
+
+        if !inferredWorkspaceOperations.isEmpty && !assistantHasExplicitWorkspaceOperations {
+            enqueueDirectWorkspaceMutation(inferredWorkspaceOperations, assistant: latestAssistant)
+            return
+        }
+
         guard hasExplicitPayload else {
             autoBuildEligibleAssistantIDs.remove(latestAssistant.id)
             latestProjectValidationState = nil
             cancelPendingAutoProjectBuild(for: latestAssistant.id)
             if shouldAttemptBuild {
-                if let latestUser = latestUserMessage(before: latestAssistant, in: newMessages) {
-                    let inferredOperations = FrontendProjectBuilder.inferredWorkspaceOperations(fromUserPrompt: latestUser.content)
-                    if !inferredOperations.isEmpty {
-                        enqueueDirectWorkspaceMutation(inferredOperations, assistant: latestAssistant)
-                        return
-                    }
-                }
                 if let latestUserID = latestUserMessageID(before: latestAssistant, in: newMessages),
                    !projectFormatRetryAttemptedUserIDs.contains(latestUserID) {
                     projectFormatRetryAttemptedUserIDs.insert(latestUserID)

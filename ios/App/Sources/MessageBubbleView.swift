@@ -4668,15 +4668,15 @@ private struct SweepShimmerText: View {
 
             GeometryReader { proxy in
                 let width = max(1, proxy.size.width)
-                let shimmerWidth = max(34, width * 0.95)
-                let travel = width + shimmerWidth * 2.0
+                let shimmerWidth = max(48, width * 1.2)
+                let travel = width + shimmerWidth * 2.6
 
                 LinearGradient(
                     stops: [
                         .init(color: .clear, location: 0),
-                        .init(color: .white.opacity(0.08), location: 0.18),
+                        .init(color: .white.opacity(0.12), location: 0.16),
                         .init(color: .white.opacity(0.85), location: 0.50),
-                        .init(color: .white.opacity(0.12), location: 0.82),
+                        .init(color: .white.opacity(0.16), location: 0.84),
                         .init(color: .clear, location: 1)
                     ],
                     startPoint: .leading,

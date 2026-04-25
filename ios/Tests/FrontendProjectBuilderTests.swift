@@ -496,6 +496,24 @@ final class FrontendProjectBuilderTests: XCTestCase {
         XCTAssertTrue(FrontendProjectBuilder.hasExplicitProjectPayload(from: message))
     }
 
+    func testInferredWorkspaceOperationsDetectChineseCreateFolderAndFile() {
+        XCTAssertEqual(
+            FrontendProjectBuilder.inferredWorkspaceOperations(fromUserPrompt: "生成一个test文件夹到根目录"),
+            [.createDirectory(path: "test")]
+        )
+        XCTAssertEqual(
+            FrontendProjectBuilder.inferredWorkspaceOperations(fromUserPrompt: "生成一个test文件"),
+            [.createEmptyFile(path: "test")]
+        )
+    }
+
+    func testInferredWorkspaceOperationsTreatDeleteProjectAsClearLatest() {
+        XCTAssertEqual(
+            FrontendProjectBuilder.inferredWorkspaceOperations(fromUserPrompt: "删除这个网站项目"),
+            [.clearLatest]
+        )
+    }
+
     func testPythonProjectValidationPlanInstallsRequirementsAndRunsMainFile() throws {
         let message = ChatMessage(
             role: .assistant,

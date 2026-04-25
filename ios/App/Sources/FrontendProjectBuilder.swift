@@ -701,8 +701,18 @@ enum FrontendProjectBuilder {
             || lowered.contains("清空工作区")
             || lowered.contains("clear latest")
             || lowered.contains("clear workspace")
-            || lowered.contains("reset latest") {
+            || lowered.contains("reset latest")
+            || lowered.contains("删除这个项目")
+            || lowered.contains("删除当前项目")
+            || lowered.contains("删除这个网站项目")
+            || lowered.contains("删除网站项目")
+            || lowered.contains("delete this project")
+            || lowered.contains("delete current project") {
             return [.clearLatest]
+        }
+
+        if let path = inferredDirectoryPath(in: normalized) {
+            return [.createDirectory(path: path)]
         }
 
         if let path = inferredPath(
@@ -710,6 +720,10 @@ enum FrontendProjectBuilder {
             prefixes: ["创建空文件夹", "创建文件夹", "新建文件夹", "创建目录", "新建目录", "mkdir "]
         ) {
             return [.createDirectory(path: path)]
+        }
+
+        if let path = inferredEmptyFilePath(in: normalized) {
+            return [.createEmptyFile(path: path)]
         }
 
         if let path = inferredPath(
@@ -727,6 +741,34 @@ enum FrontendProjectBuilder {
         }
 
         return []
+    }
+
+    private static func inferredDirectoryPath(in text: String) -> String? {
+        let patterns = [
+            #"(?i)(?:生成|创建|新建)\s*(?:一个|个)?\s*[\"'`“”‘’]?([A-Za-z0-9._/\-]+)[\"'`“”‘’]?\s*(?:文件夹|目录)"#,
+            #"(?i)(?:create|make|generate)\s+(?:a\s+)?[\"'`]?([A-Za-z0-9._/\-]+)[\"'`]?\s+(?:folder|directory)"#
+        ]
+        for pattern in patterns {
+            if let path = firstRegexCapture(in: text, pattern: pattern),
+               let normalized = sanitizeRelativePath(path) {
+                return normalized
+            }
+        }
+        return nil
+    }
+
+    private static func inferredEmptyFilePath(in text: String) -> String? {
+        let patterns = [
+            #"(?i)(?:生成|创建|新建)\s*(?:一个|个)?\s*[\"'`“”‘’]?([A-Za-z0-9._/\-]+)[\"'`“”‘’]?\s*文件(?!夹)"#,
+            #"(?i)(?:create|make|generate)\s+(?:an?\s+)?(?:empty\s+)?[\"'`]?([A-Za-z0-9._/\-]+)[\"'`]?\s+file"#
+        ]
+        for pattern in patterns {
+            if let path = firstRegexCapture(in: text, pattern: pattern),
+               let normalized = sanitizeRelativePath(path) {
+                return normalized
+            }
+        }
+        return nil
     }
 
     static func buildProject(
