@@ -10,12 +10,27 @@ enum FrontendProjectBuilder {
         let projectDirectoryURL: URL
         let entryFileURL: URL
         let entryHTML: String
+        let previewEntryFileURL: URL?
+        let previewEntryHTML: String?
         let writtenRelativePaths: [String]
         let writtenFiles: [String: String]
+        let validationPlan: ValidationPlan?
         let suggestedValidationCommand: String?
         let createdNewProject: Bool
         let shouldAutoOpenPreview: Bool
         let hadNaturalPreviewEntry: Bool
+    }
+
+    struct ValidationPlan: Equatable {
+        let installCommand: String?
+        let runCommand: String
+
+        var fullCommand: String {
+            if let installCommand, !installCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return "\(installCommand) && \(runCommand)"
+            }
+            return runCommand
+        }
     }
 
     struct ChatProgressSnapshot {
@@ -386,9 +401,6 @@ enum FrontendProjectBuilder {
         let fileManager = FileManager.default
         guard fileManager.fileExists(atPath: latest.path) else { return nil }
 
-        let entryFileURL = latestEntryFileURL()
-        let entryPath = entryFileURL?.lastPathComponent ?? "无"
-
         let relativePaths: [String] = {
             guard let enumerator = fileManager.enumerator(
                 at: latest,
@@ -414,9 +426,25 @@ enum FrontendProjectBuilder {
             return collected.sorted()
         }()
 
+        let entryFileURL = latestEntryFileURL()
+        let primaryPath = preferredPrimaryProjectPath(
+            from: relativePaths,
+            files: Dictionary(uniqueKeysWithValues: relativePaths.map { ($0, "") }),
+            preferredPreviewPath: entryFileURL.map {
+                let absolute = $0.standardizedFileURL.path
+                let root = latest.standardizedFileURL.path
+                return absolute.hasPrefix(root + "/")
+                    ? String(absolute.dropFirst(root.count + 1))
+                    : $0.lastPathComponent
+            }
+        ) ?? "无"
+
         var parts: [String] = []
         parts.append("当前 latest 工作区已有项目。")
-        parts.append("入口文件：\(entryPath)")
+        parts.append("主文件：\(primaryPath)")
+        if let entryFileURL {
+            parts.append("预览入口：\(entryFileURL.lastPathComponent)")
+        }
         if !relativePaths.isEmpty {
             let filesText = relativePaths.prefix(20).map { "- \($0)" }.joined(separator: "\n")
             parts.append("文件列表：\n\(filesText)")
@@ -424,7 +452,8 @@ enum FrontendProjectBuilder {
         let snippets = latestProjectKeyFileSnippets(
             in: latest,
             entryFileURL: entryFileURL,
-            relativePaths: relativePaths
+            relativePaths: relativePaths,
+            preferredPrimaryPath: primaryPath
         )
         if !snippets.isEmpty {
             parts.append("关键文件片段：\n\(snippets.joined(separator: "\n\n"))")
@@ -444,9 +473,14 @@ enum FrontendProjectBuilder {
     private static func latestProjectKeyFileSnippets(
         in latest: URL,
         entryFileURL: URL?,
-        relativePaths: [String]
+        relativePaths: [String],
+        preferredPrimaryPath: String
     ) -> [String] {
         var targets: [String] = []
+
+        if let normalized = sanitizeRelativePath(preferredPrimaryPath) {
+            targets.append(normalized)
+        }
 
         if let entryFileURL {
             let root = latest.standardizedFileURL.path
@@ -600,48 +634,44 @@ enum FrontendProjectBuilder {
         let stylePaths = orderedPaths.filter { isStylePath($0) }
         let scriptPaths = orderedPaths.filter { isScriptPath($0) }
 
-        if !hadNaturalPreviewEntry {
+        let previewEntryRelativePath: String? = {
             if let existingEntryPath = existingProject?.preferredEntryPath,
                merged[existingEntryPath] != nil {
                 if !orderedPaths.contains(existingEntryPath) {
                     orderedPaths.insert(existingEntryPath, at: 0)
                 }
-            } else {
-                let synthesized = synthesizedIndexHTML(
-                    stylePaths: stylePaths,
-                    scriptPaths: scriptPaths,
-                    projectPaths: orderedPaths
-                )
-                if merged["index.html"] == nil {
-                    orderedPaths.insert("index.html", at: 0)
-                }
-                merged["index.html"] = synthesized
+                return existingEntryPath
             }
+            return preferredPreviewEntryPath(from: orderedPaths)
+        }()
+
+        guard let primaryEntryRelativePath = preferredPrimaryProjectPath(
+            from: orderedPaths,
+            files: merged,
+            preferredPreviewPath: previewEntryRelativePath
+        ) else {
+            throw BuildError.noFrontendContent
         }
 
-        guard let entryRelativePath = preferredEntryPath(from: orderedPaths) else {
-            throw BuildError.missingEntryFile
-        }
-
-        if isHTMLPath(entryRelativePath) {
-            let currentEntryHTML = merged[entryRelativePath] ?? ""
-            merged[entryRelativePath] = normalizedEntryHTMLIfNeeded(
+        if let previewEntryRelativePath, isHTMLPath(previewEntryRelativePath) {
+            let currentEntryHTML = merged[previewEntryRelativePath] ?? ""
+            merged[previewEntryRelativePath] = normalizedEntryHTMLIfNeeded(
                 currentEntryHTML,
                 stylePaths: stylePaths,
                 scriptPaths: scriptPaths
             )
         }
 
-        if isHTMLPath(entryRelativePath) {
-            let currentEntryHTML = merged[entryRelativePath] ?? ""
+        if let previewEntryRelativePath, isHTMLPath(previewEntryRelativePath) {
+            let currentEntryHTML = merged[previewEntryRelativePath] ?? ""
             resolveReferencedAssetAliases(
-                entryRelativePath: entryRelativePath,
+                entryRelativePath: previewEntryRelativePath,
                 entryHTML: currentEntryHTML,
                 merged: &merged,
                 orderedPaths: &orderedPaths
             )
             autoWireEntryAssetReferencesIfNeeded(
-                entryRelativePath: entryRelativePath,
+                entryRelativePath: previewEntryRelativePath,
                 merged: &merged,
                 orderedPaths: orderedPaths
             )
@@ -649,10 +679,11 @@ enum FrontendProjectBuilder {
 
         let projectDirectoryURL = try prepareProjectDirectory(mode: mode)
         let fileManager = FileManager.default
-        let suggestedValidationCommand = suggestedValidationCommand(
+        let validationPlan = suggestedValidationPlan(
             orderedPaths: orderedPaths,
             files: merged
         )
+        let suggestedValidationCommand = validationPlan?.fullCommand
 
         if mode == .overwriteLatestProject {
             clearLatestValidationResult()
@@ -666,25 +697,29 @@ enum FrontendProjectBuilder {
             try content.write(to: fileURL, atomically: true, encoding: .utf8)
         }
 
-        guard let finalizedEntryHTML = merged[entryRelativePath] else {
-            throw BuildError.missingEntryFile
-        }
-
         persistLatestEntryPointerIfNeeded(
             mode: mode,
             projectDirectoryURL: projectDirectoryURL,
-            entryRelativePath: entryRelativePath
+            entryRelativePath: previewEntryRelativePath ?? primaryEntryRelativePath
         )
+
+        let previewEntryFileURL = previewEntryRelativePath.map {
+            projectDirectoryURL.appendingPathComponent($0, isDirectory: false)
+        }
+        let previewEntryHTML = previewEntryRelativePath.flatMap { merged[$0] }
 
         return BuildResult(
             projectDirectoryURL: projectDirectoryURL,
-            entryFileURL: projectDirectoryURL.appendingPathComponent(entryRelativePath, isDirectory: false),
-            entryHTML: finalizedEntryHTML,
+            entryFileURL: projectDirectoryURL.appendingPathComponent(primaryEntryRelativePath, isDirectory: false),
+            entryHTML: previewEntryHTML ?? "",
+            previewEntryFileURL: previewEntryFileURL,
+            previewEntryHTML: previewEntryHTML,
             writtenRelativePaths: orderedPaths,
             writtenFiles: merged,
+            validationPlan: validationPlan,
             suggestedValidationCommand: suggestedValidationCommand,
             createdNewProject: mode == .createNewProject,
-            shouldAutoOpenPreview: hadNaturalPreviewEntry || !stylePaths.isEmpty || !scriptPaths.isEmpty,
+            shouldAutoOpenPreview: previewEntryFileURL != nil,
             hadNaturalPreviewEntry: hadNaturalPreviewEntry
         )
     }
@@ -757,10 +792,10 @@ enum FrontendProjectBuilder {
         return ExistingProjectSnapshot(files: files, preferredEntryPath: preferredEntryPath)
     }
 
-    private static func suggestedValidationCommand(
+    private static func suggestedValidationPlan(
         orderedPaths: [String],
         files: [String: String]
-    ) -> String? {
+    ) -> ValidationPlan? {
         let loweredPaths = orderedPaths.map { $0.lowercased() }
         let loweredSet = Set(loweredPaths)
         let normalizedFiles = Dictionary(uniqueKeysWithValues: files.map { key, value in
@@ -770,40 +805,49 @@ enum FrontendProjectBuilder {
         if let packagePath = loweredPaths.first(where: { $0.hasSuffix("package.json") }),
            let package = normalizedFiles[packagePath]?.lowercased() {
             if package.contains("\"build\"") {
-                return "npm install && npm run build"
+                return ValidationPlan(installCommand: "npm install", runCommand: "npm run build")
             }
             if package.contains("\"test\""), !package.contains("no test specified") {
-                return "npm install && npm test"
+                return ValidationPlan(installCommand: "npm install", runCommand: "npm test")
             }
-            return "npm install"
+            if package.contains("\"start\"") {
+                return ValidationPlan(installCommand: "npm install", runCommand: "npm run start")
+            }
+            return ValidationPlan(installCommand: "npm install", runCommand: "node -e \"console.log('npm dependencies installed')\"")
         }
 
         if loweredSet.contains("cargo.toml") {
-            return "cargo test"
+            let hasRustTests = loweredPaths.contains(where: { $0.contains("/tests/") || $0.hasSuffix("_test.rs") })
+            return ValidationPlan(installCommand: nil, runCommand: hasRustTests ? "cargo test" : "cargo run")
         }
 
         if loweredSet.contains("go.mod") {
-            return "go test ./..."
+            let hasGoTests = loweredPaths.contains(where: { $0.hasSuffix("_test.go") })
+            return ValidationPlan(installCommand: nil, runCommand: hasGoTests ? "go test ./..." : "go run .")
         }
 
         if loweredSet.contains("package.swift") {
-            return "swift test"
+            let hasSwiftTests = loweredPaths.contains(where: { $0.contains("/tests/") || $0.hasSuffix("tests.swift") })
+            return ValidationPlan(installCommand: nil, runCommand: hasSwiftTests ? "swift test" : "swift run")
         }
 
         if loweredSet.contains("cmakelists.txt") {
-            return "cmake -S . -B build && cmake --build build && ctest --test-dir build --output-on-failure"
+            return ValidationPlan(
+                installCommand: nil,
+                runCommand: "cmake -S . -B build && cmake --build build && ctest --test-dir build --output-on-failure"
+            )
         }
 
         if loweredSet.contains("pom.xml") {
-            return "mvn test"
+            return ValidationPlan(installCommand: nil, runCommand: "mvn test")
         }
 
         if loweredSet.contains("build.gradle") || loweredSet.contains("build.gradle.kts") {
-            return "./gradlew test || gradle test"
+            return ValidationPlan(installCommand: nil, runCommand: "./gradlew test || gradle test")
         }
 
         if loweredSet.contains("composer.json") {
-            return "composer validate"
+            return ValidationPlan(installCommand: "composer install", runCommand: "composer validate")
         }
 
         if loweredPaths.contains(where: { $0.hasSuffix(".py") }) {
@@ -813,10 +857,47 @@ enum FrontendProjectBuilder {
                     || $0.hasPrefix("test_")
                     || $0.hasSuffix("_test.py")
             })
-            return hasPytest ? "python3 -m pytest" : "python3 -m compileall ."
+            let installCommand: String? = {
+                if loweredSet.contains("requirements.txt") {
+                    return "python3 -m pip install -r requirements.txt"
+                }
+                if loweredSet.contains("pyproject.toml") || loweredSet.contains("setup.py") {
+                    return "python3 -m pip install -e ."
+                }
+                return nil
+            }()
+            if hasPytest {
+                return ValidationPlan(installCommand: installCommand, runCommand: "python3 -m pytest")
+            }
+            if let main = preferredPythonRunnablePath(from: loweredPaths) {
+                return ValidationPlan(installCommand: installCommand, runCommand: "python3 \(main)")
+            }
+            return ValidationPlan(installCommand: installCommand, runCommand: "python3 -m compileall .")
         }
 
         return nil
+    }
+
+    private static func preferredPythonRunnablePath(from loweredPaths: [String]) -> String? {
+        let preferred = [
+            "main.py",
+            "app.py",
+            "cli.py",
+            "run.py",
+            "src/main.py"
+        ]
+        for item in preferred {
+            if let matched = loweredPaths.first(where: { $0 == item || $0.hasSuffix("/" + item) }) {
+                return matched
+            }
+        }
+        return loweredPaths.first(where: {
+            $0.hasSuffix(".py")
+                && !$0.contains("/tests/")
+                && !$0.hasPrefix("tests/")
+                && !$0.hasPrefix("test_")
+                && !$0.hasSuffix("_test.py")
+        })
     }
 
     private static func extractProjectFiles(from message: ChatMessage) -> [ParsedWebFile] {
@@ -1959,7 +2040,7 @@ enum FrontendProjectBuilder {
         }
     }
 
-    private static func preferredEntryPath(from paths: [String]) -> String? {
+    private static func preferredPreviewEntryPath(from paths: [String]) -> String? {
         if let exact = paths.first(where: { $0.lowercased().hasSuffix("index.html") }) {
             return exact
         }
@@ -1970,6 +2051,63 @@ enum FrontendProjectBuilder {
             return exactPHP
         }
         return paths.first(where: { isPHPPath($0) })
+    }
+
+    private static func preferredPrimaryProjectPath(
+        from paths: [String],
+        files: [String: String],
+        preferredPreviewPath: String?
+    ) -> String? {
+        if let preferredPreviewPath, paths.contains(preferredPreviewPath) {
+            return preferredPreviewPath
+        }
+
+        let exactPreferred = [
+            "main.py", "app.py", "manage.py", "cli.py",
+            "main.go",
+            "src/main.rs", "main.rs",
+            "main.swift", "package.swift", "package.swift",
+            "main.java", "main.kt", "main.kts",
+            "package.json",
+            "go.mod", "cargo.toml", "pyproject.toml", "requirements.txt",
+            "pom.xml", "build.gradle", "build.gradle.kts",
+            "composer.json"
+        ]
+        for preferred in exactPreferred {
+            if let match = paths.first(where: { $0.lowercased() == preferred }) {
+                return match
+            }
+        }
+
+        let runnableSuffixes = [
+            "main.py", "app.py", "cli.py",
+            "main.go", "main.rs", "main.swift",
+            "main.java", "main.kt", "main.kts",
+            "index.js", "main.js", "index.ts", "main.ts",
+            "program.cs"
+        ]
+        for suffix in runnableSuffixes {
+            if let match = paths.first(where: { $0.lowercased().hasSuffix(suffix) }) {
+                return match
+            }
+        }
+
+        if let packageJSON = paths.first(where: { $0.lowercased().hasSuffix("package.json") }) {
+            return packageJSON
+        }
+
+        if let bestScript = paths.first(where: { path in
+            let lowered = path.lowercased()
+            if isPreviewEntryPath(lowered) { return false }
+            let ext = (lowered as NSString).pathExtension
+            let scriptLike = ["py", "go", "rs", "swift", "java", "kt", "kts", "js", "mjs", "cjs", "ts", "tsx", "jsx", "php", "rb", "lua", "cs"]
+            guard scriptLike.contains(ext) else { return false }
+            return !(files[path]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        }) {
+            return bestScript
+        }
+
+        return paths.first
     }
 
     private static func promoteHTMLLikeFilePathsIfNeeded(

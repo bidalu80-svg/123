@@ -767,6 +767,11 @@ final class ChatViewModel: ObservableObject {
         appendLog("应用进入后台：已申请后台任务，尽力维持本次请求。")
     }
 
+    func appWillResignActive() {
+        guard isSending else { return }
+        beginBackgroundSendTask()
+    }
+
 
     func appDidBecomeActive() {
         if isSending {

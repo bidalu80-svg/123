@@ -36,7 +36,7 @@ struct ContentView: View {
             for window in scene.windows {
                 window.backgroundColor = color
                 window.rootViewController?.view.backgroundColor = color
-                window.rootViewController?.view.isOpaque = false
+                window.rootViewController?.view.isOpaque = true
             }
         }
     }

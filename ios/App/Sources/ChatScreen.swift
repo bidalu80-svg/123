@@ -57,6 +57,20 @@ struct ChatScreen: View {
         let hasEntryPreview: Bool
         let isCompleted: Bool
         let codeEntries: [CodeViewerEntry]
+        let validationState: ProjectValidationState?
+    }
+
+    private struct ProjectValidationState: Equatable {
+        enum Phase: Equatable {
+            case running
+            case success
+            case failure
+        }
+
+        let phase: Phase
+        let command: String
+        let output: String
+        let exitCode: Int?
     }
 
     private struct FrontendOverlayCodeEntriesCacheEntry {
@@ -132,6 +146,7 @@ struct ChatScreen: View {
     @State private var autoBuildRequestID: Int = 0
     @State private var autoBuildRunningMessageID: UUID?
     @State private var latestProjectHasPreviewEntry = false
+    @State private var latestProjectValidationState: ProjectValidationState?
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -228,6 +243,7 @@ struct ChatScreen: View {
             pendingOutgoingEcho = nil
             invalidatePendingAutoProjectBuild()
             latestProjectHasPreviewEntry = false
+            latestProjectValidationState = nil
             frontendOverlayMessageID = nil
             frontendOverlayFileIndex = 0
             frontendOverlayManualSelectionUntil = .distantPast
@@ -243,6 +259,7 @@ struct ChatScreen: View {
             pendingOutgoingEcho = nil
             invalidatePendingAutoProjectBuild()
             latestProjectHasPreviewEntry = false
+            latestProjectValidationState = nil
             frontendOverlayMessageID = nil
             frontendOverlayFileIndex = 0
             frontendOverlayManualSelectionUntil = .distantPast
@@ -1135,6 +1152,7 @@ struct ChatScreen: View {
             autoBuildEligibleAssistantIDs.remove(latestAssistant.id)
             autoBuildInFlightAssistantIDs.remove(latestAssistant.id)
             autoFrontendPreview = nil
+            latestProjectValidationState = nil
             cancelPendingAutoProjectBuild(for: latestAssistant.id)
             if !latestAssistant.isStreaming {
                 viewModel.statusMessage = "已按要求仅展示代码（未生成项目文件）"
@@ -1153,6 +1171,7 @@ struct ChatScreen: View {
                 noFileDirectiveAssistantIDs.remove(latestAssistant.id)
             } else {
                 autoBuildInFlightAssistantIDs.remove(latestAssistant.id)
+                latestProjectValidationState = nil
                 cancelPendingAutoProjectBuild(for: latestAssistant.id)
             }
             return
@@ -1178,6 +1197,7 @@ struct ChatScreen: View {
             autoBuildEligibleAssistantIDs.remove(latestAssistant.id)
             autoBuildInFlightAssistantIDs.remove(latestAssistant.id)
             autoFrontendPreview = nil
+            latestProjectValidationState = nil
             cancelPendingAutoProjectBuild(for: latestAssistant.id)
             return
         }
@@ -1185,6 +1205,7 @@ struct ChatScreen: View {
 
         guard hasExplicitPayload else {
             autoBuildEligibleAssistantIDs.remove(latestAssistant.id)
+            latestProjectValidationState = nil
             cancelPendingAutoProjectBuild(for: latestAssistant.id)
             if shouldAttemptBuild {
                 if let latestUserID = latestUserMessageID(before: latestAssistant, in: newMessages),
@@ -1217,6 +1238,7 @@ struct ChatScreen: View {
         }
         autoBuildRunningMessageID = assistant.id
         autoBuildInFlightAssistantIDs.insert(assistant.id)
+        latestProjectValidationState = nil
         let sourceAssistant = assistant
 
         DispatchQueue.global(qos: .utility).async {
@@ -1239,15 +1261,15 @@ struct ChatScreen: View {
                 switch result {
                 case .success(let buildResult):
                     autoBuildEligibleAssistantIDs.insert(sourceAssistant.id)
-                    latestProjectHasPreviewEntry = true
-                    runLatestProjectValidationIfPossible(buildResult)
+                    latestProjectHasPreviewEntry = buildResult.previewEntryFileURL != nil
+                    runLatestProjectValidationIfPossible(buildResult, messageID: sourceAssistant.id)
                     if buildResult.shouldAutoOpenPreview {
-                        let previewHTML = sanitizedFrontendPreviewHTML(buildResult.entryHTML)
+                        let previewHTML = sanitizedFrontendPreviewHTML(buildResult.previewEntryHTML ?? buildResult.entryHTML)
                         autoFrontendPreview = AutoFrontendPreviewPayload(
-                            title: "自动预览 · \(buildResult.entryFileURL.lastPathComponent)",
+                            title: "自动预览 · \((buildResult.previewEntryFileURL ?? buildResult.entryFileURL).lastPathComponent)",
                             html: previewHTML,
                             baseURL: buildResult.projectDirectoryURL,
-                            entryFileURL: buildResult.entryFileURL
+                            entryFileURL: buildResult.previewEntryFileURL ?? buildResult.entryFileURL
                         )
                         viewModel.statusMessage = "项目已自动更新并预览（\(buildResult.writtenRelativePaths.count) 文件）"
                     } else {
@@ -1264,8 +1286,12 @@ struct ChatScreen: View {
         }
     }
 
-    private func runLatestProjectValidationIfPossible(_ buildResult: FrontendProjectBuilder.BuildResult) {
-        guard let command = buildResult.suggestedValidationCommand else { return }
+    private func runLatestProjectValidationIfPossible(
+        _ buildResult: FrontendProjectBuilder.BuildResult,
+        messageID: UUID
+    ) {
+        guard let validationPlan = buildResult.validationPlan else { return }
+        let command = validationPlan.fullCommand
 
         let endpoint = viewModel.config.shellExecutionURLString.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !endpoint.isEmpty else { return }
@@ -1280,7 +1306,17 @@ struct ChatScreen: View {
 
         Task.detached(priority: .utility) {
             await MainActor.run {
-                viewModel.statusMessage = "项目已落盘，正在自动同步到工作区并执行验证…"
+                latestProjectValidationState = ProjectValidationState(
+                    phase: .running,
+                    command: command,
+                    output: validationPlan.installCommand == nil
+                        ? "正在执行：\(validationPlan.runCommand)"
+                        : "正在安装依赖并执行：\(validationPlan.runCommand)",
+                    exitCode: nil
+                )
+                viewModel.statusMessage = validationPlan.installCommand == nil
+                    ? "项目已落盘，正在自动执行验证…"
+                    : "项目已落盘，正在自动安装依赖并执行验证…"
             }
 
             do {
@@ -1292,24 +1328,82 @@ struct ChatScreen: View {
                     timeout: timeout
                 )
 
-                let validationResult = try await RemoteShellExecutionService.shared.run(
-                    command: command,
+                var combinedOutputParts: [String] = []
+                if let installCommand = validationPlan.installCommand {
+                    let installResult = try await RemoteShellExecutionService.shared.run(
+                        command: installCommand,
+                        endpoint: endpoint,
+                        apiKey: apiKey,
+                        workingDirectory: workingDirectory,
+                        timeout: timeout
+                    )
+                    combinedOutputParts.append("[安装依赖]\n\(installResult.output)")
+                    if installResult.exitCode != 0 {
+                        let failed = ShellExecutionResult(
+                            command: command,
+                            output: combinedOutputParts.joined(separator: "\n\n"),
+                            exitCode: installResult.exitCode,
+                            durationMs: installResult.durationMs,
+                            finalWorkingDirectory: installResult.finalWorkingDirectory
+                        )
+                        FrontendProjectBuilder.saveLatestValidationResult(command: command, result: failed)
+                        await MainActor.run {
+                            latestProjectValidationState = ProjectValidationState(
+                                phase: .failure,
+                                command: command,
+                                output: failed.output,
+                                exitCode: failed.exitCode
+                            )
+                            viewModel.statusMessage = "依赖安装失败，可继续让 AI 按日志修复：\(installCommand)"
+                        }
+                        return
+                    }
+                }
+
+                let runResult = try await RemoteShellExecutionService.shared.run(
+                    command: validationPlan.runCommand,
                     endpoint: endpoint,
                     apiKey: apiKey,
                     workingDirectory: workingDirectory,
                     timeout: timeout
                 )
+                combinedOutputParts.append("[运行结果]\n\(runResult.output)")
+                let validationResult = ShellExecutionResult(
+                    command: command,
+                    output: combinedOutputParts.joined(separator: "\n\n"),
+                    exitCode: runResult.exitCode,
+                    durationMs: runResult.durationMs,
+                    finalWorkingDirectory: runResult.finalWorkingDirectory
+                )
                 FrontendProjectBuilder.saveLatestValidationResult(command: command, result: validationResult)
 
                 await MainActor.run {
                     if validationResult.exitCode == 0 {
+                        latestProjectValidationState = ProjectValidationState(
+                            phase: .success,
+                            command: command,
+                            output: validationResult.output,
+                            exitCode: validationResult.exitCode
+                        )
                         viewModel.statusMessage = "项目已自动验证通过：\(command)"
                     } else {
+                        latestProjectValidationState = ProjectValidationState(
+                            phase: .failure,
+                            command: command,
+                            output: validationResult.output,
+                            exitCode: validationResult.exitCode
+                        )
                         viewModel.statusMessage = "项目已自动验证失败，可继续让 AI 按日志修复：\(command)"
                     }
                 }
             } catch {
                 await MainActor.run {
+                    latestProjectValidationState = ProjectValidationState(
+                        phase: .failure,
+                        command: command,
+                        output: error.localizedDescription,
+                        exitCode: nil
+                    )
                     viewModel.statusMessage = "项目已落盘，但自动验证失败：\(error.localizedDescription)"
                 }
             }
@@ -2877,7 +2971,8 @@ struct ChatScreen: View {
             fileCount: max(detectedFileCount, 1),
             hasEntryPreview: snapshot.hasEntryHTML || latestProjectHasPreviewEntry,
             isCompleted: !assistant.isStreaming,
-            codeEntries: codeEntries
+            codeEntries: codeEntries,
+            validationState: latestProjectValidationState
         )
     }
 
@@ -2946,12 +3041,27 @@ struct ChatScreen: View {
                     .progressViewStyle(.linear)
                     .tint(overlay.isCompleted ? Color.green : Color.blue)
 
+                if let validation = overlay.validationState {
+                    frontendValidationSummary(validation)
+                }
+
                 HStack(spacing: 10) {
                     if !overlay.codeEntries.isEmpty {
                         Button {
                             openFrontendOverlayCodeViewer(overlay)
                         } label: {
                             Text("查看代码")
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundStyle(Color(red: 0.08, green: 0.45, blue: 0.90))
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    if overlay.validationState != nil {
+                        Button {
+                            openProjectValidationLog()
+                        } label: {
+                            Text("查看结果")
                                 .font(.system(size: 12.5, weight: .semibold))
                                 .foregroundStyle(Color(red: 0.08, green: 0.45, blue: 0.90))
                         }
@@ -3050,6 +3160,86 @@ struct ChatScreen: View {
             return "\(overlay.subtitle) · \(selectedEntry.name)"
         }
         return overlay.subtitle
+    }
+
+    private func frontendValidationSummary(_ validation: ProjectValidationState) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: validationSummaryIcon(validation))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(validationSummaryColor(validation))
+                Text(validationSummaryTitle(validation))
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(validationSummaryColor(validation))
+                    .lineLimit(1)
+            }
+            Text(validation.output.replacingOccurrences(of: "\r\n", with: "\n"))
+                .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.black.opacity(colorScheme == .dark ? 0.20 : 0.05))
+        )
+    }
+
+    private func validationSummaryTitle(_ validation: ProjectValidationState) -> String {
+        switch validation.phase {
+        case .running:
+            return "正在运行"
+        case .success:
+            return "运行成功"
+        case .failure:
+            if let exitCode = validation.exitCode {
+                return "运行失败 · code=\(exitCode)"
+            }
+            return "运行失败"
+        }
+    }
+
+    private func validationSummaryIcon(_ validation: ProjectValidationState) -> String {
+        switch validation.phase {
+        case .running:
+            return "play.circle.fill"
+        case .success:
+            return "checkmark.circle.fill"
+        case .failure:
+            return "xmark.octagon.fill"
+        }
+    }
+
+    private func validationSummaryColor(_ validation: ProjectValidationState) -> Color {
+        switch validation.phase {
+        case .running:
+            return MinisTheme.accentBlue
+        case .success:
+            return MinisTheme.accentGreen
+        case .failure:
+            return .red
+        }
+    }
+
+    private func openProjectValidationLog() {
+        guard let validation = latestProjectValidationState else { return }
+        activeFrontendCodeViewer = CodeViewerPayload(
+            title: "运行结果",
+            entries: [
+                CodeViewerEntry(
+                    name: "validation.log",
+                    language: nil,
+                    content: """
+                    $ \(validation.command)
+
+                    \(validation.output)
+                    """
+                )
+            ],
+            initialIndex: 0,
+            preferredTerminalCommand: validation.command
+        )
     }
 
     private func frontendOverlaySafeFileIndex(for overlay: FrontendBuildOverlayState) -> Int {
