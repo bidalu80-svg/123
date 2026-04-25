@@ -203,6 +203,10 @@ enum FrontendProjectBuilder {
         !extractWorkspaceOperations(from: message).isEmpty
     }
 
+    static func explicitWorkspaceOperations(from message: ChatMessage) -> [WorkspaceOperation] {
+        extractWorkspaceOperations(from: message)
+    }
+
     static func explicitPayloadProgressSnapshot(from message: ChatMessage) -> ChatProgressSnapshot? {
         if message.isStreaming {
             return explicitStreamingChatProgressSnapshot(from: message)
