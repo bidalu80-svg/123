@@ -2493,6 +2493,15 @@ struct ChatScreen: View {
 
         var masked = message
         masked.fileAttachments = []
+        let workspaceOperations = FrontendProjectBuilder.explicitWorkspaceOperations(from: message)
+        if !workspaceOperations.isEmpty {
+            let summary = workspaceOperationOverlaySummary(
+                operations: workspaceOperations,
+                completed: !message.isStreaming
+            )
+            masked.content = message.isStreaming ? summary.subtitle : "\(summary.title)\n\(summary.subtitle)"
+            return masked
+        }
         let stripped = stripFrontendProjectPayload(from: message.content)
         if shouldUseStrippedFrontendSummary(stripped) {
             masked.content = stripped
@@ -3064,14 +3073,24 @@ struct ChatScreen: View {
                 detectedFileCount: 0,
                 hasEntryHTML: false
             )
-        let codeEntries = assistant.isStreaming ? [] : frontendOverlayCodeEntriesForOverlay(from: assistant)
+        let workspaceOperations = FrontendProjectBuilder.explicitWorkspaceOperations(from: assistant)
+        let codeEntries = frontendOverlayCodeEntriesForOverlay(from: assistant)
         let detectedFileCount = max(snapshot.detectedFileCount, codeEntries.count)
 
         let totalSteps = 4
         let stepIndex: Int
         let title: String
         let subtitle: String
-        if assistant.isStreaming {
+        if !workspaceOperations.isEmpty {
+            let completed = !assistant.isStreaming
+            stepIndex = completed ? totalSteps : 2
+            let summary = workspaceOperationOverlaySummary(
+                operations: workspaceOperations,
+                completed: completed
+            )
+            title = summary.title
+            subtitle = summary.subtitle
+        } else if assistant.isStreaming {
             if detectedFileCount <= 0 {
                 stepIndex = 1
                 title = "解析文件结构"
@@ -3103,6 +3122,36 @@ struct ChatScreen: View {
         )
     }
 
+    private func workspaceOperationOverlaySummary(
+        operations: [FrontendProjectBuilder.WorkspaceOperation],
+        completed: Bool
+    ) -> (title: String, subtitle: String) {
+        guard let first = operations.first, operations.count == 1 else {
+            return completed
+                ? ("工作区操作完成", "已完成 \(operations.count) 项操作")
+                : ("执行工作区操作", "正在处理 \(operations.count) 项操作")
+        }
+
+        switch first {
+        case .clearLatest:
+            return completed
+                ? ("清空成功", "latest 工作区已清空")
+                : ("清空 latest", "正在清空工作区")
+        case .delete(let path):
+            return completed
+                ? ("删除成功", "已删除 \(path)")
+                : ("删除文件", "正在删除 \(path)")
+        case .createDirectory(let path):
+            return completed
+                ? ("创建成功", "已创建目录 \(path)")
+                : ("创建目录", "正在创建 \(path)")
+        case .createEmptyFile(let path):
+            return completed
+                ? ("写入成功", "已创建 \(path)")
+                : ("写入文件", "正在写入 \(path)")
+        }
+    }
+
     private func frontendBuildFloatingCard(_ overlay: FrontendBuildOverlayState) -> some View {
         let selectedEntry = frontendOverlaySelectedEntry(for: overlay)
         let safeFileIndex = frontendOverlaySafeFileIndex(for: overlay)
@@ -3111,7 +3160,7 @@ struct ChatScreen: View {
             Button {
                 openFrontendOverlayCodeViewer(overlay)
             } label: {
-                frontendBuildMiniPreviewTile(entry: selectedEntry)
+                frontendBuildMiniPreviewTile(entry: selectedEntry, isStreaming: !overlay.isCompleted)
             }
             .buttonStyle(.plain)
             .disabled(selectedEntry == nil)
@@ -3235,8 +3284,8 @@ struct ChatScreen: View {
         }
     }
 
-    private func frontendBuildMiniPreviewTile(entry: CodeViewerEntry?) -> some View {
-        let previewText = frontendOverlayPreviewSnippet(for: entry?.content ?? "")
+    private func frontendBuildMiniPreviewTile(entry: CodeViewerEntry?, isStreaming: Bool) -> some View {
+        let preview = frontendOverlayPreviewState(for: entry?.content ?? "")
 
         return ZStack(alignment: .topLeading) {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -3252,20 +3301,33 @@ struct ChatScreen: View {
                 )
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(entry?.name ?? "准备中…")
-                    .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(Color.white.opacity(0.78))
+                HStack(spacing: 4) {
+                    Text(entry?.name ?? "准备中…")
+                        .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(Color.white.opacity(0.78))
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    if let lineNumber = preview.currentLineNumber {
+                        Text("L\(lineNumber)")
+                            .font(.system(size: 7.5, weight: .bold, design: .monospaced))
+                            .foregroundStyle(isStreaming ? Color.cyan.opacity(0.96) : Color.white.opacity(0.68))
+                    }
+                }
 
-                if previewText.isEmpty {
+                if preview.lines.isEmpty {
                     Text("正在读取项目代码…")
                         .font(.system(size: 7.5, weight: .medium, design: .monospaced))
                         .foregroundStyle(Color.cyan.opacity(0.92))
                 } else {
-                    Text(previewText)
-                        .font(.system(size: 7.5, weight: .medium, design: .monospaced))
-                        .foregroundStyle(Color.white.opacity(0.92))
-                        .lineLimit(3)
-                        .multilineTextAlignment(.leading)
+                    VStack(alignment: .leading, spacing: 1) {
+                        ForEach(Array(preview.lines.enumerated()), id: \.offset) { _, line in
+                            Text(line)
+                                .font(.system(size: 7.5, weight: .medium, design: .monospaced))
+                                .foregroundStyle(Color.white.opacity(0.92))
+                                .lineLimit(1)
+                                .multilineTextAlignment(.leading)
+                        }
+                    }
                 }
             }
             .padding(.horizontal, 8)
@@ -3423,27 +3485,28 @@ struct ChatScreen: View {
         )
     }
 
-    private func frontendOverlayPreviewSnippet(for content: String) -> String {
+    private func frontendOverlayPreviewState(for content: String) -> (currentLineNumber: Int?, lines: [String]) {
         let normalized = content
             .replacingOccurrences(of: "\r\n", with: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalized.isEmpty else { return "" }
+        guard !normalized.isEmpty else { return (nil, []) }
 
-        var collected: [String] = []
-        for rawLine in normalized.components(separatedBy: "\n") {
-            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !line.isEmpty else { continue }
-            let clipped = line.count > 34 ? String(line.prefix(34)) + "…" : line
-            collected.append(clipped)
-            if collected.count >= 3 {
-                break
-            }
+        let allLines = normalized.components(separatedBy: "\n")
+        guard let lastNonEmptyIndex = allLines.lastIndex(where: {
+            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }) else {
+            return (nil, [])
         }
 
-        if collected.isEmpty {
-            return normalized.count > 80 ? String(normalized.prefix(80)) + "…" : normalized
+        let startIndex = max(0, lastNonEmptyIndex - 2)
+        let previewLines = Array(allLines[startIndex...lastNonEmptyIndex]).enumerated().map { offset, rawLine in
+            let lineNumber = startIndex + offset + 1
+            let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            let clipped = trimmed.count > 22 ? String(trimmed.prefix(22)) + "…" : trimmed
+            let marker = lineNumber == lastNonEmptyIndex + 1 ? ">" : " "
+            return "\(marker)\(lineNumber)| \(clipped)"
         }
-        return collected.joined(separator: "\n")
+        return (lastNonEmptyIndex + 1, previewLines)
     }
 
     private func frontendOverlayCodeEntriesForOverlay(from message: ChatMessage) -> [CodeViewerEntry] {
@@ -3757,6 +3820,11 @@ struct ChatScreen: View {
             of: #"(?is)\[\[file:[^\]]+\]\].*?(?:\[\[endfile\]\]|$)"#,
             with: "",
             options: .regularExpression
+        )
+        text = text.replacingOccurrences(
+            of: #"\[\[(?:mkdir|touch|delete|clear):[^\]]+\]\]"#,
+            with: "",
+            options: [.regularExpression, .caseInsensitive]
         )
         text = text.replacingOccurrences(
             of: #"(?is)```.*?(?:```|$)"#,
