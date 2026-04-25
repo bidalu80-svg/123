@@ -124,4 +124,42 @@ final class MessageContentParserTests: XCTestCase {
         XCTAssertFalse(content.contains("```"))
         XCTAssertTrue(content.contains("<body>Hello</body>"))
     }
+
+    func testParseSplitsNarrationOutOfMixedFencedCodeBlock() {
+        let message = ChatMessage(
+            role: .assistant,
+            content: """
+            ```python
+            x = 10
+            x = "hello"
+            x = [1, 2, 3]
+
+            这都是允许的。
+
+            本质上，变量名只是一个“引用”，指向某个对象。
+            ```
+            """
+        )
+
+        let segments = MessageContentParser.parse(message)
+
+        XCTAssertEqual(segments.count, 2)
+        XCTAssertEqual(
+            segments[0],
+            .code(
+                language: "python",
+                content: """
+                x = 10
+                x = "hello"
+                x = [1, 2, 3]
+                """
+            )
+        )
+
+        guard case let .text(text) = segments[1] else {
+            return XCTFail("Expected trailing narration to render as text")
+        }
+        XCTAssertTrue(text.contains("这都是允许的。"))
+        XCTAssertTrue(text.contains("变量名只是一个“引用”"))
+    }
 }

@@ -48,7 +48,7 @@ struct MessageBubbleView: View {
     @State private var wordGenerationTask: Task<Void, Never>?
     @State private var excelGenerationTask: Task<Void, Never>?
     @State private var frontendBuildRequestID: Int = 0
-    private let chatUIFont = MinisTheme.assistantUIFont
+    private let chatUIFont = MinisTheme.assistantStrongUIFont
 
     init(
         message: ChatMessage,
@@ -596,9 +596,11 @@ struct MessageBubbleView: View {
 
     private var streamingWaitingDot: some View {
         HStack(spacing: 4) {
-            Text("正在思考")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.secondary)
+            SweepShimmerText(
+                "正在思考",
+                font: .system(size: 17, weight: .semibold),
+                baseColor: .secondary
+            )
 
             ThinkingDotsWaveView(dotSize: 6, spacing: 4)
                 .frame(width: 28, height: 12)
@@ -918,7 +920,7 @@ struct MessageBubbleView: View {
         switch segment {
         case .text(let text):
             Text(text)
-                .font(.system(size: 17, weight: .regular))
+                .font(.system(size: 17, weight: .semibold))
                 .lineSpacing(5)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
@@ -4650,6 +4652,60 @@ private struct MiniIconButtonStyle: ButtonStyle {
             )
             .scaleEffect(configuration.isPressed ? 0.94 : 1)
             .opacity(configuration.isPressed ? 0.72 : 1)
+    }
+}
+
+private struct SweepShimmerText: View {
+    let text: String
+    let font: Font
+    let baseColor: Color
+    @State private var sweepProgress: CGFloat = -1.15
+
+    init(_ text: String, font: Font, baseColor: Color = .secondary) {
+        self.text = text
+        self.font = font
+        self.baseColor = baseColor
+    }
+
+    var body: some View {
+        Text(text)
+            .font(font)
+            .foregroundStyle(baseColor)
+            .overlay {
+                GeometryReader { proxy in
+                    let width = max(56, proxy.size.width)
+                    let shimmerWidth = max(44, width * 0.62)
+                    LinearGradient(
+                        stops: [
+                            .init(color: .clear, location: 0),
+                            .init(color: .white.opacity(0.10), location: 0.25),
+                            .init(color: .white.opacity(0.78), location: 0.50),
+                            .init(color: .white.opacity(0.10), location: 0.75),
+                            .init(color: .clear, location: 1)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    .frame(width: shimmerWidth, height: proxy.size.height * 1.8)
+                    .rotationEffect(.degrees(12))
+                    .offset(x: sweepOffset(for: width + shimmerWidth))
+                    .blendMode(.screen)
+                    .mask(
+                        Text(text)
+                            .font(font)
+                    )
+                }
+            }
+            .onAppear {
+                sweepProgress = -1.15
+                withAnimation(.linear(duration: 1.35).repeatForever(autoreverses: false)) {
+                    sweepProgress = 1.15
+                }
+            }
+    }
+
+    private func sweepOffset(for travel: CGFloat) -> CGFloat {
+        (travel * sweepProgress) - (travel * 0.5)
     }
 }
 
