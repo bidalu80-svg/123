@@ -4667,9 +4667,9 @@ private struct SweepShimmerText: View {
                 .foregroundStyle(baseColor)
 
             GeometryReader { proxy in
-                let width = max(60, proxy.size.width)
-                let shimmerWidth = max(52, width * 0.56)
-                let travel = width + shimmerWidth * 1.8
+                let width = max(1, proxy.size.width)
+                let shimmerWidth = max(34, width * 0.95)
+                let travel = width + shimmerWidth * 2.0
 
                 LinearGradient(
                     stops: [
@@ -4684,21 +4684,23 @@ private struct SweepShimmerText: View {
                 )
                 .frame(width: shimmerWidth, height: max(22, proxy.size.height))
                 .offset(x: -shimmerWidth + travel * sweepProgress)
+                .blendMode(.plusLighter)
                 .mask(
                     Text(text)
                         .font(font)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 )
                 .allowsHitTesting(false)
             }
         }
         .fixedSize(horizontal: true, vertical: false)
         .clipped()
-            .onAppear {
-                sweepProgress = 0
-                withAnimation(.linear(duration: 1.15).repeatForever(autoreverses: false)) {
-                    sweepProgress = 1
-                }
+        .onAppear {
+            sweepProgress = 0
+            withAnimation(.linear(duration: 1.15).repeatForever(autoreverses: false)) {
+                sweepProgress = 1
             }
+        }
     }
 }
 

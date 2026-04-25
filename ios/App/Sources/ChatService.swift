@@ -2746,6 +2746,10 @@ final class ChatService {
             return parsed
         }
 
+        if let recursive = findTokenUsageRecursively(in: object) {
+            return recursive
+        }
+
         return nil
     }
 
@@ -2798,6 +2802,31 @@ final class ChatService {
             outputTokens: max(0, resolvedOutput),
             cachedTokens: max(0, cachedTokens ?? 0)
         )
+    }
+
+    private func findTokenUsageRecursively(in node: Any?) -> ChatTokenUsage? {
+        if let dict = node as? [String: Any] {
+            if let parsed = parseTokenUsage(dict) {
+                return parsed
+            }
+
+            for value in dict.values {
+                if let nested = findTokenUsageRecursively(in: value) {
+                    return nested
+                }
+            }
+            return nil
+        }
+
+        if let array = node as? [Any] {
+            for value in array {
+                if let nested = findTokenUsageRecursively(in: value) {
+                    return nested
+                }
+            }
+        }
+
+        return nil
     }
 
     private func extractInt(for keys: [String], in node: Any?) -> Int? {
