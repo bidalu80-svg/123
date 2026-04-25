@@ -1175,12 +1175,6 @@ final class ChatViewModel: ObservableObject {
 
     private func normalizedFinalStreamingText(_ raw: String) -> String {
         var text = raw.replacingOccurrences(of: "\r\n", with: "\n")
-        text = text.replacingOccurrences(of: "(?m)^\\s{0,3}#{1,6}\\s*", with: "", options: .regularExpression)
-        text = text.replacingOccurrences(of: "(?m)^\\s*[-*•]\\s+", with: "• ", options: .regularExpression)
-        text = text.replacingOccurrences(of: "(?m)^\\s*\\d+[\\.)、]\\s+", with: "• ", options: .regularExpression)
-        text = text.replacingOccurrences(of: "(?m)^\\s*>\\s?", with: "", options: .regularExpression)
-        text = text.replacingOccurrences(of: "(?m)^\\s*([-*_])\\1{2,}\\s*$", with: "", options: .regularExpression)
-        text = text.replacingOccurrences(of: "(?<!`)`([^`\\n]+)`(?!`)", with: "$1", options: .regularExpression)
         text = text.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
         return text
     }
