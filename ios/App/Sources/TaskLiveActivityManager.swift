@@ -73,7 +73,7 @@ final class TaskLiveActivityManager {
     }
 
     private func endActivity(using snapshot: TaskLiveActivitySnapshot) async {
-        guard let currentActivity ?? Activity<IEXATaskActivityAttributes>.activities.first else {
+        guard let activity = currentActivity ?? Activity<IEXATaskActivityAttributes>.activities.first else {
             currentActivity = nil
             lastState = nil
             return
@@ -89,7 +89,7 @@ final class TaskLiveActivityManager {
 
         await activity.end(
             ActivityContent(state: finalState, staleDate: nil),
-            dismissalPolicy: .default
+            dismissalPolicy: ActivityUIDismissalPolicy.default
         )
         currentActivity = nil
         lastState = nil
