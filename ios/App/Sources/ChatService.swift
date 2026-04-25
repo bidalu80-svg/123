@@ -814,7 +814,8 @@ struct ChatRequestBuilder {
         realtimeSystemContext: String? = nil,
         memorySystemContext: String? = nil,
         stream: Bool? = nil,
-        extraSystemPrompts: [String] = []
+        extraSystemPrompts: [String] = [],
+        promptProfile: PromptProfile = .full
     ) throws -> URLRequest {
         let endpoint = config.responsesURLString
         guard let url = URL(string: endpoint), !endpoint.isEmpty else {
@@ -836,7 +837,8 @@ struct ChatRequestBuilder {
             message: message,
             realtimeSystemContext: realtimeSystemContext,
             memorySystemContext: memorySystemContext,
-            extraSystemPrompts: extraSystemPrompts
+            extraSystemPrompts: extraSystemPrompts,
+            promptProfile: promptProfile
         )
 
         let shouldStream = stream ?? config.streamEnabled
@@ -1904,8 +1906,7 @@ final class ChatService {
             message: message,
             realtimeSystemContext: realtimeSystemContext,
             memorySystemContext: memorySystemContext,
-            stream: true
-            ,
+            stream: true,
             promptProfile: promptProfile
         )
         request.timeoutInterval = max(config.timeout, 90)

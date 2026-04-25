@@ -420,7 +420,10 @@ final class ChatViewModel: ObservableObject {
         chatState = .idle
     }
 
-    func regenerateLastAssistantReply(forceProjectFileFormat: Bool = false) async {
+    func regenerateLastAssistantReply(
+        forceProjectFileFormat: Bool = false,
+        correctionInstruction: String? = nil
+    ) async {
         guard !isPrivateMode else { return }
         guard !isSending, isNetworkReachable, let index = currentSessionIndex else { return }
         let targetContext = StreamTargetContext(isPrivateMode: false, sessionID: sessions[index].id)
@@ -430,9 +433,18 @@ final class ChatViewModel: ObservableObject {
         guard let lastUserIndex = sessionMessages.lastIndex(where: { $0.role == .user }) else { return }
         let userMessage = sessionMessages[lastUserIndex]
         let historyBeforeSend = Array(sessionMessages[..<lastUserIndex])
-        let requestMessage = forceProjectFileFormat
-            ? makeProjectFormatCorrectionMessage(from: userMessage)
-            : userMessage
+        let isSyntaxRetry = !forceProjectFileFormat
+            && !(correctionInstruction?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        let requestMessage: ChatMessage = {
+            if forceProjectFileFormat {
+                return makeProjectFormatCorrectionMessage(from: userMessage)
+            }
+            if let correctionInstruction,
+               !correctionInstruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return makeProjectCorrectionMessage(from: userMessage, instruction: correctionInstruction)
+            }
+            return userMessage
+        }()
 
         sessions[index].messages.removeAll { $0.role == .assistant && $0.createdAt >= userMessage.createdAt }
         messages = sessions[index].messages
@@ -441,7 +453,7 @@ final class ChatViewModel: ObservableObject {
         errorMessage = ""
         statusMessage = forceProjectFileFormat
             ? "检测到项目输出格式不完整，正在自动纠正重试…"
-            : "正在重新生成…"
+            : (isSyntaxRetry ? "检测到 Python 语法错误，正在自动修正重试…" : "正在重新生成…")
         chatState = .sending
         isSending = true
         if config.soundEffectsEnabled {
@@ -489,9 +501,15 @@ final class ChatViewModel: ObservableObject {
             let reply = try await task.value
             flushAndStopActiveStreamingSession(applyRemaining: true)
             finishStreamingMessage(id: placeholderID, reply: reply, target: targetContext)
-            statusMessage = forceProjectFileFormat ? "格式纠正重试成功" : "重新生成成功"
+            statusMessage = forceProjectFileFormat
+                ? "格式纠正重试成功"
+                : (isSyntaxRetry ? "Python 语法修正重试成功" : "重新生成成功")
             chatState = .idle
-            appendLog(forceProjectFileFormat ? "聊天测试：已完成项目格式纠正重试。" : "聊天测试：已重新生成上一条回复。")
+            appendLog(
+                forceProjectFileFormat
+                    ? "聊天测试：已完成项目格式纠正重试。"
+                    : (isSyntaxRetry ? "聊天测试：已完成 Python 语法自动修正重试。" : "聊天测试：已重新生成上一条回复。")
+            )
         } catch is CancellationError {
             flushAndStopActiveStreamingSession(applyRemaining: true)
             finishCancellation(id: placeholderID, target: targetContext)
@@ -508,9 +526,17 @@ final class ChatViewModel: ObservableObject {
             } else {
                 removeMessage(id: placeholderID, target: targetContext)
                 errorMessage = error.localizedDescription
-                statusMessage = forceProjectFileFormat ? "格式纠正重试失败" : "重新生成失败"
+                statusMessage = forceProjectFileFormat
+                    ? "格式纠正重试失败"
+                    : (isSyntaxRetry ? "Python 语法修正重试失败" : "重新生成失败")
                 chatState = .error(error.localizedDescription)
-                appendLog(forceProjectFileFormat ? "项目格式纠正重试失败：\(error.localizedDescription)" : "重新生成失败：\(error.localizedDescription)")
+                appendLog(
+                    forceProjectFileFormat
+                        ? "项目格式纠正重试失败：\(error.localizedDescription)"
+                        : (isSyntaxRetry
+                            ? "Python 语法自动修正重试失败：\(error.localizedDescription)"
+                            : "重新生成失败：\(error.localizedDescription)")
+                )
             }
         }
     }
@@ -1231,6 +1257,31 @@ final class ChatViewModel: ObservableObject {
             \(message.content)
 
             \(correctionInstruction)
+            """
+        }
+
+        return ChatMessage(
+            role: message.role,
+            content: mergedContent,
+            imageAttachments: message.imageAttachments,
+            videoAttachments: message.videoAttachments,
+            fileAttachments: message.fileAttachments
+        )
+    }
+
+    private func makeProjectCorrectionMessage(from message: ChatMessage, instruction: String) -> ChatMessage {
+        let trimmedInstruction = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedInstruction.isEmpty else { return message }
+
+        let original = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        let mergedContent: String
+        if original.isEmpty {
+            mergedContent = trimmedInstruction
+        } else {
+            mergedContent = """
+            \(message.content)
+
+            \(trimmedInstruction)
             """
         }
 
