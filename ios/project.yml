@@ -75,11 +75,15 @@ targets:
       base:
         PRODUCT_NAME: IEXATaskLiveActivityExtension
         PRODUCT_MODULE_NAME: IEXATaskLiveActivityExtension
-        PRODUCT_BUNDLE_IDENTIFIER: com.chatapp.ios.liveactivity
+        PRODUCT_BUNDLE_IDENTIFIER: $(IOS_BUNDLE_ID).liveactivity
         INFOPLIST_FILE: LiveActivityExtension/Resources/Info.plist
         SKIP_INSTALL: YES
         APPLICATION_EXTENSION_API_ONLY: YES
         TARGETED_DEVICE_FAMILY: "1"
+        DEVELOPMENT_TEAM: $(IOS_TEAM_ID)
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: $(IOS_SIGNING_IDENTITY)
+        PROVISIONING_PROFILE_SPECIFIER: $(IOS_PROVISIONING_PROFILE_SPECIFIER)
   ChatAppTests:
     type: bundle.unit-test
     platform: iOS
