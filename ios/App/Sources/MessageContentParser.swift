@@ -906,6 +906,7 @@ enum MessageContentParser {
                     let nextLine = lines[next]
                     let nextTrimmed = nextLine.trimmingCharacters(in: .whitespacesAndNewlines)
                     if isLikelyCodeLine(nextTrimmed)
+                        || isLikelyInlineCommentedCodeLine(nextTrimmed)
                         || isStrongCodeLine(nextTrimmed)
                         || isLikelyCodeContinuationLine(nextTrimmed)
                         || isLikelyIndentedCodeContinuationLine(rawLine: nextLine, trimmed: nextTrimmed) {
@@ -930,9 +931,12 @@ enum MessageContentParser {
             }
 
             if isLikelyCodeLine(trimmed)
+                || isLikelyInlineCommentedCodeLine(trimmed)
                 || isLikelyCodeContinuationLine(trimmed)
                 || isLikelyIndentedCodeContinuationLine(rawLine: line, trimmed: trimmed) {
                 if isLikelyCodeLine(trimmed) {
+                    weakCodeLineCount += 1
+                } else if isLikelyInlineCommentedCodeLine(trimmed) {
                     weakCodeLineCount += 1
                 }
                 codeLines.append(line)
@@ -986,12 +990,19 @@ enum MessageContentParser {
         guard !remainderLines.isEmpty else { return nil }
         guard !remainderLines.allSatisfy({ isLikelyCodeCommentLine($0) }) else { return nil }
 
+        let codeLikeLineCount = remainderLines.reduce(into: 0) { count, line in
+            if isStrongCodeLine(line) || isLikelyCodeLine(line) || isLikelyInlineCommentedCodeLine(line) {
+                count += 1
+            }
+        }
+        guard codeLikeLineCount == 0 else { return nil }
+
         let naturalLineCount = remainderLines.reduce(into: 0) { count, line in
             if looksLikeNaturalLanguageSentence(line) || isLikelyNaturalLanguageBullet(line) {
                 count += 1
             }
         }
-        guard naturalLineCount >= 1 else { return nil }
+        guard naturalLineCount >= 2 else { return nil }
         return (code, remainder)
     }
 
@@ -1000,6 +1011,39 @@ enum MessageContentParser {
         guard !trimmed.isEmpty else { return false }
         let commentPrefixes = ["#", "//", "/*", "*", "--", "<!--", "///"]
         return commentPrefixes.contains { trimmed.hasPrefix($0) }
+    }
+
+    private static func isLikelyInlineCommentedCodeLine(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        guard let stripped = stripInlineCommentForCodeDetection(from: trimmed) else { return false }
+        guard stripped != trimmed else { return false }
+
+        if isStrongCodeLine(stripped) || isLikelyCodeLine(stripped) {
+            return true
+        }
+
+        if stripped.range(
+            of: #"^[A-Za-z_][A-Za-z0-9_\.]*\s*\([^)]*\)$"#,
+            options: .regularExpression
+        ) != nil {
+            return true
+        }
+
+        return false
+    }
+
+    private static func stripInlineCommentForCodeDetection(from line: String) -> String? {
+        let markers = [" #", "\t#", " //", "\t//", " -- "]
+        for marker in markers {
+            if let range = line.range(of: marker) {
+                let candidate = String(line[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !candidate.isEmpty {
+                    return candidate
+                }
+            }
+        }
+        return nil
     }
 
     private static func isLikelyCodeLeadInLine(_ text: String) -> Bool {
@@ -1506,7 +1550,7 @@ enum MessageContentParser {
         role: ChatMessage.Role,
         isStreaming: Bool
     ) -> [MessageSegment] {
-        guard role == .assistant, !isStreaming else { return segments }
+        guard role == .assistant else { return segments }
 
         var output: [MessageSegment] = []
         for segment in segments {

@@ -569,16 +569,12 @@ struct MessageBubbleView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         if hasStreamingText {
-                            if shouldRenderStreamingTextDirectly(displayText) {
-                                selectableTextContent(displayText, streamingTextAnimated: true)
+                            let segments = parsedStreamingSegments(for: displayText)
+                            if segments.isEmpty {
+                                assistantTextSegmentView(displayText, streamingTextAnimated: true)
                             } else {
-                                let segments = parsedStreamingSegments(for: displayText)
-                                if segments.isEmpty {
-                                    selectableTextContent(displayText, streamingTextAnimated: true)
-                                } else {
-                                    ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
-                                        segmentView(segment, streamingTextAnimated: true)
-                                    }
+                                ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                                    segmentView(segment, streamingTextAnimated: true)
                                 }
                             }
                         }
@@ -1165,9 +1161,6 @@ struct MessageBubbleView: View {
 
     private func assistantTextBlocks(from text: String, streamingTextAnimated: Bool) -> [AssistantTextBlock] {
         guard message.role == .assistant else {
-            return [.plain(text)]
-        }
-        guard !streamingTextAnimated else {
             return [.plain(text)]
         }
         // Avoid expensive per-line step parsing for very long responses.
@@ -4659,7 +4652,7 @@ private struct SweepShimmerText: View {
     let text: String
     let font: Font
     let baseColor: Color
-    @State private var sweepProgress: CGFloat = -1.15
+    @State private var sweepProgress: CGFloat = 0
 
     init(_ text: String, font: Font, baseColor: Color = .secondary) {
         self.text = text
@@ -4668,44 +4661,44 @@ private struct SweepShimmerText: View {
     }
 
     var body: some View {
-        Text(text)
-            .font(font)
-            .foregroundStyle(baseColor)
-            .overlay {
-                GeometryReader { proxy in
-                    let width = max(56, proxy.size.width)
-                    let shimmerWidth = max(44, width * 0.62)
-                    LinearGradient(
-                        stops: [
-                            .init(color: .clear, location: 0),
-                            .init(color: .white.opacity(0.10), location: 0.25),
-                            .init(color: .white.opacity(0.78), location: 0.50),
-                            .init(color: .white.opacity(0.10), location: 0.75),
-                            .init(color: .clear, location: 1)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                    .frame(width: shimmerWidth, height: proxy.size.height * 1.8)
-                    .rotationEffect(.degrees(12))
-                    .offset(x: sweepOffset(for: width + shimmerWidth))
-                    .blendMode(.screen)
-                    .mask(
-                        Text(text)
-                            .font(font)
-                    )
-                }
-            }
-            .onAppear {
-                sweepProgress = -1.15
-                withAnimation(.linear(duration: 1.35).repeatForever(autoreverses: false)) {
-                    sweepProgress = 1.15
-                }
-            }
-    }
+        ZStack(alignment: .leading) {
+            Text(text)
+                .font(font)
+                .foregroundStyle(baseColor)
 
-    private func sweepOffset(for travel: CGFloat) -> CGFloat {
-        (travel * sweepProgress) - (travel * 0.5)
+            GeometryReader { proxy in
+                let width = max(60, proxy.size.width)
+                let shimmerWidth = max(52, width * 0.56)
+                let travel = width + shimmerWidth * 1.8
+
+                LinearGradient(
+                    stops: [
+                        .init(color: .clear, location: 0),
+                        .init(color: .white.opacity(0.08), location: 0.18),
+                        .init(color: .white.opacity(0.85), location: 0.50),
+                        .init(color: .white.opacity(0.12), location: 0.82),
+                        .init(color: .clear, location: 1)
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .frame(width: shimmerWidth, height: max(22, proxy.size.height))
+                .offset(x: -shimmerWidth + travel * sweepProgress)
+                .mask(
+                    Text(text)
+                        .font(font)
+                )
+                .allowsHitTesting(false)
+            }
+        }
+        .fixedSize(horizontal: true, vertical: false)
+        .clipped()
+            .onAppear {
+                sweepProgress = 0
+                withAnimation(.linear(duration: 1.15).repeatForever(autoreverses: false)) {
+                    sweepProgress = 1
+                }
+            }
     }
 }
 
