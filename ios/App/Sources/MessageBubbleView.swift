@@ -1222,15 +1222,18 @@ struct MessageBubbleView: View {
         let lowered = normalizedTitle.lowercased()
         let prefixMarkers = [
             "已运行", "运行", "执行", "已执行",
-            "构建", "编译", "测试", "检查", "安装",
-            "写入", "读取", "查看", "编辑", "修改",
-            "创建", "生成", "回忆", "记录",
+            "构建", "编译", "测试", "检查", "安装", "列出", "搜索",
+            "写入", "读取", "查看", "编辑", "修改", "删除", "清空",
+            "创建", "生成", "初始化", "准备", "补齐", "同步", "预览",
+            "回忆", "记录",
             "正在", "处理中", "引导对话", "已处理", "已编辑"
         ]
         let keywordMarkers = [
             "shell", "terminal", "cmake", "g++", "clang", "ctest", "cargo", "npm", "pnpm", "pip", "gradle", "maven",
             "脚本", "依赖", "result", "命令", "源码", "文件", "memory", "readme", "main",
-            "编译", "构建", "测试", "运行", "写入", "读取", "查看", "编辑", "修改", "回忆", "记录", "改为"
+            "编译", "构建", "测试", "运行", "写入", "读取", "查看", "编辑", "修改",
+            "列出", "检查", "初始化", "删除", "清空", "搜索", "准备", "预览",
+            "回忆", "记录", "改为"
         ]
         let hasPrefixMarker = prefixMarkers.contains(where: { lowered.hasPrefix($0) })
         let hasKeywordMarker = keywordMarkers.contains(where: { lowered.contains($0) })

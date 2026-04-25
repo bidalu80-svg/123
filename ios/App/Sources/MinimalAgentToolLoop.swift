@@ -320,6 +320,9 @@ final class MinimalAgentToolRuntime {
     private func executeListDir(arguments: [String: Any]) -> MinimalAgentToolExecution {
         let rawPath = stringValue(arguments["path"])
         let displayPath = displayPathForLog(rawPath)
+        let renderedLog = displayPath == "."
+            ? "检查 latest 工作区状态"
+            : "查看 `\(displayPath)` 目录"
         do {
             let rootURL = try latestWorkspaceURL(createIfMissing: true)
             let targetURL: URL
@@ -332,7 +335,7 @@ final class MinimalAgentToolRuntime {
             var isDirectory: ObjCBool = false
             guard fileManager.fileExists(atPath: targetURL.path, isDirectory: &isDirectory), isDirectory.boolValue else {
                 return MinimalAgentToolExecution(
-                    renderedLog: "列出 `\(displayPath)`",
+                    renderedLog: renderedLog,
                     output: "错误：目录 `\(displayPath)` 不存在。"
                 )
             }
@@ -353,12 +356,12 @@ final class MinimalAgentToolRuntime {
 
             let text = rendered.isEmpty ? "[empty]" : rendered.joined(separator: "\n")
             return MinimalAgentToolExecution(
-                renderedLog: "列出 `\(displayPath)`",
+                renderedLog: renderedLog,
                 output: clippedOutput(text, limit: 6_000)
             )
         } catch {
             return MinimalAgentToolExecution(
-                renderedLog: "列出 `\(displayPath)`",
+                renderedLog: renderedLog,
                 output: "错误：\(error.localizedDescription)"
             )
         }
