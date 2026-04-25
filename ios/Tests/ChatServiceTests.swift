@@ -816,6 +816,19 @@ final class ChatServiceTests: XCTestCase {
         XCTAssertTrue(shouldUse)
     }
 
+    func testQwenProjectRequestDoesNotUseAgentToolLoop() {
+        let config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "qwen/qwen3.6-plus", timeout: 30, streamEnabled: true)
+        let message = ChatMessage(role: .user, content: "做一个前端网站")
+
+        let shouldUse = ChatRequestBuilder.shouldUseAgentToolLoop(
+            config: config,
+            history: [],
+            message: message
+        )
+
+        XCTAssertFalse(shouldUse)
+    }
+
     private func makeStubbedChatService() -> ChatService {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [URLProtocolStub.self]

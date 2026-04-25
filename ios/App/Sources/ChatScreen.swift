@@ -149,6 +149,7 @@ struct ChatScreen: View {
     @State private var autoBuildEligibleAssistantIDs: Set<UUID> = []
     @State private var autoBuildInFlightAssistantIDs: Set<UUID> = []
     @State private var projectFormatRetryAttemptedUserIDs: Set<UUID> = []
+    @State private var pythonSyntaxRetryAttemptedUserIDs: Set<UUID> = []
     @State private var composerMeasuredHeight: CGFloat = 0
     @State private var composerStableHeight: CGFloat = 58
     @State private var keyboardOverlapHeight: CGFloat = 0
@@ -275,6 +276,7 @@ struct ChatScreen: View {
             frontendOverlayFileIndex = 0
             frontendOverlayManualSelectionUntil = .distantPast
             projectFormatRetryAttemptedUserIDs.removeAll()
+            pythonSyntaxRetryAttemptedUserIDs.removeAll()
             Self.frontendOverlayCodeEntriesCache.removeAll()
             Self.frontendOverlayCodeEntriesCacheOrder.removeAll()
             DispatchQueue.main.async {
@@ -291,6 +293,7 @@ struct ChatScreen: View {
             frontendOverlayFileIndex = 0
             frontendOverlayManualSelectionUntil = .distantPast
             projectFormatRetryAttemptedUserIDs.removeAll()
+            pythonSyntaxRetryAttemptedUserIDs.removeAll()
             Self.frontendOverlayCodeEntriesCache.removeAll()
             Self.frontendOverlayCodeEntriesCacheOrder.removeAll()
             DispatchQueue.main.async {
@@ -1389,10 +1392,12 @@ struct ChatScreen: View {
 
     private func runLatestProjectValidationIfPossible(
         _ buildResult: FrontendProjectBuilder.BuildResult,
-        messageID _: UUID
+        messageID: UUID
     ) {
         guard let localPlan = localProjectValidationPlan(for: buildResult) else { return }
         let command = localPlan.command
+        let sourceAssistant = viewModel.messages.first(where: { $0.id == messageID })
+        let sourceUserID = sourceAssistant.flatMap { latestUserMessageID(before: $0, in: viewModel.messages) }
 
         Task.detached(priority: .utility) {
             await MainActor.run {
@@ -1406,6 +1411,61 @@ struct ChatScreen: View {
             }
 
             do {
+                let syntaxCheck = try await LocalProjectExecutionService.shared.runPythonCompileAll(
+                    in: buildResult.projectDirectoryURL,
+                    skipDependencyCheck: true
+                )
+                if syntaxCheck.exitCode != 0,
+                   LocalProjectExecutionService.isSyntaxFailure(syntaxCheck.output) {
+                    let retryInstruction = pythonSyntaxCorrectionInstruction(
+                        for: buildResult,
+                        validationOutput: syntaxCheck.output
+                    )
+
+                    if let sourceUserID {
+                        let shouldRetry = await MainActor.run { () -> Bool in
+                            guard !pythonSyntaxRetryAttemptedUserIDs.contains(sourceUserID) else {
+                                return false
+                            }
+                            pythonSyntaxRetryAttemptedUserIDs.insert(sourceUserID)
+                            latestProjectValidationState = ProjectValidationState(
+                                phase: .running,
+                                command: "python3 -m compileall .",
+                                output: "检测到 Python 语法错误，正在自动修正并重新生成…",
+                                exitCode: nil
+                            )
+                            viewModel.statusMessage = "检测到 Python 语法错误，正在自动修正重试…"
+                            return true
+                        }
+                        if shouldRetry {
+                            await viewModel.regenerateLastAssistantReply(correctionInstruction: retryInstruction)
+                            return
+                        }
+                    }
+
+                    let syntaxSnapshot = ShellExecutionResult(
+                        command: "python3 -m compileall .",
+                        output: syntaxCheck.output,
+                        exitCode: syntaxCheck.exitCode,
+                        durationMs: nil,
+                        finalWorkingDirectory: buildResult.projectDirectoryURL.path
+                    )
+                    FrontendProjectBuilder.saveLatestValidationResult(
+                        command: syntaxSnapshot.command,
+                        result: syntaxSnapshot
+                    )
+                    await MainActor.run {
+                        latestProjectValidationState = ProjectValidationState(
+                            phase: .failure,
+                            command: syntaxSnapshot.command,
+                            output: syntaxSnapshot.output,
+                            exitCode: syntaxSnapshot.exitCode
+                        )
+                        viewModel.statusMessage = "Python 项目存在语法错误，请继续让 AI 修复。"
+                    }
+                    return
+                }
+
                 let validationResult: LocalProjectExecutionResult
                 switch localPlan {
                 case .pythonScript(let path):
@@ -1462,6 +1522,35 @@ struct ChatScreen: View {
                 }
             }
         }
+    }
+
+    private func pythonSyntaxCorrectionInstruction(
+        for buildResult: FrontendProjectBuilder.BuildResult,
+        validationOutput: String
+    ) -> String {
+        let pythonPaths = buildResult.writtenRelativePaths.filter { $0.lowercased().hasSuffix(".py") }
+        let filesText: String
+        if pythonPaths.isEmpty {
+            filesText = "- 请重新输出所有相关 Python 文件"
+        } else {
+            filesText = pythonPaths.map { "- \($0)" }.joined(separator: "\n")
+        }
+
+        let errorSummary = LocalProjectExecutionService.syntaxFailureSummary(from: validationOutput)
+        return """
+        [系统自动语法修正重试]
+        你上一轮生成的 Python 项目在本地语法检查失败。请直接重答，并只输出修复后的项目文件载荷。
+        要求：
+        1) 重点修复 Python 的 `SyntaxError`、`IndentationError`、`TabError`。
+        2) 保持功能目标不变，不要改成解释文字。
+        3) 严格使用 `[[file:relative/path.py]] ... [[endfile]]` 输出完整文件。
+        4) 不要省略，不要输出残缺代码，不要混入额外说明文档。
+        5) 优先修复这些 Python 文件：
+        \(filesText)
+
+        本地报错摘要：
+        \(errorSummary)
+        """
     }
 
     private func localProjectValidationPlan(

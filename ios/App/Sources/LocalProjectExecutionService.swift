@@ -79,8 +79,12 @@ raise SystemExit(0 if result.wasSuccessful() else 1)
         return LocalProjectExecutionResult(output: result.output, exitCode: result.exitCode)
     }
 
-    func runPythonCompileAll(in projectURL: URL) async throws -> LocalProjectExecutionResult {
-        if let dependencyResult = unsupportedDependencyResultIfNeeded(projectURL: projectURL) {
+    func runPythonCompileAll(
+        in projectURL: URL,
+        skipDependencyCheck: Bool = false
+    ) async throws -> LocalProjectExecutionResult {
+        if !skipDependencyCheck,
+           let dependencyResult = unsupportedDependencyResultIfNeeded(projectURL: projectURL) {
             return dependencyResult
         }
         let script = pythonProjectBootstrap(projectURL: projectURL) + """
@@ -95,6 +99,23 @@ raise SystemExit(0 if ok else 1)
             waitForEmbeddedRuntimeRecovery: true
         )
         return LocalProjectExecutionResult(output: result.output, exitCode: result.exitCode)
+    }
+
+    static func isSyntaxFailure(_ output: String) -> Bool {
+        let lowered = output.lowercased()
+        return lowered.contains("syntaxerror")
+            || lowered.contains("indentationerror")
+            || lowered.contains("taberror")
+            || lowered.contains("invalid syntax")
+            || lowered.contains("*** error compiling")
+    }
+
+    static func syntaxFailureSummary(from output: String, limit: Int = 900) -> String {
+        let normalized = output
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalized.count > limit else { return normalized }
+        return String(normalized.prefix(limit)) + "…"
     }
 
     private func unsupportedDependencyResultIfNeeded(projectURL: URL) -> LocalProjectExecutionResult? {

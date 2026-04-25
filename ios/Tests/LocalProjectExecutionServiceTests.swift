@@ -24,4 +24,25 @@ final class LocalProjectExecutionServiceTests: XCTestCase {
             ["numpy", "pandas", "-e ."]
         )
     }
+
+    func testIsSyntaxFailureRecognizesIndentationError() {
+        let output = """
+        *** Error compiling '/tmp/crawler.py'...
+        Sorry: IndentationError: unexpected indent (crawler.py, line 12)
+        """
+
+        XCTAssertTrue(LocalProjectExecutionService.isSyntaxFailure(output))
+    }
+
+    func testIsSyntaxFailureRecognizesSyntaxError() {
+        let output = """
+        Traceback (most recent call last):
+          File "/tmp/main.py", line 7
+            if True print("oops")
+                    ^^^^^
+        SyntaxError: invalid syntax
+        """
+
+        XCTAssertTrue(LocalProjectExecutionService.isSyntaxFailure(output))
+    }
 }
