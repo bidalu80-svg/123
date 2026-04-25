@@ -915,6 +915,7 @@ struct ChatScreen: View {
                 let displayMessage = makeDisplaySafeMessage(message)
                 let isDeleting = pendingMessageDeletionIDs.contains(message.id)
                 let canDelete = message.role == .assistant && !message.isStreaming
+                let previousUserMessage = previousUserMessage(for: message, in: viewModel.messages)
 
                 DissolvingMessageRow(
                     isDeleting: isDeleting,
@@ -923,6 +924,7 @@ struct ChatScreen: View {
                     MessageBubbleView(
                         message: displayMessage,
                         sourceMessage: message,
+                        precedingUserMessage: previousUserMessage,
                         codeThemeMode: viewModel.config.codeThemeMode,
                         apiKey: viewModel.config.apiKey,
                         apiBaseURL: viewModel.config.normalizedBaseURL,
@@ -2181,6 +2183,7 @@ struct ChatScreen: View {
         return AnyView(
             MessageBubbleView(
                 message: leadUser,
+                precedingUserMessage: nil,
                 codeThemeMode: viewModel.config.codeThemeMode,
                 apiKey: viewModel.config.apiKey,
                 apiBaseURL: viewModel.config.normalizedBaseURL,
@@ -2196,9 +2199,11 @@ struct ChatScreen: View {
 
     private var activeStreamingBubbleContent: AnyView? {
         guard let active = activeStreamingRenderedMessage else { return nil }
+        let previousUserMessage = previousUserMessage(for: active, in: displayMessages)
         return AnyView(
             MessageBubbleView(
                 message: active,
+                precedingUserMessage: previousUserMessage,
                 codeThemeMode: viewModel.config.codeThemeMode,
                 apiKey: viewModel.config.apiKey,
                 apiBaseURL: viewModel.config.normalizedBaseURL,
@@ -2215,6 +2220,16 @@ struct ChatScreen: View {
     private var activeStreamingBubbleSignature: String? {
         guard let active = activeStreamingRenderedMessage else { return nil }
         return "\(active.id.uuidString)|\(active.content.count)|\(active.imageAttachments.count)|\(active.videoAttachments.count)|\(active.fileAttachments.count)|\(codeThemeRenderSignature)"
+    }
+
+    private func previousUserMessage(for assistant: ChatMessage, in messages: [ChatMessage]) -> ChatMessage? {
+        guard let index = messages.lastIndex(where: { $0.id == assistant.id }), index > 0 else {
+            return nil
+        }
+        for candidate in messages[..<index].reversed() where candidate.role == .user {
+            return candidate
+        }
+        return nil
     }
 
     private var frozenRenderedMessages: [ChatMessage] {

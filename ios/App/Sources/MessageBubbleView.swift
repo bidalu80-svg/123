@@ -7,6 +7,7 @@ import QuickLook
 struct MessageBubbleView: View {
     let message: ChatMessage
     let sourceMessage: ChatMessage?
+    let precedingUserMessage: ChatMessage?
     let codeThemeMode: CodeThemeMode
     let apiKey: String
     let apiBaseURL: String
@@ -52,6 +53,7 @@ struct MessageBubbleView: View {
     init(
         message: ChatMessage,
         sourceMessage: ChatMessage? = nil,
+        precedingUserMessage: ChatMessage? = nil,
         codeThemeMode: CodeThemeMode,
         apiKey: String,
         apiBaseURL: String,
@@ -64,6 +66,7 @@ struct MessageBubbleView: View {
     ) {
         self.message = message
         self.sourceMessage = sourceMessage
+        self.precedingUserMessage = precedingUserMessage
         self.codeThemeMode = codeThemeMode
         self.apiKey = apiKey
         self.apiBaseURL = apiBaseURL
@@ -77,6 +80,10 @@ struct MessageBubbleView: View {
 
     private var actionMessage: ChatMessage {
         sourceMessage ?? message
+    }
+
+    private var triggeringUserPromptText: String {
+        precedingUserMessage?.copyableText.lowercased() ?? ""
     }
 
     var body: some View {
@@ -2597,33 +2604,15 @@ struct MessageBubbleView: View {
 
     private var shouldOfferExcelGeneration: Bool {
         guard canGenerateExcel else { return false }
-
-        let normalized = actionMessage.copyableText.lowercased()
-        if normalized.contains("excel")
+        let normalized = triggeringUserPromptText
+        guard !normalized.isEmpty else { return false }
+        return normalized.contains("excel")
             || normalized.contains("xlsx")
             || normalized.contains("csv")
             || normalized.contains("tsv")
             || normalized.contains("表格")
             || normalized.contains("sheet")
-            || normalized.contains("工作表") {
-            return true
-        }
-
-        if actionMessage.fileAttachments.contains(where: { attachment in
-            let lowered = attachment.fileName.lowercased()
-            return lowered.hasSuffix(".csv")
-                || lowered.hasSuffix(".tsv")
-                || lowered.hasSuffix(".xls")
-                || lowered.hasSuffix(".xlsx")
-        }) {
-            return true
-        }
-
-        let segments = MessageContentParser.parse(actionMessage)
-        return segments.contains { segment in
-            if case .table = segment { return true }
-            return false
-        }
+            || normalized.contains("工作表")
     }
 
     private var shouldShowExcelCard: Bool {

@@ -70,4 +70,34 @@ final class ExcelGenerationServiceTests: XCTestCase {
         XCTAssertEqual(sheets[0].rows.count, 2)
         XCTAssertTrue(ExcelGenerationService.canGenerate(from: message))
     }
+
+    func testCanGenerateDoesNotTreatHtmlAsSpreadsheet() {
+        let html = """
+        <!doctype html>
+        <html lang="zh-CN">
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>demo</title>
+        </head>
+        <body>
+          <h1>Hello</h1>
+        </body>
+        </html>
+        """
+        let message = ChatMessage(
+            role: .assistant,
+            content: "",
+            fileAttachments: [
+                ChatFileAttachment(
+                    fileName: "index.html",
+                    mimeType: "text/html",
+                    textContent: html
+                )
+            ]
+        )
+
+        XCTAssertFalse(ExcelGenerationService.canGenerate(from: message))
+        XCTAssertTrue(ExcelGenerationService.extractSheets(from: message).isEmpty)
+    }
 }
