@@ -790,6 +790,32 @@ final class ChatServiceTests: XCTestCase {
         XCTAssertTrue(reply.text.contains("目录已检查完毕。"))
     }
 
+    func testWebsiteCreationDoesNotUseAgentToolLoopForInitialProjectOutput() {
+        let config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
+        let message = ChatMessage(role: .user, content: "做一个公司官网")
+
+        let shouldUse = ChatRequestBuilder.shouldUseAgentToolLoop(
+            config: config,
+            history: [],
+            message: message
+        )
+
+        XCTAssertFalse(shouldUse)
+    }
+
+    func testExplicitWorkspaceMutationStillUsesAgentToolLoop() {
+        let config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
+        let message = ChatMessage(role: .user, content: "删除这个项目")
+
+        let shouldUse = ChatRequestBuilder.shouldUseAgentToolLoop(
+            config: config,
+            history: [],
+            message: message
+        )
+
+        XCTAssertTrue(shouldUse)
+    }
+
     private func makeStubbedChatService() -> ChatService {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [URLProtocolStub.self]

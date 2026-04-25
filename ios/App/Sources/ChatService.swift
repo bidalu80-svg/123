@@ -873,7 +873,20 @@ struct ChatRequestBuilder {
             "create file", "create directory", "create folder", "touch ", "mkdir ", "delete file",
             "list files", "list directory", "read file", "open file", "inspect workspace"
         ]
-        return explicitMutationMarkers.contains(where: { raw.contains($0) })
+        if explicitMutationMarkers.contains(where: { raw.contains($0) }) {
+            return true
+        }
+
+        let hasProjectContext = recentConversationContainsProjectContext(history: history)
+        if hasProjectContext && looksLikeProjectFollowupEdit(raw) {
+            return true
+        }
+
+        if hasProjectContext && shouldInjectExecutionTaskPrompt(message: message, history: history) {
+            return true
+        }
+
+        return false
     }
 
     private static func makeResponsesContent(from rawContent: Any?) -> [[String: Any]] {
