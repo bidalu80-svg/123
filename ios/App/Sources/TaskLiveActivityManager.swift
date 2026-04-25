@@ -6,6 +6,10 @@ struct TaskLiveActivitySnapshot: Equatable {
     let phaseText: String
     let statusText: String
     let modelText: String
+    let currentStepText: String
+    let stepIndex: Int
+    let stepCount: Int
+    let deepLinkURLString: String
     let isInBackground: Bool
 }
 
@@ -83,6 +87,10 @@ final class TaskLiveActivityManager {
             statusText: clippedText(snapshot.statusText, limit: 72),
             phaseText: clippedText(snapshot.phaseText, limit: 28),
             modelText: clippedText(snapshot.modelText, limit: 28),
+            currentStepText: clippedText(snapshot.currentStepText, limit: 56),
+            stepIndex: max(0, snapshot.stepIndex),
+            stepCount: max(0, snapshot.stepCount),
+            deepLinkURLString: snapshot.deepLinkURLString,
             isInBackground: false,
             isFinished: true
         )
@@ -100,6 +108,10 @@ final class TaskLiveActivityManager {
             statusText: clippedText(snapshot.statusText, limit: 72),
             phaseText: clippedText(snapshot.phaseText, limit: 28),
             modelText: clippedText(snapshot.modelText, limit: 28),
+            currentStepText: clippedText(snapshot.currentStepText, limit: 56),
+            stepIndex: max(0, snapshot.stepIndex),
+            stepCount: max(0, snapshot.stepCount),
+            deepLinkURLString: snapshot.deepLinkURLString,
             isInBackground: snapshot.isInBackground,
             isFinished: false
         )

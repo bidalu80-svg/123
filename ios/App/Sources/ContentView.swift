@@ -18,6 +18,9 @@ struct ContentView: View {
                 }
             }
             .background(MinisTheme.appBackground.ignoresSafeArea())
+            .onOpenURL { url in
+                handleIncomingURL(url)
+            }
         }
         .tint(.primary)
         .preferredColorScheme(viewModel.preferredColorScheme)
@@ -38,6 +41,17 @@ struct ContentView: View {
                 window.rootViewController?.view.backgroundColor = color
                 window.rootViewController?.view.isOpaque = true
             }
+        }
+    }
+
+    private func handleIncomingURL(_ url: URL) {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return }
+        guard (components.scheme ?? "").lowercased() == "iexa" else { return }
+
+        let host = (components.host ?? "").lowercased()
+        if host == "chat" || host.isEmpty {
+            let sessionValue = components.queryItems?.first(where: { $0.name == "session" })?.value
+            viewModel.openSessionFromDeepLink(sessionValue)
         }
     }
 }
