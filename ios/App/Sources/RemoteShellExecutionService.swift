@@ -37,8 +37,11 @@ enum RemoteShellExecutionError: LocalizedError, Equatable {
 final class RemoteShellExecutionService {
     static let shared = RemoteShellExecutionService()
     private let finalWorkingDirectoryMarker = "__IEXA_FINAL_CWD__="
+    private let session: URLSession
 
-    private init() {}
+    init(session: URLSession = .shared) {
+        self.session = session
+    }
 
     func run(
         command: String,
@@ -86,7 +89,7 @@ final class RemoteShellExecutionService {
             request.httpBody = requestBody
 
             do {
-                let (data, response) = try await URLSession.shared.data(for: request)
+                let (data, response) = try await session.data(for: request)
                 guard let http = response as? HTTPURLResponse else {
                     throw RemoteShellExecutionError.invalidResponse("缺少 HTTP 响应头")
                 }

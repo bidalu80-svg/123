@@ -100,7 +100,8 @@ struct ChatRequestBuilder {
         history: [ChatMessage],
         message: ChatMessage,
         realtimeSystemContext: String? = nil,
-        memorySystemContext: String? = nil
+        memorySystemContext: String? = nil,
+        extraSystemPrompts: [String] = []
     ) throws -> URLRequest {
         let completionURL = config.chatCompletionsURLString
         guard let url = URL(string: completionURL), !completionURL.isEmpty else {
@@ -116,14 +117,13 @@ struct ChatRequestBuilder {
             request.setValue("Bearer \(trimmedAPIKey)", forHTTPHeaderField: "Authorization")
         }
 
-        let normalizedMessages = buildMessagesWithIdentity(
+        let normalizedMessages = makeNormalizedMessages(
+            config: config,
             history: history,
             message: message,
             realtimeSystemContext: realtimeSystemContext,
             memorySystemContext: memorySystemContext,
-            frontendAutoBuildEnabled: true,
-            enabledBuiltinSkillIDs: config.enabledBuiltinSkillIDs,
-            customBuiltinSkillPrompts: config.customBuiltinSkillPrompts
+            extraSystemPrompts: extraSystemPrompts
         )
 
         let payload: [String: Any] = [
@@ -136,6 +136,26 @@ struct ChatRequestBuilder {
         return request
     }
 
+    static func makeNormalizedMessages(
+        config: ChatConfig,
+        history: [ChatMessage],
+        message: ChatMessage,
+        realtimeSystemContext: String? = nil,
+        memorySystemContext: String? = nil,
+        extraSystemPrompts: [String] = []
+    ) -> [[String: Any]] {
+        buildMessagesWithIdentity(
+            history: history,
+            message: message,
+            realtimeSystemContext: realtimeSystemContext,
+            memorySystemContext: memorySystemContext,
+            frontendAutoBuildEnabled: true,
+            enabledBuiltinSkillIDs: config.enabledBuiltinSkillIDs,
+            customBuiltinSkillPrompts: config.customBuiltinSkillPrompts,
+            extraSystemPrompts: extraSystemPrompts
+        )
+    }
+
     private static func buildMessagesWithIdentity(
         history: [ChatMessage],
         message: ChatMessage,
@@ -143,7 +163,8 @@ struct ChatRequestBuilder {
         memorySystemContext: String?,
         frontendAutoBuildEnabled: Bool,
         enabledBuiltinSkillIDs: [String],
-        customBuiltinSkillPrompts: [String: String]
+        customBuiltinSkillPrompts: [String: String],
+        extraSystemPrompts: [String]
     ) -> [[String: Any]] {
         let hasSystemMessage = history.contains { $0.role == .system } || message.role == .system
         var prefix: [[String: Any]] = []
@@ -224,6 +245,15 @@ struct ChatRequestBuilder {
                     "content": "[IEXA 当前路线图]\n\(plan)"
                 ])
             }
+        }
+
+        for prompt in extraSystemPrompts {
+            let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            prefix.append([
+                "role": "system",
+                "content": trimmed
+            ])
         }
 
         for skill in enabledBuiltinSkills(from: enabledBuiltinSkillIDs) {
@@ -752,7 +782,8 @@ struct ChatRequestBuilder {
         message: ChatMessage,
         realtimeSystemContext: String? = nil,
         memorySystemContext: String? = nil,
-        stream: Bool? = nil
+        stream: Bool? = nil,
+        extraSystemPrompts: [String] = []
     ) throws -> URLRequest {
         let endpoint = config.responsesURLString
         guard let url = URL(string: endpoint), !endpoint.isEmpty else {
@@ -768,14 +799,13 @@ struct ChatRequestBuilder {
             request.setValue("Bearer \(trimmedAPIKey)", forHTTPHeaderField: "Authorization")
         }
 
-        let normalizedMessages = buildMessagesWithIdentity(
+        let normalizedMessages = makeNormalizedMessages(
+            config: config,
             history: history,
             message: message,
             realtimeSystemContext: realtimeSystemContext,
             memorySystemContext: memorySystemContext,
-            frontendAutoBuildEnabled: true,
-            enabledBuiltinSkillIDs: config.enabledBuiltinSkillIDs,
-            customBuiltinSkillPrompts: config.customBuiltinSkillPrompts
+            extraSystemPrompts: extraSystemPrompts
         )
 
         let shouldStream = stream ?? config.streamEnabled
@@ -789,7 +819,7 @@ struct ChatRequestBuilder {
         return request
     }
 
-    private static func makeResponsesInput(from messages: [[String: Any]]) -> [[String: Any]] {
+    static func makeResponsesInput(from messages: [[String: Any]]) -> [[String: Any]] {
         var input: [[String: Any]] = []
 
         for message in messages {
@@ -805,6 +835,45 @@ struct ChatRequestBuilder {
         }
 
         return input
+    }
+
+    static func shouldUseAgentToolLoop(
+        config: ChatConfig,
+        history: [ChatMessage],
+        message: ChatMessage
+    ) -> Bool {
+        guard message.role == .user else { return false }
+        guard config.endpointMode == .chatCompletions || config.endpointMode == .responses else { return false }
+
+        switch config.resolvedProviderMode {
+        case .anthropic, .gemini:
+            return false
+        case .auto, .openAICompatible, .azureOpenAI, .xAI:
+            break
+        }
+
+        let raw = message.copyableText
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard !raw.isEmpty else { return false }
+        if looksLikeGeneralChatRequest(raw) { return false }
+
+        if shouldInjectExecutionTaskPrompt(message: message, history: history) {
+            return true
+        }
+        if shouldInjectLatestProjectContext(message: message, history: history) {
+            return true
+        }
+
+        let explicitMutationMarkers = [
+            "创建文件", "创建目录", "创建文件夹", "新建文件", "新建目录", "空文件", "空目录",
+            "删除文件", "删除目录", "删除文件夹", "清空工作区", "clear workspace", "clear latest",
+            "查看目录", "列出目录", "列一下目录", "看看目录", "读取文件", "打开文件",
+            "create file", "create directory", "create folder", "touch ", "mkdir ", "delete file",
+            "list files", "list directory", "read file", "open file", "inspect workspace"
+        ]
+        return explicitMutationMarkers.contains(where: { raw.contains($0) })
     }
 
     private static func makeResponsesContent(from rawContent: Any?) -> [[String: Any]] {
@@ -1127,18 +1196,29 @@ enum ChatServiceError: LocalizedError, Equatable {
     }
 }
 
+private struct AgentToolLoopOutcome {
+    let reply: ChatReply
+}
+
+private final class AgentToolLoopProgress {
+    var didExecuteTool = false
+}
+
 final class ChatService {
     private let session: URLSession
     private let realtimeContextProvider: RealtimeContextProvider
     private let memoryStore: ConversationMemoryStore
+    private let remoteShellExecutionService: RemoteShellExecutionService
 
     init(
         session: URLSession? = nil,
         realtimeContextProvider: RealtimeContextProvider = RealtimeContextProvider(),
-        memoryStore: ConversationMemoryStore = ConversationMemoryStore()
+        memoryStore: ConversationMemoryStore = ConversationMemoryStore(),
+        remoteShellExecutionService: RemoteShellExecutionService = .shared
     ) {
         self.realtimeContextProvider = realtimeContextProvider
         self.memoryStore = memoryStore
+        self.remoteShellExecutionService = remoteShellExecutionService
 
         if let session {
             self.session = session
@@ -1167,6 +1247,21 @@ final class ChatService {
         message: ChatMessage,
         onEvent: @escaping @Sendable (StreamChunk) -> Void
     ) async throws -> ChatReply {
+        if ChatRequestBuilder.shouldUseAgentToolLoop(
+            config: config,
+            history: history,
+            message: message
+        ) {
+            if let reply = try await sendMinimalAgentToolLoopIfAvailable(
+                config: config,
+                history: history,
+                message: message,
+                onEvent: onEvent
+            ) {
+                return reply
+            }
+        }
+
         switch config.endpointMode {
         case .chatCompletions:
             return try await sendChatCompletions(
@@ -1211,6 +1306,408 @@ final class ChatService {
                 message: message,
                 onEvent: onEvent
             )
+        }
+    }
+
+    private func sendMinimalAgentToolLoopIfAvailable(
+        config: ChatConfig,
+        history: [ChatMessage],
+        message: ChatMessage,
+        onEvent: @escaping @Sendable (StreamChunk) -> Void
+    ) async throws -> ChatReply? {
+        let memoryContext: String?
+        if config.memoryModeEnabled {
+            await memoryStore.remember(message)
+            memoryContext = await memoryStore.buildSystemContext()
+        } else {
+            memoryContext = nil
+        }
+
+        let realtimeContext = await realtimeContextProvider.buildSystemContext(
+            config: config,
+            userPrompt: message.copyableText
+        )
+
+        let normalizedMessages = ChatRequestBuilder.makeNormalizedMessages(
+            config: config,
+            history: history,
+            message: message,
+            realtimeSystemContext: realtimeContext,
+            memorySystemContext: memoryContext,
+            extraSystemPrompts: [MinimalAgentToolRuntime.systemPrompt]
+        )
+        let toolRuntime = MinimalAgentToolRuntime(shellExecutionService: remoteShellExecutionService)
+        let progress = AgentToolLoopProgress()
+
+        do {
+            let outcome: AgentToolLoopOutcome?
+            switch config.endpointMode {
+            case .chatCompletions:
+                outcome = try await runChatCompletionsAgentToolLoop(
+                    config: config,
+                    initialMessages: normalizedMessages,
+                    toolRuntime: toolRuntime,
+                    onEvent: onEvent,
+                    progress: progress
+                )
+            case .responses:
+                outcome = try await runResponsesAgentToolLoop(
+                    config: config,
+                    initialMessages: normalizedMessages,
+                    toolRuntime: toolRuntime,
+                    onEvent: onEvent,
+                    progress: progress
+                )
+            case .imageGenerations, .videoGenerations, .audioTranscriptions, .embeddings, .models:
+                outcome = nil
+            }
+            return outcome?.reply
+        } catch {
+            if !progress.didExecuteTool && shouldFallbackAgentToolLoopError(error) {
+                return nil
+            }
+            throw error
+        }
+    }
+
+    private func runChatCompletionsAgentToolLoop(
+        config: ChatConfig,
+        initialMessages: [[String: Any]],
+        toolRuntime: MinimalAgentToolRuntime,
+        onEvent: @escaping @Sendable (StreamChunk) -> Void,
+        progress: AgentToolLoopProgress
+    ) async throws -> AgentToolLoopOutcome {
+        var messages = initialMessages
+        var aggregatedUsage: ChatTokenUsage?
+        var renderedLogs: [String] = []
+
+        for turn in 0..<8 {
+            let request = try makeChatCompletionsAgentToolRequest(
+                config: config,
+                messages: messages,
+                toolSpecs: toolRuntime.toolSpecs
+            )
+            let (data, response) = try await withRetry { [self] in
+                try await session.data(for: request)
+            }
+            let object = try parseAgentLoopJSONObject(data: data, response: response)
+            aggregatedUsage = mergeTokenUsage(aggregatedUsage, extractTokenUsage(from: object))
+
+            let parsed = MinimalAgentToolResponseParser.parseChatCompletionsResponse(object)
+            if parsed.toolCalls.isEmpty {
+                let finalText = mergedAgentLoopReplyText(logs: renderedLogs, finalAssistantText: parsed.assistantText)
+                if finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    throw ChatServiceError.noData
+                }
+                if !parsed.assistantText.isEmpty {
+                    onEvent(
+                        StreamChunk(
+                            rawLine: "",
+                            deltaText: finalAssistantDelta(text: parsed.assistantText, hasLogs: !renderedLogs.isEmpty),
+                            imageURLs: [],
+                            isDone: false
+                        )
+                    )
+                }
+                return AgentToolLoopOutcome(
+                    reply: ChatReply(text: finalText, usage: aggregatedUsage)
+                )
+            }
+
+            messages.append(makeChatCompletionsAssistantToolMessage(parsed))
+
+            for call in parsed.toolCalls {
+                let execution = await toolRuntime.execute(call: call, config: config)
+                progress.didExecuteTool = true
+                if !execution.renderedLog.isEmpty {
+                    renderedLogs.append(execution.renderedLog)
+                    onEvent(
+                        StreamChunk(
+                            rawLine: "",
+                            deltaText: execution.renderedLog + "\n",
+                            imageURLs: [],
+                            isDone: false
+                        )
+                    )
+                }
+                messages.append([
+                    "role": "tool",
+                    "tool_call_id": call.id,
+                    "content": execution.output
+                ])
+            }
+
+            if turn == 7 {
+                let finalText = mergedAgentLoopReplyText(
+                    logs: renderedLogs,
+                    finalAssistantText: "已达到本轮工具调用上限，请让我继续下一步。"
+                )
+                return AgentToolLoopOutcome(
+                    reply: ChatReply(text: finalText, usage: aggregatedUsage)
+                )
+            }
+        }
+
+        return AgentToolLoopOutcome(
+            reply: ChatReply(text: mergedAgentLoopReplyText(logs: renderedLogs, finalAssistantText: ""), usage: aggregatedUsage)
+        )
+    }
+
+    private func runResponsesAgentToolLoop(
+        config: ChatConfig,
+        initialMessages: [[String: Any]],
+        toolRuntime: MinimalAgentToolRuntime,
+        onEvent: @escaping @Sendable (StreamChunk) -> Void,
+        progress: AgentToolLoopProgress
+    ) async throws -> AgentToolLoopOutcome {
+        var previousResponseID: String?
+        var input = ChatRequestBuilder.makeResponsesInput(from: initialMessages)
+        var aggregatedUsage: ChatTokenUsage?
+        var renderedLogs: [String] = []
+
+        for turn in 0..<8 {
+            let request = try makeResponsesAgentToolRequest(
+                config: config,
+                input: input,
+                toolSpecs: toolRuntime.toolSpecs,
+                previousResponseID: previousResponseID
+            )
+            let (data, response) = try await withRetry { [self] in
+                try await session.data(for: request)
+            }
+            let object = try parseAgentLoopJSONObject(data: data, response: response)
+            aggregatedUsage = mergeTokenUsage(aggregatedUsage, extractTokenUsage(from: object))
+
+            let parsed = MinimalAgentToolResponseParser.parseResponsesResponse(object)
+            previousResponseID = parsed.responseID ?? previousResponseID
+            if parsed.toolCalls.isEmpty {
+                let finalText = mergedAgentLoopReplyText(logs: renderedLogs, finalAssistantText: parsed.assistantText)
+                if finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    throw ChatServiceError.noData
+                }
+                if !parsed.assistantText.isEmpty {
+                    onEvent(
+                        StreamChunk(
+                            rawLine: "",
+                            deltaText: finalAssistantDelta(text: parsed.assistantText, hasLogs: !renderedLogs.isEmpty),
+                            imageURLs: [],
+                            isDone: false
+                        )
+                    )
+                }
+                return AgentToolLoopOutcome(
+                    reply: ChatReply(text: finalText, usage: aggregatedUsage)
+                )
+            }
+
+            guard previousResponseID != nil else {
+                throw ChatServiceError.invalidResponse
+            }
+
+            var outputs: [[String: Any]] = []
+            outputs.reserveCapacity(parsed.toolCalls.count)
+
+            for call in parsed.toolCalls {
+                let execution = await toolRuntime.execute(call: call, config: config)
+                progress.didExecuteTool = true
+                if !execution.renderedLog.isEmpty {
+                    renderedLogs.append(execution.renderedLog)
+                    onEvent(
+                        StreamChunk(
+                            rawLine: "",
+                            deltaText: execution.renderedLog + "\n",
+                            imageURLs: [],
+                            isDone: false
+                        )
+                    )
+                }
+                outputs.append([
+                    "type": "function_call_output",
+                    "call_id": call.id,
+                    "output": execution.output
+                ])
+            }
+
+            input = outputs
+
+            if turn == 7 {
+                let finalText = mergedAgentLoopReplyText(
+                    logs: renderedLogs,
+                    finalAssistantText: "已达到本轮工具调用上限，请让我继续下一步。"
+                )
+                return AgentToolLoopOutcome(
+                    reply: ChatReply(text: finalText, usage: aggregatedUsage)
+                )
+            }
+        }
+
+        return AgentToolLoopOutcome(
+            reply: ChatReply(text: mergedAgentLoopReplyText(logs: renderedLogs, finalAssistantText: ""), usage: aggregatedUsage)
+        )
+    }
+
+    private func makeChatCompletionsAgentToolRequest(
+        config: ChatConfig,
+        messages: [[String: Any]],
+        toolSpecs: [MinimalAgentToolSpec]
+    ) throws -> URLRequest {
+        let endpoint = config.chatCompletionsURLString
+        guard let url = URL(string: endpoint), !endpoint.isEmpty else {
+            throw ChatServiceError.invalidURL
+        }
+
+        var request = URLRequest(url: url, timeoutInterval: max(config.timeout, 90))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let trimmedAPIKey = config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedAPIKey.isEmpty {
+            request.setValue("Bearer \(trimmedAPIKey)", forHTTPHeaderField: "Authorization")
+        }
+
+        let payload: [String: Any] = [
+            "model": config.model,
+            "messages": messages,
+            "stream": false,
+            "tool_choice": "auto",
+            "tools": toolSpecs.map { spec in
+                [
+                    "type": "function",
+                    "function": [
+                        "name": spec.name,
+                        "description": spec.description,
+                        "parameters": spec.parameters
+                    ]
+                ]
+            }
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        return request
+    }
+
+    private func makeResponsesAgentToolRequest(
+        config: ChatConfig,
+        input: [[String: Any]],
+        toolSpecs: [MinimalAgentToolSpec],
+        previousResponseID: String?
+    ) throws -> URLRequest {
+        let endpoint = config.responsesURLString
+        guard let url = URL(string: endpoint), !endpoint.isEmpty else {
+            throw ChatServiceError.invalidURL
+        }
+
+        var request = URLRequest(url: url, timeoutInterval: max(config.timeout, 90))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let trimmedAPIKey = config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedAPIKey.isEmpty {
+            request.setValue("Bearer \(trimmedAPIKey)", forHTTPHeaderField: "Authorization")
+        }
+
+        var payload: [String: Any] = [
+            "model": config.model,
+            "input": input,
+            "stream": false,
+            "tool_choice": "auto",
+            "tools": toolSpecs.map { spec in
+                [
+                    "type": "function",
+                    "name": spec.name,
+                    "description": spec.description,
+                    "parameters": spec.parameters
+                ]
+            }
+        ]
+        if let previousResponseID, !previousResponseID.isEmpty {
+            payload["previous_response_id"] = previousResponseID
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        return request
+    }
+
+    private func parseAgentLoopJSONObject(data: Data, response: URLResponse) throws -> [String: Any] {
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw ChatServiceError.invalidResponse
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw ChatServiceError.httpError(httpResponse.statusCode)
+        }
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw ChatServiceError.noData
+        }
+        return object
+    }
+
+    private func makeChatCompletionsAssistantToolMessage(_ parsed: MinimalAgentToolTurnResponse) -> [String: Any] {
+        var message: [String: Any] = [
+            "role": "assistant",
+            "content": parsed.assistantText
+        ]
+        if !parsed.toolCalls.isEmpty {
+            message["tool_calls"] = parsed.toolCalls.map { call in
+                [
+                    "id": call.id,
+                    "type": "function",
+                    "function": [
+                        "name": call.name,
+                        "arguments": call.argumentsJSON
+                    ]
+                ]
+            }
+        }
+        return message
+    }
+
+    private func mergedAgentLoopReplyText(logs: [String], finalAssistantText: String) -> String {
+        let logsText = logs
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+        let finalText = finalAssistantText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if logsText.isEmpty {
+            return finalText
+        }
+        if finalText.isEmpty {
+            return logsText
+        }
+        return "\(logsText)\n\n\(finalText)"
+    }
+
+    private func finalAssistantDelta(text: String, hasLogs: Bool) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        return hasLogs ? "\n\(trimmed)" : trimmed
+    }
+
+    private func mergeTokenUsage(_ lhs: ChatTokenUsage?, _ rhs: ChatTokenUsage?) -> ChatTokenUsage? {
+        switch (lhs, rhs) {
+        case (.none, .none):
+            return nil
+        case let (.some(value), .none), let (.none, .some(value)):
+            return value
+        case let (.some(left), .some(right)):
+            return ChatTokenUsage(
+                inputTokens: left.inputTokens + right.inputTokens,
+                outputTokens: left.outputTokens + right.outputTokens,
+                cachedTokens: left.cachedTokens + right.cachedTokens
+            )
+        }
+    }
+
+    private func shouldFallbackAgentToolLoopError(_ error: Error) -> Bool {
+        guard let serviceError = error as? ChatServiceError else {
+            return false
+        }
+
+        switch serviceError {
+        case .httpError(let code):
+            return [400, 404, 405, 415, 422, 429, 500, 501, 502, 503, 504].contains(code)
+        case .invalidResponse, .noData:
+            return true
+        case .invalidInput, .invalidURL, .unsupported:
+            return false
         }
     }
 

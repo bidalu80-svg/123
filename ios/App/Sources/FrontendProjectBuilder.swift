@@ -355,6 +355,10 @@ enum FrontendProjectBuilder {
         projectsRootURL()?.appendingPathComponent("latest", isDirectory: true)
     }
 
+    static func normalizeWorkspaceRelativePath(_ rawPath: String) -> String? {
+        sanitizeRelativePath(rawPath)
+    }
+
     static func latestEntryFileURL() -> URL? {
         guard let latest = latestProjectURL() else { return nil }
 

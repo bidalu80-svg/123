@@ -2,6 +2,11 @@ import XCTest
 @testable import ChatApp
 
 final class ChatServiceTests: XCTestCase {
+    override func tearDown() {
+        URLProtocolStub.handler = nil
+        super.tearDown()
+    }
+
     func testBuildRequestIncludesModelMessagesAndStreamFlag() throws {
         let config = ChatConfig(apiURL: "https://example.com", apiKey: "token-123", model: "gpt-test", timeout: 30, streamEnabled: true)
         let history = [ChatMessage(role: .assistant, content: "history")]
@@ -626,6 +631,173 @@ final class ChatServiceTests: XCTestCase {
         }
         XCTAssertEqual(language?.lowercased(), "python")
         XCTAssertTrue(content.contains("def add"))
+    }
+
+    func testSendMessageUsesChatCompletionsAgentToolLoopToWriteWorkspaceFile() async throws {
+        try? FrontendProjectBuilder.clearLatestProject()
+        defer { try? FrontendProjectBuilder.clearLatestProject() }
+
+        var requestBodies: [[String: Any]] = []
+        URLProtocolStub.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/chat/completions")
+            let body = try XCTUnwrap(request.httpBody)
+            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            requestBodies.append(json)
+
+            let payload: [String: Any]
+            if requestBodies.count == 1 {
+                let tools = try XCTUnwrap(json["tools"] as? [[String: Any]])
+                XCTAssertTrue(tools.contains { (($0["function"] as? [String: Any])?["name"] as? String) == "write_file" })
+                payload = [
+                    "choices": [[
+                        "message": [
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [[
+                                "id": "call_write_1",
+                                "type": "function",
+                                "function": [
+                                    "name": "write_file",
+                                    "arguments": #"{"path":"notes/todo.txt","content":"hello"}"#
+                                ]
+                            ]]
+                        ]
+                    ]]
+                ]
+            } else {
+                let messages = try XCTUnwrap(json["messages"] as? [[String: Any]])
+                XCTAssertTrue(messages.contains {
+                    ($0["role"] as? String) == "tool"
+                        && ($0["tool_call_id"] as? String) == "call_write_1"
+                })
+                payload = [
+                    "choices": [[
+                        "message": [
+                            "role": "assistant",
+                            "content": "已完成。"
+                        ]
+                    ]]
+                ]
+            }
+
+            let data = try JSONSerialization.data(withJSONObject: payload)
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: nil
+                )
+            )
+            return (response, data)
+        }
+
+        let service = makeStubbedChatService()
+        var config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: false)
+        config.endpointMode = .chatCompletions
+
+        var streamedText = ""
+        let reply = try await service.sendMessage(
+            config: config,
+            history: [],
+            message: ChatMessage(role: .user, content: "请创建文件 notes/todo.txt，并写入 hello"),
+            onEvent: { chunk in
+                streamedText += chunk.deltaText
+            }
+        )
+
+        XCTAssertEqual(requestBodies.count, 2)
+        XCTAssertTrue(streamedText.contains("写入 `notes/todo.txt`"))
+        XCTAssertTrue(reply.text.contains("写入 `notes/todo.txt`"))
+        XCTAssertTrue(reply.text.contains("已完成。"))
+
+        let latest = try XCTUnwrap(FrontendProjectBuilder.latestProjectURL())
+        let content = try String(contentsOf: latest.appendingPathComponent("notes/todo.txt"), encoding: .utf8)
+        XCTAssertEqual(content, "hello")
+    }
+
+    func testSendMessageUsesResponsesAgentToolLoopWithFunctionCallOutput() async throws {
+        try? FrontendProjectBuilder.clearLatestProject()
+        defer { try? FrontendProjectBuilder.clearLatestProject() }
+
+        var requestBodies: [[String: Any]] = []
+        URLProtocolStub.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/responses")
+            let body = try XCTUnwrap(request.httpBody)
+            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            requestBodies.append(json)
+
+            let payload: [String: Any]
+            if requestBodies.count == 1 {
+                let tools = try XCTUnwrap(json["tools"] as? [[String: Any]])
+                XCTAssertTrue(tools.contains { ($0["name"] as? String) == "list_dir" })
+                payload = [
+                    "id": "resp_1",
+                    "output": [[
+                        "type": "function_call",
+                        "id": "fc_1",
+                        "call_id": "call_list_1",
+                        "name": "list_dir",
+                        "arguments": #"{"path":".","limit":10}"#
+                    ]]
+                ]
+            } else {
+                XCTAssertEqual(json["previous_response_id"] as? String, "resp_1")
+                let input = try XCTUnwrap(json["input"] as? [[String: Any]])
+                XCTAssertEqual(input.first?["type"] as? String, "function_call_output")
+                XCTAssertEqual(input.first?["call_id"] as? String, "call_list_1")
+                payload = [
+                    "id": "resp_2",
+                    "output": [[
+                        "type": "message",
+                        "content": [[
+                            "type": "output_text",
+                            "text": "目录已检查完毕。"
+                        ]]
+                    ]]
+                ]
+            }
+
+            let data = try JSONSerialization.data(withJSONObject: payload)
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: nil
+                )
+            )
+            return (response, data)
+        }
+
+        let service = makeStubbedChatService()
+        var config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: false)
+        config.endpointMode = .responses
+
+        var streamedText = ""
+        let reply = try await service.sendMessage(
+            config: config,
+            history: [],
+            message: ChatMessage(role: .user, content: "请执行一下，先查看 latest 当前目录"),
+            onEvent: { chunk in
+                streamedText += chunk.deltaText
+            }
+        )
+
+        XCTAssertEqual(requestBodies.count, 2)
+        XCTAssertTrue(streamedText.contains("列出 `.`"))
+        XCTAssertTrue(reply.text.contains("列出 `.`"))
+        XCTAssertTrue(reply.text.contains("目录已检查完毕。"))
+    }
+
+    private func makeStubbedChatService() -> ChatService {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [URLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        return ChatService(
+            session: session,
+            remoteShellExecutionService: RemoteShellExecutionService(session: session)
+        )
     }
 }
 
