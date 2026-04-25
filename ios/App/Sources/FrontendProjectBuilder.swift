@@ -629,6 +629,14 @@ enum FrontendProjectBuilder {
             throw BuildError.noWorkspaceOperations
         }
 
+        return try applyLatestWorkspaceMutations(operations)
+    }
+
+    static func applyLatestWorkspaceMutations(_ operations: [WorkspaceOperation]) throws -> WorkspaceMutationResult {
+        guard !operations.isEmpty else {
+            throw BuildError.noWorkspaceOperations
+        }
+
         let fileManager = FileManager.default
         guard let latest = latestProjectURL() else {
             throw BuildError.invalidProjectDirectory
@@ -678,6 +686,47 @@ enum FrontendProjectBuilder {
             operations: operations,
             affectedPaths: affectedPaths
         )
+    }
+
+    static func inferredWorkspaceOperations(fromUserPrompt raw: String) -> [WorkspaceOperation] {
+        let normalized = raw
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let lowered = normalized.lowercased()
+        guard !lowered.isEmpty else { return [] }
+
+        if lowered.contains("删除所有项目")
+            || lowered.contains("清空latest")
+            || lowered.contains("清空 latest")
+            || lowered.contains("清空工作区")
+            || lowered.contains("clear latest")
+            || lowered.contains("clear workspace")
+            || lowered.contains("reset latest") {
+            return [.clearLatest]
+        }
+
+        if let path = inferredPath(
+            in: normalized,
+            prefixes: ["创建空文件夹", "创建文件夹", "新建文件夹", "创建目录", "新建目录", "mkdir "]
+        ) {
+            return [.createDirectory(path: path)]
+        }
+
+        if let path = inferredPath(
+            in: normalized,
+            prefixes: ["创建空文件", "新建空文件", "创建文件", "新建文件", "touch "]
+        ) {
+            return [.createEmptyFile(path: path)]
+        }
+
+        if let path = inferredPath(
+            in: normalized,
+            prefixes: ["删除文件夹", "删除目录", "删除文件", "删除 ", "移除文件夹", "移除目录", "remove folder ", "remove directory ", "remove file ", "delete folder ", "delete directory ", "delete file "]
+        ) {
+            return [.delete(path: path)]
+        }
+
+        return []
     }
 
     static func buildProject(
@@ -2225,6 +2274,36 @@ enum FrontendProjectBuilder {
         let sanitized = components.compactMap { sanitizePathComponent($0) }
         guard !sanitized.isEmpty else { return nil }
         return sanitized.joined(separator: "/")
+    }
+
+    private static func inferredPath(in text: String, prefixes: [String]) -> String? {
+        for prefix in prefixes {
+            guard let range = text.range(
+                of: prefix,
+                options: [.caseInsensitive]
+            ) else {
+                continue
+            }
+
+            let suffix = text[range.upperBound...]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !suffix.isEmpty else { continue }
+
+            if let quoted = firstRegexCapture(
+                in: String(suffix),
+                pattern: #"[`"'“”‘’]([^`"'“”‘’]+)[`"'“”‘’]"#
+            ), let normalized = sanitizeRelativePath(quoted) {
+                return normalized
+            }
+
+            let tokens = suffix
+                .split(whereSeparator: { $0.isWhitespace })
+                .map(String.init)
+            if let first = tokens.first, let normalized = sanitizeRelativePath(first) {
+                return normalized
+            }
+        }
+        return nil
     }
 
     private static func sanitizePathComponent(_ raw: String) -> String? {

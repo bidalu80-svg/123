@@ -199,4 +199,34 @@ final class MessageContentParserTests: XCTestCase {
         XCTAssertTrue(text.contains("这说明两个变量都指向同一个对象。"))
         XCTAssertTrue(text.contains("真正的数据在对象本身上。"))
     }
+
+    func testParseSplitsInlineNarrationSuffixOutOfCodeLine() {
+        let message = ChatMessage(
+            role: .assistant,
+            content: """
+            ```python
+            b = a
+            print(b)。动态类型（鸭子类型）
+            变量不需要声明类型，可以随时指向不同类型的对象。
+            ```
+            """
+        )
+
+        let segments = MessageContentParser.parse(message)
+
+        XCTAssertEqual(segments.count, 2)
+        guard case let .code(language, content) = segments[0] else {
+            return XCTFail("Expected code segment first")
+        }
+        XCTAssertEqual(language, "python")
+        XCTAssertTrue(content.contains("b = a"))
+        XCTAssertTrue(content.contains("print(b)"))
+        XCTAssertFalse(content.contains("动态类型"))
+
+        guard case let .text(text) = segments[1] else {
+            return XCTFail("Expected narration segment second")
+        }
+        XCTAssertTrue(text.contains("动态类型（鸭子类型）"))
+        XCTAssertTrue(text.contains("变量不需要声明类型"))
+    }
 }

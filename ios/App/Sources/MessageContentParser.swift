@@ -917,6 +917,34 @@ enum MessageContentParser {
                 break
             }
 
+            if let inlineNarration = splitInlineNarrativeSuffix(from: line) {
+                let inlineCode = inlineNarration.code.trimmingCharacters(in: .whitespacesAndNewlines)
+                if isStrongCodeLine(inlineCode) {
+                    seenStrongCodeLine = true
+                    codeLines.append(inlineNarration.code)
+                    let tailLines = [inlineNarration.narration] + Array(lines.dropFirst(cursor + 1))
+                    let code = codeLines
+                        .joined(separator: "\n")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    let remainder = tailLines
+                        .joined(separator: "\n")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    return (code, remainder)
+                }
+                if isLikelyCodeLine(inlineCode) || isLikelyInlineCommentedCodeLine(inlineCode) {
+                    weakCodeLineCount += 1
+                    codeLines.append(inlineNarration.code)
+                    let tailLines = [inlineNarration.narration] + Array(lines.dropFirst(cursor + 1))
+                    let code = codeLines
+                        .joined(separator: "\n")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    let remainder = tailLines
+                        .joined(separator: "\n")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    return (code, remainder)
+                }
+            }
+
             if isStrongCodeLine(trimmed) {
                 seenStrongCodeLine = true
                 codeLines.append(line)
@@ -1003,6 +1031,40 @@ enum MessageContentParser {
         }
         guard naturalLineCount >= 2 else { return nil }
         return (code, remainder)
+    }
+
+    private static func splitInlineNarrativeSuffix(from rawLine: String) -> (code: String, narration: String)? {
+        let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard !trimmed.contains("#"), !trimmed.contains("//"), !trimmed.contains("/*") else { return nil }
+
+        let punctuationSet = CharacterSet(charactersIn: "。！？")
+        for index in trimmed.indices {
+            let scalarSet = trimmed[index].unicodeScalars
+            guard scalarSet.allSatisfy({ punctuationSet.contains($0) }) else { continue }
+
+            let codePart = String(trimmed[..<index]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let narrationStart = trimmed.index(after: index)
+            let narration = String(trimmed[narrationStart...]).trimmingCharacters(in: .whitespacesAndNewlines)
+
+            guard !codePart.isEmpty, !narration.isEmpty else { continue }
+            guard hasBalancedInlineQuotes(codePart) else { continue }
+            guard looksLikeNaturalLanguageSentence(narration) || isLikelyNaturalLanguageBullet(narration) else { continue }
+
+            if isStrongCodeLine(codePart)
+                || isLikelyCodeLine(codePart)
+                || isLikelyInlineCommentedCodeLine(codePart) {
+                return (codePart, narration)
+            }
+        }
+
+        return nil
+    }
+
+    private static func hasBalancedInlineQuotes(_ text: String) -> Bool {
+        let doubleQuoteCount = text.filter { $0 == "\"" }.count
+        let singleQuoteCount = text.filter { $0 == "'" }.count
+        return doubleQuoteCount.isMultiple(of: 2) && singleQuoteCount.isMultiple(of: 2)
     }
 
     private static func isLikelyCodeCommentLine(_ line: String) -> Bool {
