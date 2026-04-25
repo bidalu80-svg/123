@@ -6,6 +6,22 @@ enum FrontendProjectBuilder {
         case overwriteLatestProject
     }
 
+    enum WorkspaceOperation: Equatable {
+        case clearLatest
+        case createDirectory(path: String)
+        case createEmptyFile(path: String)
+        case delete(path: String)
+
+        var path: String? {
+            switch self {
+            case .clearLatest:
+                return nil
+            case .createDirectory(let path), .createEmptyFile(let path), .delete(let path):
+                return path
+            }
+        }
+    }
+
     struct BuildResult {
         let projectDirectoryURL: URL
         let entryFileURL: URL
@@ -19,6 +35,12 @@ enum FrontendProjectBuilder {
         let createdNewProject: Bool
         let shouldAutoOpenPreview: Bool
         let hadNaturalPreviewEntry: Bool
+        let workspaceOperations: [WorkspaceOperation]
+    }
+
+    struct WorkspaceMutationResult: Equatable {
+        let operations: [WorkspaceOperation]
+        let affectedPaths: [String]
     }
 
     struct ValidationPlan: Equatable {
@@ -40,6 +62,7 @@ enum FrontendProjectBuilder {
 
     enum BuildError: LocalizedError {
         case noFrontendContent
+        case noWorkspaceOperations
         case invalidProjectDirectory
         case missingEntryFile
 
@@ -47,6 +70,8 @@ enum FrontendProjectBuilder {
             switch self {
             case .noFrontendContent:
                 return "没有识别到可落盘的项目代码。请让模型按 [[file:...]] 或代码块输出。"
+            case .noWorkspaceOperations:
+                return "没有识别到可执行的工作区操作。请使用 [[mkdir:...]] / [[touch:...]] / [[delete:...]] / [[clear:latest]]。"
             case .invalidProjectDirectory:
                 return "无法创建本地项目目录。"
             case .missingEntryFile:
@@ -133,10 +158,11 @@ enum FrontendProjectBuilder {
         }
 
         let canGenerate: Bool
-        if message.fileAttachments.contains(where: {
+        if hasExplicitWorkspaceOperationPayload(from: message) {
+            canGenerate = true
+        } else if message.fileAttachments.contains(where: {
             $0.binaryBase64 == nil
                 && sanitizeRelativePath($0.fileName) != nil
-                && !$0.textContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }) {
             canGenerate = true
         } else {
@@ -154,10 +180,16 @@ enum FrontendProjectBuilder {
     }
 
     static func hasExplicitProjectPayload(from message: ChatMessage) -> Bool {
+        if hasExplicitWorkspaceOperationPayload(from: message) {
+            return true
+        }
+        return hasExplicitProjectFilePayload(from: message)
+    }
+
+    static func hasExplicitProjectFilePayload(from message: ChatMessage) -> Bool {
         if message.fileAttachments.contains(where: {
             $0.binaryBase64 == nil
                 && sanitizeRelativePath($0.fileName) != nil
-                && !$0.textContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }) {
             return true
         }
@@ -166,9 +198,21 @@ enum FrontendProjectBuilder {
         return containsTaggedFile(in: text)
     }
 
+    static func hasExplicitWorkspaceOperationPayload(from message: ChatMessage) -> Bool {
+        !extractWorkspaceOperations(from: message).isEmpty
+    }
+
     static func explicitPayloadProgressSnapshot(from message: ChatMessage) -> ChatProgressSnapshot? {
         if message.isStreaming {
             return explicitStreamingChatProgressSnapshot(from: message)
+        }
+
+        let workspaceOperations = extractWorkspaceOperations(from: message)
+        if !workspaceOperations.isEmpty {
+            return ChatProgressSnapshot(
+                detectedFileCount: workspaceOperations.count,
+                hasEntryHTML: false
+            )
         }
 
         let parsed = extractExplicitProjectFiles(from: message)
@@ -579,6 +623,63 @@ enum FrontendProjectBuilder {
         try fileManager.createDirectory(at: latest, withIntermediateDirectories: true)
     }
 
+    static func applyLatestWorkspaceMutations(from message: ChatMessage) throws -> WorkspaceMutationResult {
+        let operations = extractWorkspaceOperations(from: message)
+        guard !operations.isEmpty else {
+            throw BuildError.noWorkspaceOperations
+        }
+
+        let fileManager = FileManager.default
+        guard let latest = latestProjectURL() else {
+            throw BuildError.invalidProjectDirectory
+        }
+        if !fileManager.fileExists(atPath: latest.path) {
+            try fileManager.createDirectory(at: latest, withIntermediateDirectories: true)
+        }
+
+        var affectedPaths: [String] = []
+        clearLatestValidationResult()
+
+        for operation in operations {
+            switch operation {
+            case .clearLatest:
+                let children = try fileManager.contentsOfDirectory(
+                    at: latest,
+                    includingPropertiesForKeys: nil,
+                    options: []
+                )
+                for child in children {
+                    try fileManager.removeItem(at: child)
+                }
+                affectedPaths.append("latest")
+
+            case .createDirectory(let path):
+                let targetURL = latest.appendingPathComponent(path, isDirectory: true)
+                try fileManager.createDirectory(at: targetURL, withIntermediateDirectories: true)
+                affectedPaths.append(path)
+
+            case .createEmptyFile(let path):
+                let targetURL = latest.appendingPathComponent(path, isDirectory: false)
+                try fileManager.createDirectory(at: targetURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try Data().write(to: targetURL, options: .atomic)
+                affectedPaths.append(path)
+
+            case .delete(let path):
+                let targetURL = latest.appendingPathComponent(path, isDirectory: false)
+                if fileManager.fileExists(atPath: targetURL.path) {
+                    try fileManager.removeItem(at: targetURL)
+                    pruneEmptyParentDirectories(startingFrom: targetURL.deletingLastPathComponent(), root: latest)
+                    affectedPaths.append(path)
+                }
+            }
+        }
+
+        return WorkspaceMutationResult(
+            operations: operations,
+            affectedPaths: affectedPaths
+        )
+    }
+
     static func buildProject(
         from message: ChatMessage,
         mode: BuildMode,
@@ -681,6 +782,10 @@ enum FrontendProjectBuilder {
             )
         }
 
+        if mode == .overwriteLatestProject && !mergeExistingProject {
+            try clearLatestProject()
+        }
+
         let projectDirectoryURL = try prepareProjectDirectory(mode: mode)
         let fileManager = FileManager.default
         let validationPlan = suggestedValidationPlan(
@@ -724,7 +829,8 @@ enum FrontendProjectBuilder {
             suggestedValidationCommand: suggestedValidationCommand,
             createdNewProject: mode == .createNewProject,
             shouldAutoOpenPreview: previewEntryFileURL != nil,
-            hadNaturalPreviewEntry: hadNaturalPreviewEntry
+            hadNaturalPreviewEntry: hadNaturalPreviewEntry,
+            workspaceOperations: []
         )
     }
 
@@ -1086,6 +1192,57 @@ enum FrontendProjectBuilder {
         files.append(contentsOf: parseTaggedFiles(in: text))
         files.append(contentsOf: parseFencedCodeBlocks(in: text))
         return mergeParsedFiles(files)
+    }
+
+    private static func extractWorkspaceOperations(from message: ChatMessage) -> [WorkspaceOperation] {
+        parseWorkspaceOperations(in: message.content.replacingOccurrences(of: "\r\n", with: "\n"))
+    }
+
+    private static func parseWorkspaceOperations(in text: String) -> [WorkspaceOperation] {
+        guard let regex = try? NSRegularExpression(
+            pattern: #"\[\[(mkdir|touch|delete|clear):([^\]]*)\]\]"#,
+            options: [.caseInsensitive]
+        ) else {
+            return []
+        }
+
+        let nsText = text as NSString
+        let nsRange = NSRange(location: 0, length: nsText.length)
+        let matches = regex.matches(in: text, range: nsRange)
+        guard !matches.isEmpty else { return [] }
+
+        var operations: [WorkspaceOperation] = []
+        for match in matches {
+            guard match.numberOfRanges >= 3 else { continue }
+            let verb = nsText.substring(with: match.range(at: 1))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            let rawValue = nsText.substring(with: match.range(at: 2))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            switch verb {
+            case "clear":
+                let normalized = rawValue.lowercased()
+                if normalized.isEmpty || normalized == "latest" {
+                    operations.append(.clearLatest)
+                }
+            case "mkdir":
+                if let path = sanitizeRelativePath(rawValue) {
+                    operations.append(.createDirectory(path: path))
+                }
+            case "touch":
+                if let path = sanitizeRelativePath(rawValue) {
+                    operations.append(.createEmptyFile(path: path))
+                }
+            case "delete":
+                if let path = sanitizeRelativePath(rawValue) {
+                    operations.append(.delete(path: path))
+                }
+            default:
+                continue
+            }
+        }
+        return operations
     }
 
     private static func extractExplicitProjectFiles(from message: ChatMessage) -> [ParsedWebFile] {
@@ -2129,6 +2286,26 @@ enum FrontendProjectBuilder {
             options: .regularExpression
         )
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func pruneEmptyParentDirectories(startingFrom folderURL: URL, root: URL) {
+        let fileManager = FileManager.default
+        let rootPath = root.standardizedFileURL.resolvingSymlinksInPath().path
+        var current = folderURL.standardizedFileURL.resolvingSymlinksInPath()
+
+        while current.path != rootPath {
+            guard current.path.hasPrefix(rootPath + "/") else { break }
+            guard let items = try? fileManager.contentsOfDirectory(atPath: current.path),
+                  items.isEmpty else {
+                break
+            }
+            try? fileManager.removeItem(at: current)
+            let next = current.deletingLastPathComponent()
+            if next.path == current.path {
+                break
+            }
+            current = next
+        }
     }
 
     private static func unwrapSingleFencedTaggedFileContent(_ raw: String) -> String {

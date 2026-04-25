@@ -345,8 +345,10 @@ final class ChatServiceTests: XCTestCase {
         [查看链接](https://example.com)
         ![图](https://example.com/a.png)
 
-        ```swift
+        ```python
         let value = 1
+        if __name__ == "__main__":
+            print("ok")
         ```
 
         ---
@@ -365,8 +367,10 @@ final class ChatServiceTests: XCTestCase {
         XCTAssertTrue(cleaned.contains("https://example.com"))
         XCTAssertTrue(cleaned.contains("第一条"))
         XCTAssertTrue(cleaned.contains("第二条"))
-        XCTAssertTrue(cleaned.contains("```swift"))
+        XCTAssertTrue(cleaned.contains("```python"))
         XCTAssertTrue(cleaned.contains("let value = 1"))
+        XCTAssertTrue(cleaned.contains("__name__"))
+        XCTAssertTrue(cleaned.contains("__main__"))
     }
 
     func testMessageContentParserSplitsAssistantCodeBlockIntoDedicatedSegment() {

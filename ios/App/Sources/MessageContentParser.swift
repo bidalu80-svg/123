@@ -765,7 +765,6 @@ enum MessageContentParser {
     private static func cleanTableCell(_ raw: String) -> String {
         var text = raw
         text = text.replacingOccurrences(of: "**", with: "")
-        text = text.replacingOccurrences(of: "__", with: "")
         text = text.replacingOccurrences(of: "`", with: "")
         return cleanMarkdownForDisplay(text).trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -1398,7 +1397,6 @@ enum MessageContentParser {
         text = text.replacingOccurrences(of: #"(?<!_)_([^_\n]+)_(?!_)"#, with: "$1", options: .regularExpression)
         text = text.replacingOccurrences(of: #"~~([^~\n]+)~~"#, with: "$1", options: .regularExpression)
         text = text.replacingOccurrences(of: "**", with: "")
-        text = text.replacingOccurrences(of: "__", with: "")
         text = text.replacingOccurrences(of: #"\\([\\`*_{}\[\]()#+\-.!>~|])"#, with: "$1", options: .regularExpression)
         text = text.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
         text = expandGitHubRepositoryLinks(in: text)

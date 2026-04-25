@@ -1213,7 +1213,7 @@ struct ChatScreen: View {
                 if let latestUserID = latestUserMessageID(before: latestAssistant, in: newMessages),
                    !projectFormatRetryAttemptedUserIDs.contains(latestUserID) {
                     projectFormatRetryAttemptedUserIDs.insert(latestUserID)
-                    viewModel.statusMessage = "检测到项目回复未按文件格式输出，正在自动纠正重试…"
+                    viewModel.statusMessage = "检测到回复未按可执行文件/工作区格式输出，正在自动纠正重试…"
                     Task {
                         var spinCount = 0
                         while viewModel.isSending && spinCount < 120 {
@@ -1223,7 +1223,7 @@ struct ChatScreen: View {
                         await viewModel.regenerateLastAssistantReply(forceProjectFileFormat: true)
                     }
                 } else {
-                    viewModel.statusMessage = "未识别到可写入的项目文件。可让模型按 [[file:路径]] ... [[endfile]] 格式输出。"
+                    viewModel.statusMessage = "未识别到可执行的文件/工作区载荷。可让模型输出 [[file:路径]]、[[mkdir:路径]]、[[touch:路径]]、[[delete:路径]] 或 [[clear:latest]]。"
                 }
             }
             return
@@ -1243,15 +1243,27 @@ struct ChatScreen: View {
         latestProjectValidationState = nil
         let sourceAssistant = assistant
         let shouldMergeExistingProject = shouldMergeIntoExistingLatest(for: assistant, in: viewModel.messages)
+        let hasProjectFiles = FrontendProjectBuilder.hasExplicitProjectFilePayload(from: sourceAssistant)
+        let hasWorkspaceOperations = FrontendProjectBuilder.hasExplicitWorkspaceOperationPayload(from: sourceAssistant)
 
         DispatchQueue.global(qos: .utility).async {
             let result = Result {
-                try FrontendProjectBuilder.buildProject(
-                    from: sourceAssistant,
-                    mode: .overwriteLatestProject,
-                    useParseCache: false,
-                    mergeExistingProject: shouldMergeExistingProject
-                )
+                var mutationResult: FrontendProjectBuilder.WorkspaceMutationResult?
+                if hasWorkspaceOperations && (!hasProjectFiles || shouldMergeExistingProject) {
+                    mutationResult = try FrontendProjectBuilder.applyLatestWorkspaceMutations(from: sourceAssistant)
+                }
+                let buildResult = hasProjectFiles
+                    ? try FrontendProjectBuilder.buildProject(
+                        from: sourceAssistant,
+                        mode: .overwriteLatestProject,
+                        useParseCache: false,
+                        mergeExistingProject: shouldMergeExistingProject
+                    )
+                    : nil
+                if hasWorkspaceOperations && hasProjectFiles && !shouldMergeExistingProject {
+                    mutationResult = try FrontendProjectBuilder.applyLatestWorkspaceMutations(from: sourceAssistant)
+                }
+                return (buildResult, mutationResult)
             }
             DispatchQueue.main.async {
                 guard autoBuildRequestID == requestID,
@@ -1263,11 +1275,19 @@ struct ChatScreen: View {
                 autoBuildInFlightAssistantIDs.remove(sourceAssistant.id)
 
                 switch result {
-                case .success(let buildResult):
+                case .success(let payload):
+                    let buildResult = payload.0
+                    let mutationResult = payload.1
                     autoBuildEligibleAssistantIDs.insert(sourceAssistant.id)
-                    latestProjectHasPreviewEntry = buildResult.previewEntryFileURL != nil
-                    runLatestProjectValidationIfPossible(buildResult, messageID: sourceAssistant.id)
-                    if buildResult.shouldAutoOpenPreview {
+                    latestProjectHasPreviewEntry = FrontendProjectBuilder.latestEntryFileURL() != nil
+
+                    if let buildResult {
+                        runLatestProjectValidationIfPossible(buildResult, messageID: sourceAssistant.id)
+                    } else {
+                        latestProjectValidationState = nil
+                    }
+
+                    if let buildResult, buildResult.shouldAutoOpenPreview {
                         let previewHTML = sanitizedFrontendPreviewHTML(buildResult.previewEntryHTML ?? buildResult.entryHTML)
                         autoFrontendPreview = AutoFrontendPreviewPayload(
                             title: "自动预览 · \((buildResult.previewEntryFileURL ?? buildResult.entryFileURL).lastPathComponent)",
@@ -1276,15 +1296,24 @@ struct ChatScreen: View {
                             entryFileURL: buildResult.previewEntryFileURL ?? buildResult.entryFileURL
                         )
                         viewModel.statusMessage = "项目已自动更新并预览（\(buildResult.writtenRelativePaths.count) 文件）"
-                    } else {
+                    } else if let buildResult {
                         autoFrontendPreview = nil
                         viewModel.statusMessage = "项目文件已自动落盘（\(buildResult.writtenRelativePaths.count) 文件）"
+                    } else if let mutationResult {
+                        autoFrontendPreview = nil
+                        if mutationResult.operations.contains(.clearLatest) {
+                            viewModel.statusMessage = "latest 工作区已清空"
+                        } else {
+                            viewModel.statusMessage = "已执行工作区操作（\(mutationResult.operations.count) 项）"
+                        }
                     }
                 case .failure(let error):
                     // Auto mode should stay non-blocking; report status but avoid interrupting chat.
                     autoBuildEligibleAssistantIDs.remove(sourceAssistant.id)
                     let reason = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                    viewModel.statusMessage = "项目自动落盘失败：\(reason)"
+                    viewModel.statusMessage = hasProjectFiles
+                        ? "项目自动落盘失败：\(reason)"
+                        : "工作区自动执行失败：\(reason)"
                 }
             }
         }
@@ -1597,6 +1626,10 @@ struct ChatScreen: View {
             return true
         }
 
+        if containsWorkspaceMutationIntent(latestUser.content) {
+            return true
+        }
+
         if recentConversationContainsProjectContext(in: prefix),
            looksLikeProjectFollowupEdit(latestUser.content) {
             return true
@@ -1688,6 +1721,10 @@ struct ChatScreen: View {
             return true
         }
 
+        if containsWorkspaceMutationIntent(normalized) {
+            return true
+        }
+
         if normalized.range(
             of: #"(做|写|搭|建|生成|创建|开发|搞|初始化)(一个|个|套)?[^\n]{0,28}(网站|网页|页面|项目|前端|应用|app|demo|登录页|注册页|后台|服务|接口|api|后端|脚手架|命令行|cli|工具|sdk|库|package|模块|机器人|爬虫|微服务)"#,
             options: .regularExpression
@@ -1697,6 +1734,37 @@ struct ChatScreen: View {
 
         if normalized.range(
             of: #"(网站|网页|页面|项目|前端|应用|app|demo|登录页|注册页|后台|服务|接口|api|后端|脚手架|命令行|cli|工具|sdk|库|package|模块|机器人|爬虫|微服务)[^\n]{0,20}(做|写|搭|建|生成|创建|开发|搞|初始化)"#,
+            options: .regularExpression
+        ) != nil {
+            return true
+        }
+
+        return false
+    }
+
+    private func containsWorkspaceMutationIntent(_ raw: String) -> Bool {
+        let normalized = raw
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+
+        guard !normalized.isEmpty else { return false }
+
+        let markers = [
+            "删除文件", "删除文件夹", "删除目录", "删除所有项目",
+            "清空latest", "清空 latest", "清空工作区", "重置latest", "重置 latest",
+            "创建文件夹", "创建目录", "新建文件夹", "新建目录", "创建空文件夹", "创建空目录",
+            "创建空文件", "新建空文件", "建一个空文件", "建一个空目录",
+            "remove file", "remove folder", "delete file", "delete folder", "delete directory",
+            "clear latest", "clear workspace", "reset latest",
+            "create folder", "create directory", "mkdir", "create empty file", "empty file", "touch "
+        ]
+        if markers.contains(where: { normalized.contains($0) }) {
+            return true
+        }
+
+        if normalized.range(
+            of: #"(删除|移除|清空|重置|创建|新建).{0,20}(文件|文件夹|目录|工作区|latest)"#,
             options: .regularExpression
         ) != nil {
             return true
