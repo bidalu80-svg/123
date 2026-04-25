@@ -859,13 +859,6 @@ struct ChatRequestBuilder {
         guard !raw.isEmpty else { return false }
         if looksLikeGeneralChatRequest(raw) { return false }
 
-        if shouldInjectExecutionTaskPrompt(message: message, history: history) {
-            return true
-        }
-        if shouldInjectLatestProjectContext(message: message, history: history) {
-            return true
-        }
-
         let explicitMutationMarkers = [
             "创建文件", "创建目录", "创建文件夹", "新建文件", "新建目录", "空文件", "空目录",
             "删除文件", "删除目录", "删除文件夹", "清空工作区", "clear workspace", "clear latest",
@@ -1429,12 +1422,12 @@ final class ChatService {
             for call in parsed.toolCalls {
                 let execution = await toolRuntime.execute(call: call, config: config)
                 progress.didExecuteTool = true
-                if !execution.renderedLog.isEmpty {
-                    renderedLogs.append(execution.renderedLog)
+                if let renderedLog = deduplicatedAgentLog(execution.renderedLog, existing: renderedLogs) {
+                    renderedLogs.append(renderedLog)
                     onEvent(
                         StreamChunk(
                             rawLine: "",
-                            deltaText: execution.renderedLog + "\n",
+                            deltaText: renderedLog + "\n",
                             imageURLs: [],
                             isDone: false
                         )
@@ -1520,12 +1513,12 @@ final class ChatService {
             for call in parsed.toolCalls {
                 let execution = await toolRuntime.execute(call: call, config: config)
                 progress.didExecuteTool = true
-                if !execution.renderedLog.isEmpty {
-                    renderedLogs.append(execution.renderedLog)
+                if let renderedLog = deduplicatedAgentLog(execution.renderedLog, existing: renderedLogs) {
+                    renderedLogs.append(renderedLog)
                     onEvent(
                         StreamChunk(
                             rawLine: "",
-                            deltaText: execution.renderedLog + "\n",
+                            deltaText: renderedLog + "\n",
                             imageURLs: [],
                             isDone: false
                         )
@@ -1689,6 +1682,15 @@ final class ChatService {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
         return hasLogs ? "\n\(trimmed)" : trimmed
+    }
+
+    private func deduplicatedAgentLog(_ raw: String, existing: [String]) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if existing.last?.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed {
+            return nil
+        }
+        return trimmed
     }
 
     private func mergeTokenUsage(_ lhs: ChatTokenUsage?, _ rhs: ChatTokenUsage?) -> ChatTokenUsage? {
