@@ -905,8 +905,12 @@ enum FrontendProjectBuilder {
             try content.write(to: fileURL, atomically: true, encoding: .utf8)
         }
 
-        let shouldAutoOpenPreview = previewEntryRelativePath != nil
-            && previewEntryRelativePath == primaryEntryRelativePath
+        let shouldAutoOpenPreview = shouldAutoOpenPreview(
+            previewEntryRelativePath: previewEntryRelativePath,
+            primaryEntryRelativePath: primaryEntryRelativePath,
+            orderedPaths: orderedPaths,
+            files: merged
+        )
 
         persistLatestPreviewPreference(
             mode: mode,
@@ -2506,16 +2510,69 @@ enum FrontendProjectBuilder {
     }
 
     private static func preferredPreviewEntryPath(from paths: [String]) -> String? {
-        if let exact = paths.first(where: { $0.lowercased().hasSuffix("index.html") }) {
+        if let exact = paths.first(where: {
+            $0.lowercased().hasSuffix("index.html") && isLikelyWebPreviewPath($0)
+        }) {
             return exact
         }
-        if let html = paths.first(where: { isHTMLPath($0) }) {
+        if let html = paths.first(where: { isHTMLPath($0) && isLikelyWebPreviewPath($0) }) {
             return html
         }
-        if let exactPHP = paths.first(where: { $0.lowercased().hasSuffix("index.php") }) {
+        if let exactPHP = paths.first(where: {
+            $0.lowercased().hasSuffix("index.php") && isLikelyWebPreviewPath($0)
+        }) {
             return exactPHP
         }
-        return paths.first(where: { isPHPPath($0) })
+        return paths.first(where: { isPHPPath($0) && isLikelyWebPreviewPath($0) })
+    }
+
+    private static func shouldAutoOpenPreview(
+        previewEntryRelativePath: String?,
+        primaryEntryRelativePath: String,
+        orderedPaths: [String],
+        files: [String: String]
+    ) -> Bool {
+        guard let previewEntryRelativePath else { return false }
+        guard isLikelyWebPreviewPath(previewEntryRelativePath) else { return false }
+        if previewEntryRelativePath == primaryEntryRelativePath {
+            return true
+        }
+        return isLikelyWebPrimaryPath(primaryEntryRelativePath)
+            || orderedPaths.contains(where: { isLikelyWebPrimaryPath($0) })
+            || orderedPaths.contains(where: { $0.lowercased().hasSuffix("package.json") })
+            || previewHTMLLooksRenderable(files[previewEntryRelativePath] ?? "")
+    }
+
+    private static func isLikelyWebPrimaryPath(_ path: String) -> Bool {
+        let lowered = path.lowercased()
+        if isHTMLPath(lowered) || isPHPPath(lowered) {
+            return true
+        }
+        let ext = (lowered as NSString).pathExtension
+        let webLikeExtensions: Set<String> = [
+            "js", "mjs", "cjs", "ts", "tsx", "jsx", "vue", "svelte",
+            "css", "scss", "sass", "less"
+        ]
+        return webLikeExtensions.contains(ext)
+    }
+
+    private static func isLikelyWebPreviewPath(_ path: String) -> Bool {
+        let lowered = path.lowercased()
+        let blockedPrefixes = [
+            "tests/", "test/", "fixtures/", "samples/", "sample/", "docs/", "doc/"
+        ]
+        if blockedPrefixes.contains(where: { lowered.hasPrefix($0) || lowered.contains("/" + $0) }) {
+            return false
+        }
+        return true
+    }
+
+    private static func previewHTMLLooksRenderable(_ html: String) -> Bool {
+        let lowered = html.lowercased()
+        return lowered.contains("<body")
+            || lowered.contains("<script")
+            || lowered.contains("<style")
+            || lowered.contains("<div")
     }
 
     private static func preferredPrimaryProjectPath(
