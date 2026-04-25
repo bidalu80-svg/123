@@ -261,6 +261,75 @@ final class FrontendProjectBuilderTests: XCTestCase {
         XCTAssertTrue(contents.isEmpty)
     }
 
+    func testApplyLatestWorkspaceMutationsCreatesEmptyDirectoryAndFile() throws {
+        try FrontendProjectBuilder.clearLatestProject()
+
+        let message = ChatMessage(
+            role: .assistant,
+            content: """
+            [[mkdir:docs/notes]]
+            [[touch:docs/notes/todo.txt]]
+            """
+        )
+
+        let result = try FrontendProjectBuilder.applyLatestWorkspaceMutations(from: message)
+        let latest = try XCTUnwrap(FrontendProjectBuilder.latestProjectURL())
+        let folder = latest.appendingPathComponent("docs/notes", isDirectory: true)
+        let file = latest.appendingPathComponent("docs/notes/todo.txt", isDirectory: false)
+
+        XCTAssertEqual(result.operations.count, 2)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: folder.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+        let data = try Data(contentsOf: file)
+        XCTAssertEqual(data.count, 0)
+    }
+
+    func testApplyLatestWorkspaceMutationsDeletesFileAndDirectory() throws {
+        try FrontendProjectBuilder.clearLatestProject()
+        let latest = try XCTUnwrap(FrontendProjectBuilder.latestProjectURL())
+        let nestedFolder = latest.appendingPathComponent("temp/sub", isDirectory: true)
+        let nestedFile = nestedFolder.appendingPathComponent("old.txt", isDirectory: false)
+        try FileManager.default.createDirectory(at: nestedFolder, withIntermediateDirectories: true)
+        try "legacy".write(to: nestedFile, atomically: true, encoding: .utf8)
+
+        let message = ChatMessage(
+            role: .assistant,
+            content: """
+            [[delete:temp/sub/old.txt]]
+            [[delete:temp/sub]]
+            """
+        )
+
+        let result = try FrontendProjectBuilder.applyLatestWorkspaceMutations(from: message)
+        XCTAssertEqual(result.operations.count, 2)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: nestedFile.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: nestedFolder.path))
+    }
+
+    func testApplyLatestWorkspaceMutationsClearsLatestWorkspace() throws {
+        let message = ChatMessage(
+            role: .assistant,
+            content: """
+            [[file:web/index.html]]
+            <!doctype html>
+            <html><body>OK</body></html>
+            [[endfile]]
+            """
+        )
+        _ = try FrontendProjectBuilder.buildProject(from: message, mode: .overwriteLatestProject)
+
+        let clearMessage = ChatMessage(
+            role: .assistant,
+            content: "[[clear:latest]]"
+        )
+        let result = try FrontendProjectBuilder.applyLatestWorkspaceMutations(from: clearMessage)
+        let latest = try XCTUnwrap(FrontendProjectBuilder.latestProjectURL())
+        let contents = try FileManager.default.contentsOfDirectory(atPath: latest.path)
+
+        XCTAssertEqual(result.operations, [.clearLatest])
+        XCTAssertTrue(contents.isEmpty)
+    }
+
     func testBuildProjectUnwrapsFencedFileAttachmentContent() throws {
         let message = ChatMessage(
             role: .assistant,
@@ -410,6 +479,21 @@ final class FrontendProjectBuilderTests: XCTestCase {
         )
 
         XCTAssertFalse(FrontendProjectBuilder.canGenerateProject(from: message))
+    }
+
+    func testCanGenerateProjectRecognizesExplicitWorkspaceOperations() {
+        let message = ChatMessage(
+            role: .assistant,
+            content: """
+            [[mkdir:docs]]
+            [[touch:docs/empty.txt]]
+            [[delete:old/file.txt]]
+            """
+        )
+
+        XCTAssertTrue(FrontendProjectBuilder.canGenerateProject(from: message))
+        XCTAssertTrue(FrontendProjectBuilder.hasExplicitWorkspaceOperationPayload(from: message))
+        XCTAssertTrue(FrontendProjectBuilder.hasExplicitProjectPayload(from: message))
     }
 
     func testPythonProjectValidationPlanInstallsRequirementsAndRunsMainFile() throws {

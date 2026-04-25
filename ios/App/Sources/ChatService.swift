@@ -35,7 +35,7 @@ struct ChatRequestBuilder {
     - 涉及实时资讯、统计数据、新闻或可争议事实时，在结尾补充“来源：”并给出 1-3 个可点击网址。
     """
     private static let frontendAutoBuildSystemPrompt = """
-    你当前处于“项目自动生成模式（多语言）”。当用户让你创建项目、脚手架、代码仓库或多文件示例时，遵循以下规则：
+    你当前处于“项目与工作区自动执行模式（多语言）”。当用户让你创建项目、脚手架、代码仓库、多文件示例，或直接操作当前 latest 工作区中的文件/目录时，遵循以下规则：
     1) 优先输出完整可运行的项目文件，不要只给片段，不要写“省略”。
     2) 如果当前用户消息并不是在要求创建/修改项目文件，而只是普通问答、闲聊、介绍自己、解释概念，则不要输出任何 `[[file:...]]`，也不要擅自创建 `README.md`、说明文档或示例文件。
     3) 如果当前工作区（latest）里已经有项目，且用户没有明确说“新建 / 重做 / 从零开始 / 全新项目”，则默认是在修改现有项目，而不是重写一个全新的整站。
@@ -44,6 +44,10 @@ struct ChatRequestBuilder {
        [[file:relative/path.ext]]
        <完整文件内容>
        [[endfile]]
+    5.1) 如果用户要创建空目录，使用：`[[mkdir:relative/path]]`
+    5.2) 如果用户要创建空文件，使用：`[[touch:relative/path]]`
+    5.3) 如果用户要删除文件或文件夹，使用：`[[delete:relative/path]]`
+    5.4) 如果用户要清空当前 latest 工作区，使用：`[[clear:latest]]`
     6) `relative/path.ext` 必须是相对路径，不要使用绝对路径，不要包含 `..`。
     7) 语言不限：可生成 Python、Java、Go、Rust、Node.js/TypeScript、Swift、C/C++、PHP、Shell、SQL、配置文件等。
     8) 若用户未指定技术栈，先做合理技术决策，给出最小可运行结构（含必要入口文件和配置）。
@@ -53,8 +57,8 @@ struct ChatRequestBuilder {
     12) 如果用户提到“测试 / 运行结果 / 是否通过 / 跑一下看看”，必须同时输出可自动验证的测试文件或示例运行入口。
     13) 对 Python 爬虫、HTTP 请求、API 调用这类项目，默认不要把真实外网请求作为唯一验证路径；优先输出可离线运行的单元测试、mock、fixture 或示例 HTML。
     14) 输出前可先给 2-5 行很短的步骤日志，示例：`创建项目目录`、`写入 src/main.rs`、`补齐 Cargo.toml`、`准备预览入口`。
-    15) 除非用户明确要求解释，尽量以“极短说明 + 完整文件输出”为主。
-    16) 不要说“先检查 AGENTS.md / 先扫仓库 / 调用工具后再做”；直接输出可落盘文件内容。
+    15) 除非用户明确要求解释，尽量以“极短说明 + 可执行载荷输出”为主。
+    16) 不要说“先检查 AGENTS.md / 先扫仓库 / 调用工具后再做”；直接输出可落盘文件内容或工作区操作标签。
     """
     private static let workspaceContinuationSystemPrompt = """
     你当前连接着一个活动工作区（latest）。把它当成当前任务的真实项目状态来源，而不是抽象示例。
@@ -350,6 +354,10 @@ struct ChatRequestBuilder {
             return true
         }
 
+        if containsWorkspaceMutationIntent(raw) {
+            return true
+        }
+
         if raw.range(
             of: #"(做|写|搭|建|生成|创建|开发|搞|初始化)(一个|个|套)?[^\n]{0,28}(网站|网页|页面|项目|前端|应用|app|demo|登录页|注册页|后台|管理系统|小程序|服务|接口|api|后端|脚手架|命令行|cli|工具|sdk|库|package|模块|机器人|爬虫|微服务)"#,
             options: .regularExpression
@@ -366,6 +374,30 @@ struct ChatRequestBuilder {
 
         if recentConversationContainsProjectContext(history: history),
            looksLikeProjectFollowupEdit(raw) {
+            return true
+        }
+
+        return false
+    }
+
+    private static func containsWorkspaceMutationIntent(_ raw: String) -> Bool {
+        let markers = [
+            "删除文件", "删除文件夹", "删除目录", "删除项目", "删除所有项目",
+            "清空latest", "清空 latest", "清空工作区", "重置latest", "重置 latest",
+            "创建文件夹", "创建目录", "新建文件夹", "新建目录", "创建空文件夹", "创建空目录",
+            "创建空文件", "新建空文件", "建一个空文件", "建一个空目录",
+            "remove file", "remove folder", "delete file", "delete folder", "delete directory",
+            "clear latest", "clear workspace", "reset latest",
+            "create folder", "create directory", "mkdir", "create empty file", "empty file", "touch "
+        ]
+        if markers.contains(where: { raw.contains($0) }) {
+            return true
+        }
+
+        if raw.range(
+            of: #"(删除|移除|清空|重置|创建|新建).{0,20}(文件|文件夹|目录|工作区|latest)"#,
+            options: .regularExpression
+        ) != nil {
             return true
         }
 

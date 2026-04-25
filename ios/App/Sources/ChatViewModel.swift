@@ -1181,8 +1181,6 @@ final class ChatViewModel: ObservableObject {
         text = text.replacingOccurrences(of: "(?m)^\\s*>\\s?", with: "", options: .regularExpression)
         text = text.replacingOccurrences(of: "(?m)^\\s*([-*_])\\1{2,}\\s*$", with: "", options: .regularExpression)
         text = text.replacingOccurrences(of: "(?<!`)`([^`\\n]+)`(?!`)", with: "$1", options: .regularExpression)
-        text = text.replacingOccurrences(of: "**", with: "")
-        text = text.replacingOccurrences(of: "__", with: "")
         text = text.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
         return text
     }
@@ -1190,15 +1188,18 @@ final class ChatViewModel: ObservableObject {
     private func makeProjectFormatCorrectionMessage(from message: ChatMessage) -> ChatMessage {
         let correctionInstruction = """
         [系统自动纠正重试]
-        你上一条回复没有按可落盘项目格式输出。请直接重答并严格遵守：
-        1) 不要解释，不要写“先查看目录/先做步骤”，直接输出完整文件。
-        2) 所有文件都必须使用：
+        你上一条回复没有按可执行工作区格式输出。请直接重答并严格遵守：
+        1) 不要解释，不要写“先查看目录/先做步骤”，直接输出可执行的文件/工作区操作载荷。
+        2) 写入文件时使用：
            [[file:relative/path.ext]]
            <完整文件内容>
            [[endfile]]
-        3) 路径必须是相对路径，禁止绝对路径和 `..`。
-        4) 文件内容必须可运行，且相互引用路径正确。
-        5) 不要补充终端命令，重点把可直接落盘的项目文件输出完整。
+        3) 创建空目录时使用：[[mkdir:relative/path]]
+        4) 创建空文件时使用：[[touch:relative/path]]
+        5) 删除文件或目录时使用：[[delete:relative/path]]
+        6) 清空 latest 工作区时使用：[[clear:latest]]
+        7) 路径必须是相对路径，禁止绝对路径和 `..`。
+        8) 如果是写代码文件，文件内容必须完整可用，不要省略，不要改坏代码符号。
         """
 
         let original = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
