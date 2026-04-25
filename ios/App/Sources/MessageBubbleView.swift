@@ -40,6 +40,7 @@ struct MessageBubbleView: View {
     @State private var generatedWordPayload: GeneratedWordPayload?
     @State private var isGeneratingExcel = false
     @State private var generatedExcelPayload: GeneratedExcelPayload?
+    @State private var hasAutoTriggeredExcelGeneration = false
     @State private var activePPTPreview: PPTPreviewPayload?
     @State private var activeShareSheet: ShareSheetPayload?
     @State private var pptGenerationTask: Task<Void, Never>?
@@ -130,6 +131,13 @@ struct MessageBubbleView: View {
         }
         .sheet(item: $activeShareSheet) { payload in
             ShareSheet(activityItems: [payload.fileURL])
+        }
+        .task(id: actionMessage.id) {
+            hasAutoTriggeredExcelGeneration = false
+            if shouldAutoGenerateExcelCard {
+                hasAutoTriggeredExcelGeneration = true
+                generateExcelFile()
+            }
         }
         .onDisappear {
             frontendBuildRequestID &+= 1
@@ -553,7 +561,18 @@ struct MessageBubbleView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         if hasStreamingText {
-                            selectableTextContent(displayText, streamingTextAnimated: false)
+                            if shouldRenderStreamingTextDirectly(displayText) {
+                                selectableTextContent(displayText, streamingTextAnimated: true)
+                            } else {
+                                let segments = parsedStreamingSegments(for: displayText)
+                                if segments.isEmpty {
+                                    selectableTextContent(displayText, streamingTextAnimated: true)
+                                } else {
+                                    ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                                        segmentView(segment, streamingTextAnimated: true)
+                                    }
+                                }
+                            }
                         }
                         ForEach(message.imageAttachments) { attachment in
                             messageImage(attachment)
@@ -1481,35 +1500,18 @@ struct MessageBubbleView: View {
     }
 
     private func selectableTextContent(_ text: String, streamingTextAnimated: Bool = false) -> some View {
-        let displayText: String
-        if message.isStreaming || streamingTextAnimated || text.count > 6_000 {
-            // Skip list decoration when text is too long to reduce layout cost.
-            displayText = text
-        } else {
-            displayText = decoratedAssistantListText(text)
-        }
-        return Group {
-            if message.isStreaming {
-                StreamingMarkdownTextView(
-                    text: displayText,
-                    textColor: UIColor.label,
-                    linkColor: MinisTheme.accentBlueUIColor,
-                    font: chatUIFont
-                )
-            } else {
-                SelectableLinkTextView(
-                    text: displayText,
-                    textColor: UIColor.label,
-                    linkColor: MinisTheme.accentBlueUIColor,
-                    font: chatUIFont,
-                    renderMarkdown: false,
-                    streamingAnimated: false,
-                    onFileLinkTap: { path in
-                        openCodeViewerForLinkedPath(path)
-                    }
-                )
+        let displayText = text
+        return SelectableLinkTextView(
+            text: displayText,
+            textColor: UIColor.label,
+            linkColor: MinisTheme.accentBlueUIColor,
+            font: chatUIFont,
+            renderMarkdown: false,
+            streamingAnimated: message.isStreaming || streamingTextAnimated,
+            onFileLinkTap: { path in
+                openCodeViewerForLinkedPath(path)
             }
-        }
+        )
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -2594,7 +2596,21 @@ struct MessageBubbleView: View {
     }
 
     private var shouldShowExcelCard: Bool {
-        generatedExcelPayload != nil
+        generatedExcelPayload != nil || canGenerateExcel
+    }
+
+    private var shouldAutoGenerateExcelCard: Bool {
+        guard canGenerateExcel else { return false }
+        guard generatedExcelPayload == nil else { return false }
+        guard !isGeneratingExcel else { return false }
+        guard !hasAutoTriggeredExcelGeneration else { return false }
+
+        let normalized = actionMessage.copyableText.lowercased()
+        return normalized.contains("excel")
+            || normalized.contains("xlsx")
+            || normalized.contains("表格")
+            || normalized.contains("工资")
+            || normalized.contains("sheet")
     }
 
     private var pptGenerationCard: some View {
@@ -2710,6 +2726,9 @@ struct MessageBubbleView: View {
             }
 
             if let generatedExcelPayload {
+                if let firstSheet = generatedExcelPayload.sheets.first {
+                    spreadsheetPreviewCard(fileName: firstSheet.name, sheet: firstSheet)
+                }
                 officeDocumentFileCard(
                     iconSystemName: "tablecells.fill",
                     accentColor: Color(red: 0.14, green: 0.60, blue: 0.36),
@@ -2851,12 +2870,13 @@ struct MessageBubbleView: View {
                 case .success(let buildResult):
                     let fileCount = buildResult.writtenRelativePaths.count
                     if buildResult.shouldAutoOpenPreview {
-                        let title = "网页预览 · \(buildResult.entryFileURL.lastPathComponent)"
+                        let previewFileURL = buildResult.previewEntryFileURL ?? buildResult.entryFileURL
+                        let title = "网页预览 · \(previewFileURL.lastPathComponent)"
                         activeHTMLPreview = HTMLPreviewPayload(
                             title: title,
-                            html: buildResult.entryHTML,
+                            html: buildResult.previewEntryHTML ?? buildResult.entryHTML,
                             baseURL: buildResult.projectDirectoryURL,
-                            entryFileURL: buildResult.entryFileURL
+                            entryFileURL: previewFileURL
                         )
                     }
 

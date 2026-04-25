@@ -19,7 +19,7 @@ struct ChatAppiOSApp: App {
             case .active:
                 viewModel.appDidBecomeActive()
             case .inactive:
-                break
+                viewModel.appWillResignActive()
             @unknown default:
                 break
             }

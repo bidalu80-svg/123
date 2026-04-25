@@ -1114,6 +1114,8 @@ final class ChatService {
         config.waitsForConnectivity = true
         config.allowsConstrainedNetworkAccess = true
         config.allowsExpensiveNetworkAccess = true
+        config.networkServiceType = .responsiveData
+        config.isDiscretionary = false
         config.timeoutIntervalForRequest = 60
         config.timeoutIntervalForResource = 300
         config.requestCachePolicy = .reloadIgnoringLocalCacheData

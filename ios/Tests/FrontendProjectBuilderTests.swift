@@ -167,9 +167,11 @@ final class FrontendProjectBuilderTests: XCTestCase {
 
         let result = try FrontendProjectBuilder.buildProject(from: message, mode: .createNewProject)
         XCTAssertTrue(result.writtenRelativePaths.contains("main.py"))
-        XCTAssertTrue(result.writtenRelativePaths.contains("index.html"))
+        XCTAssertFalse(result.writtenRelativePaths.contains("index.html"))
+        XCTAssertEqual(result.entryFileURL.lastPathComponent.lowercased(), "main.py")
         XCTAssertFalse(result.hadNaturalPreviewEntry)
         XCTAssertFalse(result.shouldAutoOpenPreview)
+        XCTAssertNil(result.previewEntryFileURL)
 
         let mainPy = result.projectDirectoryURL.appendingPathComponent("main.py")
         let code = try String(contentsOf: mainPy, encoding: .utf8)
@@ -408,6 +410,36 @@ final class FrontendProjectBuilderTests: XCTestCase {
         )
 
         XCTAssertFalse(FrontendProjectBuilder.canGenerateProject(from: message))
+    }
+
+    func testPythonProjectValidationPlanInstallsRequirementsAndRunsMainFile() throws {
+        let message = ChatMessage(
+            role: .assistant,
+            content: "",
+            fileAttachments: [
+                ChatFileAttachment(
+                    fileName: "main.py",
+                    mimeType: "text/x-python",
+                    textContent: """
+                    import requests
+                    print("ok")
+                    """
+                ),
+                ChatFileAttachment(
+                    fileName: "requirements.txt",
+                    mimeType: "text/plain",
+                    textContent: "requests==2.31.0"
+                )
+            ]
+        )
+
+        let result = try FrontendProjectBuilder.buildProject(from: message, mode: .createNewProject)
+        XCTAssertEqual(result.validationPlan?.installCommand, "python3 -m pip install -r requirements.txt")
+        XCTAssertEqual(result.validationPlan?.runCommand, "python3 main.py")
+        XCTAssertEqual(
+            result.suggestedValidationCommand,
+            "python3 -m pip install -r requirements.txt && python3 main.py"
+        )
     }
 
     func testHasExplicitProjectPayloadRejectsPlainMarkdownFence() {
