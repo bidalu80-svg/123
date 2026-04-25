@@ -140,6 +140,7 @@ struct MessageBubbleView: View {
             ShareSheet(activityItems: [payload.fileURL])
         }
         .task(id: actionMessage.id) {
+            generatedExcelPayload = nil
             hasAutoTriggeredExcelGeneration = false
             if shouldAutoGenerateExcelCard {
                 hasAutoTriggeredExcelGeneration = true
@@ -2616,7 +2617,7 @@ struct MessageBubbleView: View {
     }
 
     private var shouldShowExcelCard: Bool {
-        generatedExcelPayload != nil || shouldOfferExcelGeneration
+        shouldOfferExcelGeneration
     }
 
     private var shouldAutoGenerateExcelCard: Bool {
