@@ -1835,7 +1835,7 @@ struct MessageBubbleView: View {
                 HStack(spacing: 8) {
                     ProgressView()
                         .scaleEffect(0.75)
-                    Text(canRunShell ? "正在运行终端命令…" : "正在运行 Python…")
+                    Text("正在运行 Python…")
                         .font(.caption)
                         .foregroundStyle(Color.white.opacity(0.72))
                 }
