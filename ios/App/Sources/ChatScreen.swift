@@ -1210,6 +1210,13 @@ struct ChatScreen: View {
             latestProjectValidationState = nil
             cancelPendingAutoProjectBuild(for: latestAssistant.id)
             if shouldAttemptBuild {
+                if let latestUser = latestUserMessage(before: latestAssistant, in: newMessages) {
+                    let inferredOperations = FrontendProjectBuilder.inferredWorkspaceOperations(fromUserPrompt: latestUser.content)
+                    if !inferredOperations.isEmpty {
+                        enqueueDirectWorkspaceMutation(inferredOperations, assistant: latestAssistant)
+                        return
+                    }
+                }
                 if let latestUserID = latestUserMessageID(before: latestAssistant, in: newMessages),
                    !projectFormatRetryAttemptedUserIDs.contains(latestUserID) {
                     projectFormatRetryAttemptedUserIDs.insert(latestUserID)
@@ -1230,6 +1237,49 @@ struct ChatScreen: View {
         }
 
         enqueueAutoProjectBuild(for: latestAssistant)
+    }
+
+    private func enqueueDirectWorkspaceMutation(_ operations: [FrontendProjectBuilder.WorkspaceOperation], assistant: ChatMessage) {
+        autoBuildRequestID &+= 1
+        let requestID = autoBuildRequestID
+        if let runningID = autoBuildRunningMessageID, runningID != assistant.id {
+            autoBuildInFlightAssistantIDs.remove(runningID)
+        }
+        autoBuildRunningMessageID = assistant.id
+        autoBuildInFlightAssistantIDs.insert(assistant.id)
+        latestProjectValidationState = nil
+
+        DispatchQueue.global(qos: .utility).async {
+            let result = Result {
+                try FrontendProjectBuilder.applyLatestWorkspaceMutations(operations)
+            }
+            DispatchQueue.main.async {
+                guard autoBuildRequestID == requestID,
+                      autoBuildRunningMessageID == assistant.id else {
+                    return
+                }
+
+                autoBuildRunningMessageID = nil
+                autoBuildInFlightAssistantIDs.remove(assistant.id)
+
+                switch result {
+                case .success(let mutationResult):
+                    autoBuildEligibleAssistantIDs.insert(assistant.id)
+                    latestProjectHasPreviewEntry = FrontendProjectBuilder.latestEntryFileURL() != nil
+                    latestProjectValidationState = nil
+                    autoFrontendPreview = nil
+                    if mutationResult.operations.contains(.clearLatest) {
+                        viewModel.statusMessage = "latest 工作区已清空"
+                    } else {
+                        viewModel.statusMessage = "已按你的指令直接执行工作区操作（\(mutationResult.operations.count) 项）"
+                    }
+                case .failure(let error):
+                    autoBuildEligibleAssistantIDs.remove(assistant.id)
+                    let reason = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    viewModel.statusMessage = "工作区直接执行失败：\(reason)"
+                }
+            }
+        }
     }
 
     private func enqueueAutoProjectBuild(for assistant: ChatMessage) {
@@ -1585,6 +1635,13 @@ struct ChatScreen: View {
             return nil
         }
         return messages[..<index].last(where: { $0.role == .user })?.id
+    }
+
+    private func latestUserMessage(before assistant: ChatMessage, in messages: [ChatMessage]) -> ChatMessage? {
+        guard let index = messages.firstIndex(where: { $0.id == assistant.id }), index > 0 else {
+            return nil
+        }
+        return messages[..<index].last(where: { $0.role == .user })
     }
 
     private func isLikelyPendingAssistantPlaceholder(_ message: ChatMessage) -> Bool {
