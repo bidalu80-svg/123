@@ -137,6 +137,7 @@ enum FrontendProjectBuilder {
         ".gitignore", ".gitattributes", ".editorconfig", ".env", ".env.example"
     ]
     private static let latestEntryPointerFileName = ".iexa-latest-entry"
+    private static let latestPreviewDisabledFileName = ".iexa-no-preview"
     private static let latestValidationSnapshotFileName = ".iexa-latest-validation.json"
     private static let canGenerateCacheLimit = 64
     private static let progressSnapshotCacheLimit = 36
@@ -361,6 +362,10 @@ enum FrontendProjectBuilder {
 
     static func latestEntryFileURL() -> URL? {
         guard let latest = latestProjectURL() else { return nil }
+        let disabledMarkerURL = latest.appendingPathComponent(latestPreviewDisabledFileName, isDirectory: false)
+        if FileManager.default.fileExists(atPath: disabledMarkerURL.path) {
+            return nil
+        }
 
         if let pointed = pointedLatestEntryFileURL(in: latest) {
             return pointed
@@ -901,16 +906,19 @@ enum FrontendProjectBuilder {
             try content.write(to: fileURL, atomically: true, encoding: .utf8)
         }
 
-        persistLatestEntryPointerIfNeeded(
+        let shouldAutoOpenPreview = previewEntryRelativePath != nil
+            && previewEntryRelativePath == primaryEntryRelativePath
+
+        persistLatestPreviewPreference(
             mode: mode,
             projectDirectoryURL: projectDirectoryURL,
-            entryRelativePath: previewEntryRelativePath ?? primaryEntryRelativePath
+            entryRelativePath: shouldAutoOpenPreview ? previewEntryRelativePath : nil
         )
 
-        let previewEntryFileURL = previewEntryRelativePath.map {
+        let previewEntryFileURL = shouldAutoOpenPreview ? previewEntryRelativePath.map {
             projectDirectoryURL.appendingPathComponent($0, isDirectory: false)
-        }
-        let previewEntryHTML = previewEntryRelativePath.flatMap { merged[$0] }
+        } : nil
+        let previewEntryHTML = shouldAutoOpenPreview ? previewEntryRelativePath.flatMap { merged[$0] } : nil
 
         return BuildResult(
             projectDirectoryURL: projectDirectoryURL,
@@ -923,21 +931,30 @@ enum FrontendProjectBuilder {
             validationPlan: validationPlan,
             suggestedValidationCommand: suggestedValidationCommand,
             createdNewProject: mode == .createNewProject,
-            shouldAutoOpenPreview: previewEntryFileURL != nil,
+            shouldAutoOpenPreview: shouldAutoOpenPreview,
             hadNaturalPreviewEntry: hadNaturalPreviewEntry,
             workspaceOperations: []
         )
     }
 
-    private static func persistLatestEntryPointerIfNeeded(
+    private static func persistLatestPreviewPreference(
         mode: BuildMode,
         projectDirectoryURL: URL,
-        entryRelativePath: String
+        entryRelativePath: String?
     ) {
         guard mode == .overwriteLatestProject else { return }
-        guard let normalized = sanitizeRelativePath(entryRelativePath), isPreviewEntryPath(normalized) else { return }
-
         let pointerURL = projectDirectoryURL.appendingPathComponent(latestEntryPointerFileName, isDirectory: false)
+        let disabledMarkerURL = projectDirectoryURL.appendingPathComponent(latestPreviewDisabledFileName, isDirectory: false)
+
+        guard let entryRelativePath,
+              let normalized = sanitizeRelativePath(entryRelativePath),
+              isPreviewEntryPath(normalized) else {
+            try? FileManager.default.removeItem(at: pointerURL)
+            try? "1\n".write(to: disabledMarkerURL, atomically: true, encoding: .utf8)
+            return
+        }
+
+        try? FileManager.default.removeItem(at: disabledMarkerURL)
         try? "\(normalized)\n".write(to: pointerURL, atomically: true, encoding: .utf8)
     }
 
@@ -2507,17 +2524,12 @@ enum FrontendProjectBuilder {
         files: [String: String],
         preferredPreviewPath: String?
     ) -> String? {
-        if let preferredPreviewPath, paths.contains(preferredPreviewPath) {
-            return preferredPreviewPath
-        }
-
         let exactPreferred = [
             "main.py", "app.py", "manage.py", "cli.py",
             "main.go",
             "src/main.rs", "main.rs",
             "main.swift", "package.swift", "package.swift",
             "main.java", "main.kt", "main.kts",
-            "package.json",
             "go.mod", "cargo.toml", "pyproject.toml", "requirements.txt",
             "pom.xml", "build.gradle", "build.gradle.kts",
             "composer.json"
@@ -2539,6 +2551,10 @@ enum FrontendProjectBuilder {
             if let match = paths.first(where: { $0.lowercased().hasSuffix(suffix) }) {
                 return match
             }
+        }
+
+        if let preferredPreviewPath, paths.contains(preferredPreviewPath) {
+            return preferredPreviewPath
         }
 
         if let packageJSON = paths.first(where: { $0.lowercased().hasSuffix("package.json") }) {

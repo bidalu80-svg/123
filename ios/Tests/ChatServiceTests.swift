@@ -794,10 +794,7 @@ final class ChatServiceTests: XCTestCase {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [URLProtocolStub.self]
         let session = URLSession(configuration: configuration)
-        return ChatService(
-            session: session,
-            remoteShellExecutionService: RemoteShellExecutionService(session: session)
-        )
+        return ChatService(session: session)
     }
 }
 

@@ -1208,17 +1208,14 @@ final class ChatService {
     private let session: URLSession
     private let realtimeContextProvider: RealtimeContextProvider
     private let memoryStore: ConversationMemoryStore
-    private let remoteShellExecutionService: RemoteShellExecutionService
 
     init(
         session: URLSession? = nil,
         realtimeContextProvider: RealtimeContextProvider = RealtimeContextProvider(),
-        memoryStore: ConversationMemoryStore = ConversationMemoryStore(),
-        remoteShellExecutionService: RemoteShellExecutionService = .shared
+        memoryStore: ConversationMemoryStore = ConversationMemoryStore()
     ) {
         self.realtimeContextProvider = realtimeContextProvider
         self.memoryStore = memoryStore
-        self.remoteShellExecutionService = remoteShellExecutionService
 
         if let session {
             self.session = session
@@ -1336,7 +1333,7 @@ final class ChatService {
             memorySystemContext: memoryContext,
             extraSystemPrompts: [MinimalAgentToolRuntime.systemPrompt]
         )
-        let toolRuntime = MinimalAgentToolRuntime(shellExecutionService: remoteShellExecutionService)
+        let toolRuntime = MinimalAgentToolRuntime()
         let progress = AgentToolLoopProgress()
 
         do {

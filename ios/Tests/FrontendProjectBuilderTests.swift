@@ -198,6 +198,30 @@ final class FrontendProjectBuilderTests: XCTestCase {
         XCTAssertFalse(result.shouldAutoOpenPreview)
     }
 
+    func testPythonProjectWithHtmlFixtureDoesNotExposeWebPreview() throws {
+        try FrontendProjectBuilder.clearLatestProject()
+
+        let message = ChatMessage(
+            role: .assistant,
+            content: """
+            [[file:main.py]]
+            print("crawler ready")
+            [[endfile]]
+            [[file:tests/fixtures/index.html]]
+            <!doctype html>
+            <html><body>fixture</body></html>
+            [[endfile]]
+            """
+        )
+
+        let result = try FrontendProjectBuilder.buildProject(from: message, mode: .overwriteLatestProject)
+
+        XCTAssertEqual(result.entryFileURL.lastPathComponent.lowercased(), "main.py")
+        XCTAssertFalse(result.shouldAutoOpenPreview)
+        XCTAssertNil(result.previewEntryFileURL)
+        XCTAssertNil(FrontendProjectBuilder.latestEntryFileURL())
+    }
+
     func testCanGenerateProjectFromTaggedNonWebFileOutput() throws {
         let message = ChatMessage(
             role: .assistant,

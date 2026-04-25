@@ -11,7 +11,7 @@ struct AgentLabScreen: View {
     var body: some View {
         List {
             Section("终端 Agent 测试") {
-                Text("这个模块用于快速验证 IEXA 的 agent 能力：聊天接口、web 项目输出、以及在 Linux shell / workspace 中执行任务。")
+                Text("这个模块用于快速验证 IEXA 的 agent 能力：聊天接口、多文件项目输出，以及本地工作区文件操作。")
                     .font(.subheadline)
             }
 
@@ -27,10 +27,10 @@ struct AgentLabScreen: View {
                 Text("3. 生成后可直接打开 ./web/index.html 预览。")
             }
 
-            Section("远端 Shell 说明") {
-                Text("1. 在 Linux / workspace 机器上启动 ios/Tools/shell_execute_server.py。")
-                Text("2. 在 App 设置里配置 shell 路径和默认工作目录。")
-                Text("3. 之后代码块里的 shell 命令可直接在 IEXA 里运行。")
+            Section("当前限制") {
+                Text("1. App 当前主要支持本地工作区文件读写，以及 Python 项目的本地验证。")
+                Text("2. 网站类项目可直接生成入口文件并在 App 内预览。")
+                Text("3. Go、Rust、Java、Node、PHP 等项目暂不在 iPhone 本地执行。")
             }
 
             if !copiedMessage.isEmpty {

@@ -253,7 +253,7 @@ struct ChatConfig: Codable, Equatable {
     static let defaultAudioTranscriptionsPath = "/v1/audio/transcriptions"
     static let defaultEmbeddingsPath = "/v1/embeddings"
     static let defaultModelsPath = "/v1/models"
-    static let defaultShellExecutionPath = "/v1/shell/execute"
+    static let defaultShellExecutionPath = ""
 
     var apiURL: String
     var apiKey: String
@@ -519,10 +519,11 @@ struct ChatConfig: Codable, Equatable {
     }
 
     var shellExecutionURLString: String {
-        ChatConfigStore.endpointURL(apiURL, path: shellExecutionPath, fallback: ChatConfig.defaultShellExecutionPath)
+        ""
     }
 
     var resolvedShellExecutionAPIKey: String {
+        guard !shellExecutionURLString.isEmpty else { return "" }
         let shellKey = shellExecutionAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         if !shellKey.isEmpty {
             return shellKey
@@ -682,11 +683,19 @@ enum ChatConfigStore {
 
     static func normalizeEndpointPath(_ raw: String, fallback: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedFallback = fallback.trimmingCharacters(in: .whitespacesAndNewlines)
         let lowered = trimmed.lowercased()
         if lowered.hasPrefix("http://") || lowered.hasPrefix("https://") {
             return trimmed
         }
-        let base = trimmed.isEmpty ? fallback : trimmed
+        if trimmed.isEmpty {
+            guard !normalizedFallback.isEmpty else { return "" }
+            if normalizedFallback.hasPrefix("/") {
+                return normalizedFallback
+            }
+            return "/\(normalizedFallback)"
+        }
+        let base = trimmed
         if base.hasPrefix("/") {
             return base
         }
@@ -695,6 +704,7 @@ enum ChatConfigStore {
 
     static func endpointURL(_ raw: String, path: String, fallback: String) -> String {
         let normalizedPath = normalizeEndpointPath(path, fallback: fallback)
+        guard !normalizedPath.isEmpty else { return "" }
         let loweredPath = normalizedPath.lowercased()
         if loweredPath.hasPrefix("http://") || loweredPath.hasPrefix("https://") {
             return normalizedPath
@@ -723,6 +733,7 @@ enum ChatConfigStore {
             ChatConfig.defaultModelsPath,
             ChatConfig.defaultShellExecutionPath
         ]
+        .filter { !$0.isEmpty }
     }
 
     private static func normalize(_ config: ChatConfig) -> ChatConfig {
@@ -758,10 +769,10 @@ enum ChatConfigStore {
             timeout: min(max(config.timeout, 5), 120),
             streamEnabled: config.streamEnabled,
             frontendAutoBuildEnabled: true,
-            shellExecutionPath: normalizeEndpointPath(config.shellExecutionPath, fallback: ChatConfig.defaultShellExecutionPath),
-            shellExecutionAPIKey: config.shellExecutionAPIKey.trimmingCharacters(in: .whitespacesAndNewlines),
-            shellExecutionTimeout: min(max(config.shellExecutionTimeout, 5), 300),
-            shellExecutionWorkingDirectory: config.shellExecutionWorkingDirectory.trimmingCharacters(in: .whitespacesAndNewlines),
+            shellExecutionPath: "",
+            shellExecutionAPIKey: "",
+            shellExecutionTimeout: ChatConfig.default.shellExecutionTimeout,
+            shellExecutionWorkingDirectory: ChatConfig.default.shellExecutionWorkingDirectory,
             themeMode: config.themeMode,
             codeThemeMode: config.codeThemeMode,
             realtimeContextEnabled: config.realtimeContextEnabled,

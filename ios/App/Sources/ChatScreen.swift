@@ -73,6 +73,34 @@ struct ChatScreen: View {
         let exitCode: Int?
     }
 
+    private enum LocalProjectValidationPlan: Equatable {
+        case pythonScript(path: String)
+        case pythonUnitTests
+        case pythonCompileAll
+
+        var command: String {
+            switch self {
+            case .pythonScript(let path):
+                return "python3 \(path)"
+            case .pythonUnitTests:
+                return "python3 -m unittest discover -v"
+            case .pythonCompileAll:
+                return "python3 -m compileall ."
+            }
+        }
+
+        var runningStatus: String {
+            switch self {
+            case .pythonScript(let path):
+                return "正在本地运行：\(path)"
+            case .pythonUnitTests:
+                return "正在本地执行 Python 测试"
+            case .pythonCompileAll:
+                return "正在本地检查 Python 语法"
+            }
+        }
+    }
+
     private struct FrontendOverlayCodeEntriesCacheEntry {
         let signature: String
         let entries: [CodeViewerEntry]
@@ -105,7 +133,6 @@ struct ChatScreen: View {
     @State private var isSidebarOpen = false
     @State private var showSettingsSheet = false
     @State private var showTestSheet = false
-    @State private var showLinuxShell = false
     @State private var isPinnedToBottom = true
     @State private var starterPromptDeck: [(title: String, subtitle: String)] = []
     @State private var sidebarDragOffset: CGFloat = 0
@@ -372,10 +399,6 @@ struct ChatScreen: View {
                 TestCenterScreen()
             }
             .environmentObject(viewModel)
-        }
-        .fullScreenCover(isPresented: $showLinuxShell) {
-            LinuxShellScreen()
-                .environmentObject(viewModel)
         }
         .sheet(isPresented: $showInitialConfigSheet) {
             NavigationStack {
@@ -657,9 +680,6 @@ struct ChatScreen: View {
                 Button("测试中心", systemImage: "checkmark.circle") {
                     showTestSheet = true
                 }
-                Button("Linux 终端", systemImage: "terminal") {
-                    showLinuxShell = true
-                }
                 Divider()
                 Button("示例", systemImage: "wand.and.stars") {
                     viewModel.loadDemoContent()
@@ -854,9 +874,6 @@ struct ChatScreen: View {
                 codeThemeMode: viewModel.config.codeThemeMode,
                 apiKey: viewModel.config.apiKey,
                 apiBaseURL: viewModel.config.normalizedBaseURL,
-                shellExecutionURLString: viewModel.config.shellExecutionURLString,
-                shellExecutionTimeout: viewModel.config.shellExecutionTimeout,
-                shellExecutionWorkingDirectory: viewModel.config.shellExecutionWorkingDirectory,
                 bottomReservedInset: transcriptBottomReservedInset,
                 command: transcriptCommand,
                 onMetricsChanged: { metrics in
@@ -927,11 +944,7 @@ struct ChatScreen: View {
                         precedingUserMessage: previousUserMessage,
                         codeThemeMode: viewModel.config.codeThemeMode,
                         apiKey: viewModel.config.apiKey,
-                        shellExecutionAPIKey: viewModel.config.resolvedShellExecutionAPIKey,
                         apiBaseURL: viewModel.config.normalizedBaseURL,
-                        shellExecutionURLString: viewModel.config.shellExecutionURLString,
-                        shellExecutionTimeout: viewModel.config.shellExecutionTimeout,
-                        shellExecutionWorkingDirectory: viewModel.config.shellExecutionWorkingDirectory,
                         showsAssistantActionBar: message.role == .assistant && !message.isStreaming && !isDeleting,
                         onRegenerate: (isLatestAssistant
                             && (viewModel.config.endpointMode == .chatCompletions || viewModel.config.endpointMode == .responses)
@@ -1376,112 +1389,65 @@ struct ChatScreen: View {
 
     private func runLatestProjectValidationIfPossible(
         _ buildResult: FrontendProjectBuilder.BuildResult,
-        messageID: UUID
+        messageID _: UUID
     ) {
-        guard let validationPlan = buildResult.validationPlan else { return }
-        let command = validationPlan.fullCommand
-
-        let endpoint = viewModel.config.shellExecutionURLString.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !endpoint.isEmpty else { return }
-
-        let workingDirectory = {
-            let trimmed = viewModel.config.shellExecutionWorkingDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? "latest" : trimmed
-        }()
-        let apiKey = viewModel.config.resolvedShellExecutionAPIKey
-        let timeout = viewModel.config.shellExecutionTimeout
-        let files = buildResult.writtenFiles
+        guard let localPlan = localProjectValidationPlan(for: buildResult) else { return }
+        let command = localPlan.command
 
         Task.detached(priority: .utility) {
             await MainActor.run {
                 latestProjectValidationState = ProjectValidationState(
                     phase: .running,
                     command: command,
-                    output: validationPlan.installCommand == nil
-                        ? "正在执行：\(validationPlan.runCommand)"
-                        : "正在安装依赖并执行：\(validationPlan.runCommand)",
+                    output: localPlan.runningStatus,
                     exitCode: nil
                 )
-                viewModel.statusMessage = validationPlan.installCommand == nil
-                    ? "项目已落盘，正在自动执行验证…"
-                    : "项目已落盘，正在自动安装依赖并执行验证…"
+                viewModel.statusMessage = "项目已落盘，正在本地验证 Python…"
             }
 
             do {
-                try await syncProjectFilesToRemoteWorkspace(
-                    files: files,
-                    endpoint: endpoint,
-                    apiKey: apiKey,
-                    workingDirectory: workingDirectory,
-                    timeout: timeout
-                )
-
-                var combinedOutputParts: [String] = []
-                if let installCommand = validationPlan.installCommand {
-                    let installResult = try await RemoteShellExecutionService.shared.run(
-                        command: installCommand,
-                        endpoint: endpoint,
-                        apiKey: apiKey,
-                        workingDirectory: workingDirectory,
-                        timeout: timeout
+                let validationResult: LocalProjectExecutionResult
+                switch localPlan {
+                case .pythonScript(let path):
+                    validationResult = try await LocalProjectExecutionService.shared.runPythonFile(
+                        atRelativePath: path,
+                        projectURL: buildResult.projectDirectoryURL
                     )
-                    combinedOutputParts.append("[安装依赖]\n\(installResult.output)")
-                    if installResult.exitCode != 0 {
-                        let failed = ShellExecutionResult(
-                            command: command,
-                            output: combinedOutputParts.joined(separator: "\n\n"),
-                            exitCode: installResult.exitCode,
-                            durationMs: installResult.durationMs,
-                            finalWorkingDirectory: installResult.finalWorkingDirectory
-                        )
-                        FrontendProjectBuilder.saveLatestValidationResult(command: command, result: failed)
-                        await MainActor.run {
-                            latestProjectValidationState = ProjectValidationState(
-                                phase: .failure,
-                                command: command,
-                                output: failed.output,
-                                exitCode: failed.exitCode
-                            )
-                            viewModel.statusMessage = "依赖安装失败，可继续让 AI 按日志修复：\(installCommand)"
-                        }
-                        return
-                    }
+                case .pythonUnitTests:
+                    validationResult = try await LocalProjectExecutionService.shared.runPythonUnitTests(
+                        in: buildResult.projectDirectoryURL
+                    )
+                case .pythonCompileAll:
+                    validationResult = try await LocalProjectExecutionService.shared.runPythonCompileAll(
+                        in: buildResult.projectDirectoryURL
+                    )
                 }
-
-                let runResult = try await RemoteShellExecutionService.shared.run(
-                    command: validationPlan.runCommand,
-                    endpoint: endpoint,
-                    apiKey: apiKey,
-                    workingDirectory: workingDirectory,
-                    timeout: timeout
-                )
-                combinedOutputParts.append("[运行结果]\n\(runResult.output)")
-                let validationResult = ShellExecutionResult(
+                let snapshot = ShellExecutionResult(
                     command: command,
-                    output: combinedOutputParts.joined(separator: "\n\n"),
-                    exitCode: runResult.exitCode,
-                    durationMs: runResult.durationMs,
-                    finalWorkingDirectory: runResult.finalWorkingDirectory
+                    output: validationResult.output,
+                    exitCode: validationResult.exitCode,
+                    durationMs: nil,
+                    finalWorkingDirectory: buildResult.projectDirectoryURL.path
                 )
-                FrontendProjectBuilder.saveLatestValidationResult(command: command, result: validationResult)
+                FrontendProjectBuilder.saveLatestValidationResult(command: command, result: snapshot)
 
                 await MainActor.run {
-                    if validationResult.exitCode == 0 {
+                    if snapshot.exitCode == 0 {
                         latestProjectValidationState = ProjectValidationState(
                             phase: .success,
                             command: command,
-                            output: validationResult.output,
-                            exitCode: validationResult.exitCode
+                            output: snapshot.output,
+                            exitCode: snapshot.exitCode
                         )
-                        viewModel.statusMessage = "项目已自动验证通过：\(command)"
+                        viewModel.statusMessage = "Python 项目已本地验证通过：\(command)"
                     } else {
                         latestProjectValidationState = ProjectValidationState(
                             phase: .failure,
                             command: command,
-                            output: validationResult.output,
-                            exitCode: validationResult.exitCode
+                            output: snapshot.output,
+                            exitCode: snapshot.exitCode
                         )
-                        viewModel.statusMessage = "项目已自动验证失败，可继续让 AI 按日志修复：\(command)"
+                        viewModel.statusMessage = "Python 项目本地验证失败，可继续让 AI 按日志修复：\(command)"
                     }
                 }
             } catch {
@@ -1492,55 +1458,61 @@ struct ChatScreen: View {
                         output: error.localizedDescription,
                         exitCode: nil
                     )
-                    viewModel.statusMessage = "项目已落盘，但自动验证失败：\(error.localizedDescription)"
+                    viewModel.statusMessage = "项目已落盘，但本地验证失败：\(error.localizedDescription)"
                 }
             }
         }
     }
 
-    private func syncProjectFilesToRemoteWorkspace(
-        files: [String: String],
-        endpoint: String,
-        apiKey: String,
-        workingDirectory: String,
-        timeout: Double
-    ) async throws {
-        let orderedPaths = files.keys.sorted { lhs, rhs in
-            lhs.localizedStandardCompare(rhs) == .orderedAscending
+    private func localProjectValidationPlan(
+        for buildResult: FrontendProjectBuilder.BuildResult
+    ) -> LocalProjectValidationPlan? {
+        let orderedPaths = buildResult.writtenRelativePaths
+        guard orderedPaths.contains(where: { $0.lowercased().hasSuffix(".py") }) else {
+            return nil
         }
 
-        for path in orderedPaths {
-            guard let content = files[path] else { continue }
-            let normalizedPath = path.replacingOccurrences(of: "\\", with: "/")
-            let parentPath = (normalizedPath as NSString).deletingLastPathComponent
-            let mkdirCommand: String
-            if parentPath.isEmpty || parentPath == "." {
-                mkdirCommand = "true"
-            } else {
-                mkdirCommand = "mkdir -p \(shellSingleQuoted(parentPath))"
+        let hasTests = orderedPaths.contains(where: { rawPath in
+            let path = rawPath.lowercased()
+            return path.contains("/tests/")
+                || path.hasPrefix("tests/")
+                || path.contains("/test_")
+                || path.hasSuffix("_test.py")
+                || path.hasSuffix("/tests.py")
+                || path == "tests.py"
+        })
+        if hasTests {
+            return .pythonUnitTests
+        }
+
+        let preferred = [
+            "main.py",
+            "app.py",
+            "cli.py",
+            "run.py",
+            "src/main.py"
+        ]
+        for item in preferred {
+            if let matched = orderedPaths.first(where: {
+                let lowered = $0.lowercased()
+                return lowered == item || lowered.hasSuffix("/" + item)
+            }) {
+                return .pythonScript(path: matched)
             }
-
-            let base64 = Data(content.utf8).base64EncodedString()
-            let syncCommand = """
-            \(mkdirCommand)
-            cat <<'__IEXA_B64__' | base64 --decode > \(shellSingleQuoted(normalizedPath))
-            \(base64)
-            __IEXA_B64__
-            """
-
-            _ = try await RemoteShellExecutionService.shared.run(
-                command: syncCommand,
-                endpoint: endpoint,
-                apiKey: apiKey,
-                workingDirectory: workingDirectory,
-                timeout: timeout
-            )
         }
-    }
 
-    private func shellSingleQuoted(_ value: String) -> String {
-        let escaped = value.replacingOccurrences(of: "'", with: "'\"'\"'")
-        return "'\(escaped)'"
+        if let firstPythonFile = orderedPaths.first(where: { rawPath in
+            let path = rawPath.lowercased()
+            return path.hasSuffix(".py")
+                && !path.contains("/tests/")
+                && !path.hasPrefix("tests/")
+                && !path.hasPrefix("test_")
+                && !path.hasSuffix("_test.py")
+        }) {
+            return .pythonScript(path: firstPythonFile)
+        }
+
+        return .pythonCompileAll
     }
 
     private func normalizedTerminalCommandForExecution(_ raw: String) -> String {
@@ -2316,11 +2288,7 @@ struct ChatScreen: View {
                 precedingUserMessage: nil,
                 codeThemeMode: viewModel.config.codeThemeMode,
                 apiKey: viewModel.config.apiKey,
-                shellExecutionAPIKey: viewModel.config.resolvedShellExecutionAPIKey,
                 apiBaseURL: viewModel.config.normalizedBaseURL,
-                shellExecutionURLString: viewModel.config.shellExecutionURLString,
-                shellExecutionTimeout: viewModel.config.shellExecutionTimeout,
-                shellExecutionWorkingDirectory: viewModel.config.shellExecutionWorkingDirectory,
                 showsAssistantActionBar: false,
                 onRegenerate: nil
             )
@@ -2337,11 +2305,7 @@ struct ChatScreen: View {
                 precedingUserMessage: previousUserMessage,
                 codeThemeMode: viewModel.config.codeThemeMode,
                 apiKey: viewModel.config.apiKey,
-                shellExecutionAPIKey: viewModel.config.resolvedShellExecutionAPIKey,
                 apiBaseURL: viewModel.config.normalizedBaseURL,
-                shellExecutionURLString: viewModel.config.shellExecutionURLString,
-                shellExecutionTimeout: viewModel.config.shellExecutionTimeout,
-                shellExecutionWorkingDirectory: viewModel.config.shellExecutionWorkingDirectory,
                 showsAssistantActionBar: false,
                 onRegenerate: nil
             )
@@ -5115,9 +5079,6 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
     let codeThemeMode: CodeThemeMode
     let apiKey: String
     let apiBaseURL: String
-    let shellExecutionURLString: String
-    let shellExecutionTimeout: Double
-    let shellExecutionWorkingDirectory: String
     let bottomReservedInset: CGFloat
     let command: ChatTranscriptCommand?
     let onMetricsChanged: (ChatTranscriptMetrics) -> Void
@@ -5137,9 +5098,6 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             codeThemeMode: codeThemeMode,
             apiKey: apiKey,
             apiBaseURL: apiBaseURL,
-            shellExecutionURLString: shellExecutionURLString,
-            shellExecutionTimeout: shellExecutionTimeout,
-            shellExecutionWorkingDirectory: shellExecutionWorkingDirectory,
             bottomReservedInset: bottomReservedInset,
             command: command,
             onMetricsChanged: onMetricsChanged
@@ -5258,9 +5216,6 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             codeThemeMode: CodeThemeMode,
             apiKey: String,
             apiBaseURL: String,
-            shellExecutionURLString: String,
-            shellExecutionTimeout: Double,
-            shellExecutionWorkingDirectory: String,
             bottomReservedInset: CGFloat,
             command: ChatTranscriptCommand?,
             onMetricsChanged: @escaping (ChatTranscriptMetrics) -> Void

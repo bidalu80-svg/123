@@ -125,23 +125,21 @@ enum MinimalAgentToolResponseParser {
 
 final class MinimalAgentToolRuntime {
     static let systemPrompt = """
-    你现在具备 6 个正式工具：`list_dir`、`read_file`、`write_file`、`edit_file`、`grep_files`、`shell_exec`。
+    你现在具备 8 个正式工具：`list_dir`、`read_file`、`write_file`、`edit_file`、`grep_files`、`delete_path`、`clear_workspace`、`run_python_file`。
     执行规则：
     - 需要查看当前 latest 工作区时，优先调用工具，不要猜目录和文件内容。
     - 需要修改文件时，优先最小改动；小范围修改优先 `edit_file`，新建或整体重写使用 `write_file`。
-    - 需要运行、安装、测试、构建时，使用 `shell_exec`，不要只把命令写给用户。
+    - 需要删除文件或目录时，使用 `delete_path`；需要清空整个 latest 工作区时，使用 `clear_workspace`。
+    - 仅当任务是 Python 项目或 Python 脚本验证时，使用 `run_python_file` 本地运行；不要假装自己能运行 Go/Rust/Java/Node 等当前设备不具备运行时的项目。
     - 不要把 `[[file:...]]`、`[[mkdir:...]]`、`touch`、`mkdir` 之类文本当成主要执行方式；能用工具就直接用工具。
     - `write_file` 会自动创建父目录，因此缺少目录时无需先输出伪指令。
     - 如果工具返回错误，必须基于错误继续处理或明确说明，不要假装成功。
     - 完成后用简短自然语言汇报结果。
     """
 
-    private let shellExecutionService: RemoteShellExecutionService
     private let fileManager = FileManager.default
 
-    init(shellExecutionService: RemoteShellExecutionService = .shared) {
-        self.shellExecutionService = shellExecutionService
-    }
+    init() {}
 
     var toolSpecs: [MinimalAgentToolSpec] {
         [
@@ -251,27 +249,49 @@ final class MinimalAgentToolRuntime {
                 ]
             ),
             MinimalAgentToolSpec(
-                name: "shell_exec",
-                description: "在远端 shell 工作区执行命令，适合安装依赖、运行测试、构建和查看命令输出。",
+                name: "delete_path",
+                description: "删除 latest 工作区中的文件或目录。",
                 parameters: [
                     "type": "object",
                     "properties": [
-                        "command": [
+                        "path": [
                             "type": "string",
-                            "description": "要执行的完整 shell 命令。"
-                        ],
-                        "timeoutSeconds": [
-                            "type": "integer",
-                            "description": "超时时间，默认使用设置中的终端超时。"
+                            "description": "要删除的相对路径。"
                         ]
                     ],
-                    "required": ["command"]
+                    "required": ["path"]
+                ]
+            ),
+            MinimalAgentToolSpec(
+                name: "clear_workspace",
+                description: "清空整个 latest 工作区并重新创建空目录。",
+                parameters: [
+                    "type": "object",
+                    "properties": [:]
+                ]
+            ),
+            MinimalAgentToolSpec(
+                name: "run_python_file",
+                description: "在 latest 工作区中本地运行一个 Python 文件，适合验证 main.py 之类入口。",
+                parameters: [
+                    "type": "object",
+                    "properties": [
+                        "path": [
+                            "type": "string",
+                            "description": "要运行的相对 Python 文件路径。"
+                        ],
+                        "stdin": [
+                            "type": "string",
+                            "description": "可选的标准输入文本。"
+                        ]
+                    ],
+                    "required": ["path"]
                 ]
             )
         ]
     }
 
-    func execute(call: MinimalAgentToolCall, config: ChatConfig) async -> MinimalAgentToolExecution {
+    func execute(call: MinimalAgentToolCall, config _: ChatConfig) async -> MinimalAgentToolExecution {
         switch call.name {
         case "list_dir":
             return executeListDir(arguments: call.arguments)
@@ -283,8 +303,12 @@ final class MinimalAgentToolRuntime {
             return executeEditFile(arguments: call.arguments)
         case "grep_files":
             return executeGrepFiles(arguments: call.arguments)
-        case "shell_exec":
-            return await executeShellExec(arguments: call.arguments, config: config)
+        case "delete_path":
+            return executeDeletePath(arguments: call.arguments)
+        case "clear_workspace":
+            return executeClearWorkspace()
+        case "run_python_file":
+            return await executeRunPythonFile(arguments: call.arguments)
         default:
             return MinimalAgentToolExecution(
                 renderedLog: "工具 `\(call.name)` 不可用",
@@ -481,42 +505,80 @@ final class MinimalAgentToolRuntime {
         }
     }
 
-    private func executeShellExec(arguments: [String: Any], config: ChatConfig) async -> MinimalAgentToolExecution {
-        let command = stringValue(arguments["command"]) ?? ""
-        let trimmedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedCommand.isEmpty else {
+    private func executeDeletePath(arguments: [String: Any]) -> MinimalAgentToolExecution {
+        let rawPath = stringValue(arguments["path"]) ?? ""
+        do {
+            let resolved = try resolveWorkspaceURL(for: rawPath)
+            guard fileManager.fileExists(atPath: resolved.url.path) else {
+                return MinimalAgentToolExecution(
+                    renderedLog: "删除 `\(resolved.path)`",
+                    output: "路径 `\(resolved.path)` 不存在，无需删除。"
+                )
+            }
+            try fileManager.removeItem(at: resolved.url)
+            let rootURL = try latestWorkspaceURL(createIfMissing: true)
+            pruneEmptyParentDirectories(
+                startingFrom: resolved.url.deletingLastPathComponent(),
+                root: rootURL
+            )
             return MinimalAgentToolExecution(
-                renderedLog: "执行 shell 命令",
-                output: "错误：命令为空。"
+                renderedLog: "删除 `\(resolved.path)`",
+                output: "已删除 `\(resolved.path)`。"
+            )
+        } catch {
+            return MinimalAgentToolExecution(
+                renderedLog: rawPath.isEmpty ? "删除路径" : "删除 `\(rawPath)`",
+                output: "错误：\(error.localizedDescription)"
             )
         }
+    }
 
-        let timeoutSeconds = TimeInterval(
-            boundedInt(
-                arguments["timeoutSeconds"],
-                defaultValue: Int(config.shellExecutionTimeout),
-                min: 5,
-                max: 300
-            )
-        )
-        let workingDirectory = config.shellExecutionWorkingDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
-
+    private func executeClearWorkspace() -> MinimalAgentToolExecution {
         do {
-            let result = try await shellExecutionService.run(
-                command: trimmedCommand,
-                endpoint: config.shellExecutionURLString,
-                apiKey: config.resolvedShellExecutionAPIKey,
-                workingDirectory: workingDirectory.isEmpty ? nil : workingDirectory,
-                timeout: timeoutSeconds
+            try FrontendProjectBuilder.clearLatestProject()
+            return MinimalAgentToolExecution(
+                renderedLog: "清空 latest 工作区",
+                output: "latest 工作区已清空。"
+            )
+        } catch {
+            return MinimalAgentToolExecution(
+                renderedLog: "清空 latest 工作区",
+                output: "错误：\(error.localizedDescription)"
+            )
+        }
+    }
+
+    private func executeRunPythonFile(arguments: [String: Any]) async -> MinimalAgentToolExecution {
+        let rawPath = stringValue(arguments["path"]) ?? ""
+        let stdin = stringValue(arguments["stdin"])
+        do {
+            let resolved = try resolveWorkspaceURL(for: rawPath)
+            guard resolved.path.lowercased().hasSuffix(".py") else {
+                return MinimalAgentToolExecution(
+                    renderedLog: rawPath.isEmpty ? "运行 Python 文件" : "运行 `\(resolved.path)`",
+                    output: "错误：`run_python_file` 只能运行 `.py` 文件。"
+                )
+            }
+            guard fileManager.fileExists(atPath: resolved.url.path) else {
+                return MinimalAgentToolExecution(
+                    renderedLog: "运行 `\(resolved.path)`",
+                    output: "错误：Python 文件 `\(resolved.path)` 不存在。"
+                )
+            }
+            let rootURL = try latestWorkspaceURL(createIfMissing: true)
+            let result = try await LocalProjectExecutionService.shared.runPythonFile(
+                atRelativePath: resolved.path,
+                projectURL: rootURL,
+                stdin: stdin
             )
             let suffix = result.exitCode == 0 ? "" : "\n\n[exit code \(result.exitCode)]"
             return MinimalAgentToolExecution(
-                renderedLog: "执行 shell 命令",
+                renderedLog: "运行 `\(resolved.path)`",
                 output: clippedOutput(result.output + suffix, limit: 12_000)
             )
         } catch {
             return MinimalAgentToolExecution(
-                renderedLog: "执行 shell 命令",
+                renderedLog: rawPath.isEmpty ? "运行 Python 文件" : "运行 `\(rawPath)`",
                 output: "错误：\(error.localizedDescription)"
             )
         }
@@ -571,6 +633,24 @@ final class MinimalAgentToolRuntime {
             return String(absolute.dropFirst(rootPath.count + 1))
         }
         return fileURL.lastPathComponent
+    }
+
+    private func pruneEmptyParentDirectories(startingFrom folderURL: URL, root: URL) {
+        var current = folderURL.standardizedFileURL
+        let normalizedRoot = root.standardizedFileURL
+
+        while current.path.hasPrefix(normalizedRoot.path), current != normalizedRoot {
+            let contents = (try? fileManager.contentsOfDirectory(
+                at: current,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )) ?? []
+            if !contents.isEmpty {
+                break
+            }
+            try? fileManager.removeItem(at: current)
+            current = current.deletingLastPathComponent()
+        }
     }
 
     private func displayPathForLog(_ rawPath: String?) -> String {
