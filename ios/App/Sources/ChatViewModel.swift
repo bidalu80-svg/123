@@ -158,9 +158,17 @@ final class ChatViewModel: ObservableObject {
     @Published var currentSessionID: UUID?
     @Published var isPrivateMode = false
 
-    @Published var isSending = false
+    @Published var isSending = false {
+        didSet {
+            syncTaskLiveActivity()
+        }
+    }
     @Published var errorMessage = ""
-    @Published var statusMessage = "准备就绪"
+    @Published var statusMessage = "准备就绪" {
+        didSet {
+            syncTaskLiveActivity()
+        }
+    }
     @Published var chatState: ChatState = .idle
     @Published var testLogs: [String] = []
 
@@ -181,6 +189,7 @@ final class ChatViewModel: ObservableObject {
     @Published var tokenUsageFlashTrigger: Int = 0
 
     private let service: ChatService
+    private let taskLiveActivityManager = TaskLiveActivityManager.shared
     private var autoSaveEnabled = false
     private let streamScrollThrottleInterval: TimeInterval = 0.08
     private var lastStreamScrollSignal: Date = .distantPast
@@ -192,6 +201,7 @@ final class ChatViewModel: ObservableObject {
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
     private var pathMonitor: NWPathMonitor?
     private let pathMonitorQueue = DispatchQueue(label: "chatapp.network.monitor")
+    private var isAppInBackground = false
 
     init(service: ChatService = ChatService()) {
         self.service = service
@@ -762,6 +772,7 @@ final class ChatViewModel: ObservableObject {
 
     func appDidEnterBackground() {
         guard isSending else { return }
+        isAppInBackground = true
         beginBackgroundSendTask()
         statusMessage = "已切到后台，正在尽力保持连接…"
         appendLog("应用进入后台：已申请后台任务，尽力维持本次请求。")
@@ -774,6 +785,7 @@ final class ChatViewModel: ObservableObject {
 
 
     func appDidBecomeActive() {
+        isAppInBackground = false
         if isSending {
             statusMessage = "已回到前台，继续接收中…"
             appendLog("应用回到前台：继续处理本次请求。")
@@ -1441,6 +1453,50 @@ final class ChatViewModel: ObservableObject {
         guard backgroundTaskID != .invalid else { return }
         UIApplication.shared.endBackgroundTask(backgroundTaskID)
         backgroundTaskID = .invalid
+    }
+
+    private func syncTaskLiveActivity() {
+        let modelText = config.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "未指定模型"
+            : config.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        let snapshot = TaskLiveActivitySnapshot(
+            isRunning: isSending,
+            phaseText: currentLiveActivityPhaseText(),
+            statusText: currentLiveActivityStatusText(),
+            modelText: modelText,
+            isInBackground: isAppInBackground
+        )
+        Task {
+            await taskLiveActivityManager.sync(snapshot: snapshot)
+        }
+    }
+
+    private func currentLiveActivityPhaseText() -> String {
+        if isAppInBackground && isSending {
+            return "后台继续中"
+        }
+
+        switch chatState {
+        case .sending:
+            return "正在请求\(config.endpointMode.title)"
+        case .streaming:
+            return "正在生成回复"
+        case .error:
+            return "任务中断"
+        case .idle:
+            return isSending ? "处理中" : "任务完成"
+        }
+    }
+
+    private func currentLiveActivityStatusText() -> String {
+        let trimmed = statusMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            return trimmed
+        }
+        if isSending {
+            return "IEXA 正在处理你的任务"
+        }
+        return "任务已结束"
     }
 
     private func normalizedConfigForSave(_ input: ChatConfig) -> ChatConfig {

@@ -30,6 +30,7 @@ targets:
     platform: iOS
     deploymentTarget: "17.0"
     sources:
+      - path: Shared
       - path: App/Sources
       - path: App/Resources
         excludes:
@@ -37,6 +38,8 @@ targets:
       - path: App/Resources/PythonRuntime
         type: folder
     dependencies:
+      - target: IEXATaskLiveActivityExtension
+        embed: true
       - framework: Vendor/Python.xcframework
         embed: true
         codeSign: true
@@ -60,6 +63,23 @@ targets:
       testTargets:
         - ChatAppTests
         - ChatAppUITests
+  IEXATaskLiveActivityExtension:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: Shared
+      - path: LiveActivityExtension/Sources
+      - path: LiveActivityExtension/Resources
+    settings:
+      base:
+        PRODUCT_NAME: IEXATaskLiveActivityExtension
+        PRODUCT_MODULE_NAME: IEXATaskLiveActivityExtension
+        PRODUCT_BUNDLE_IDENTIFIER: com.chatapp.ios.liveactivity
+        INFOPLIST_FILE: LiveActivityExtension/Resources/Info.plist
+        SKIP_INSTALL: YES
+        APPLICATION_EXTENSION_API_ONLY: YES
+        TARGETED_DEVICE_FAMILY: "1"
   ChatAppTests:
     type: bundle.unit-test
     platform: iOS
