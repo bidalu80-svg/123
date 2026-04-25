@@ -162,4 +162,41 @@ final class MessageContentParserTests: XCTestCase {
         XCTAssertTrue(text.contains("这都是允许的。"))
         XCTAssertTrue(text.contains("变量名只是一个“引用”"))
     }
+
+    func testParseKeepsInlineCommentedCodeInsideFencedCodeBlock() {
+        let message = ChatMessage(
+            role: .assistant,
+            content: """
+            ```python
+            import sys
+
+            a = [1, 2, 3]  # 创建列表对象，引用计数为 1
+            print(sys.getrefcount(a))  # 注意：getrefcount 本身会临时增加一次引用
+
+            b = a  # b 指向同一对象，引用计数 +1
+            print(sys.getrefcount(a))
+
+            这说明两个变量都指向同一个对象。
+            真正的数据在对象本身上。
+            ```
+            """
+        )
+
+        let segments = MessageContentParser.parse(message)
+
+        XCTAssertEqual(segments.count, 2)
+        guard case let .code(language, content) = segments[0] else {
+            return XCTFail("Expected first segment to remain a code block")
+        }
+        XCTAssertEqual(language, "python")
+        XCTAssertTrue(content.contains("a = [1, 2, 3]  # 创建列表对象"))
+        XCTAssertTrue(content.contains("print(sys.getrefcount(a))  # 注意"))
+        XCTAssertTrue(content.contains("b = a  # b 指向同一对象"))
+
+        guard case let .text(text) = segments[1] else {
+            return XCTFail("Expected trailing explanation to render as text")
+        }
+        XCTAssertTrue(text.contains("这说明两个变量都指向同一个对象。"))
+        XCTAssertTrue(text.contains("真正的数据在对象本身上。"))
+    }
 }

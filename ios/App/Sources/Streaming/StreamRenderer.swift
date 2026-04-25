@@ -9,9 +9,9 @@ final class StreamRenderer {
         var maxCharactersFetchedPerTick: Int
 
         static let `default` = Configuration(
-            refreshInterval: 0.05,            // 20 FPS max
-            maxCharactersPerFrame: 50,        // typewriter cap
-            maxCharactersFetchedPerTick: 1_200
+            refreshInterval: 0.05,
+            maxCharactersPerFrame: 6,
+            maxCharactersFetchedPerTick: 180
         )
     }
 
@@ -133,16 +133,12 @@ final class StreamRenderer {
     private func dynamicFrameCharacterBudgetLocked() -> Int {
         let base = max(1, configuration.maxCharactersPerFrame)
         switch stagedCharacters {
-        case 12_000...:
-            return min(160, base * 5)
-        case 6_000...:
-            return min(128, base * 4)
-        case 2_500...:
-            return min(96, base * 3)
+        case 3_000...:
+            return min(12, base * 2)
         case 900...:
-            return min(72, base * 2)
-        case 360...:
-            return min(56, base * 2)
+            return min(10, base * 2)
+        case 240...:
+            return min(8, base + 2)
         default:
             return base
         }

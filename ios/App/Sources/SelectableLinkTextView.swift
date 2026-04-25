@@ -574,8 +574,8 @@ struct SelectableLinkTextView: UIViewRepresentable {
             coordinator.lastMarkdownLinkColor = .clear
 
             let fullTextChangedShape = coordinator.lastText.isEmpty || !text.hasPrefix(coordinator.lastText)
-            let forceImmediateRebuild = !streamingAnimated && coordinator.lastStreamingAnimated
-            if fullTextChangedShape || forceImmediateRebuild {
+            let isLeavingStreamingMode = !streamingAnimated && coordinator.lastStreamingAnimated
+            if fullTextChangedShape {
                 coordinator.stopStreamingAnimation(clearPending: true)
                 if streamingAnimated && coordinator.lastText.isEmpty && !text.isEmpty {
                     uiView.attributedText = NSAttributedString()
@@ -608,6 +608,9 @@ struct SelectableLinkTextView: UIViewRepresentable {
                     uiView.attributedText = attributed
                 }
             } else {
+                if isLeavingStreamingMode {
+                    coordinator.stopStreamingAnimation(clearPending: false, normalizeTail: true)
+                }
                 let suffix = String(text.dropFirst(coordinator.lastText.count))
                 if !suffix.isEmpty {
                     if streamingAnimated {
@@ -711,6 +714,9 @@ struct SelectableLinkTextView: UIViewRepresentable {
         private var streamAnimationEnabled = false
         private var streamPrimaryColor: UIColor = .label
         private var lastStreamingTailRange: NSRange?
+        private var lastStreamingCursorRange: NSRange?
+        private var cursorBlinkAccumulator: CFTimeInterval = 0
+        private var isCursorVisible = true
         private var streamCharacterBudget: Double = 0
         private var lastMeasuredWidth: CGFloat = 0
         private var lastMeasuredHeight: CGFloat = 0
@@ -772,6 +778,8 @@ struct SelectableLinkTextView: UIViewRepresentable {
             streamTimer = nil
             streamLastTimestamp = 0
             streamCharacterBudget = 0
+            cursorBlinkAccumulator = 0
+            isCursorVisible = true
             if clearPending {
                 pendingStreamingSuffix.removeAll(keepingCapacity: false)
             }
@@ -781,9 +789,9 @@ struct SelectableLinkTextView: UIViewRepresentable {
             guard streamTimer == nil else { return }
             let timer = CADisplayLink(target: self, selector: #selector(handleStreamAnimationTick(_:)))
             if #available(iOS 15.0, *) {
-                timer.preferredFrameRateRange = CAFrameRateRange(minimum: 20, maximum: 20, preferred: 20)
+                timer.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 30, preferred: 30)
             } else {
-                timer.preferredFramesPerSecond = 20
+                timer.preferredFramesPerSecond = 30
             }
             timer.add(to: .main, forMode: .common)
             streamTimer = timer
@@ -800,30 +808,34 @@ struct SelectableLinkTextView: UIViewRepresentable {
                 stopStreamingAnimation(clearPending: false, normalizeTail: false)
                 return
             }
+            let elapsed = streamLastTimestamp > 0
+                ? max(0, timer.timestamp - streamLastTimestamp)
+                : (1.0 / 30.0)
+            streamLastTimestamp = timer.timestamp
+
             guard !pendingStreamingSuffix.isEmpty else {
-                // Keep current tail fade while waiting for the next chunk to avoid flashing.
-                stopStreamingAnimation(clearPending: false, normalizeTail: false)
+                autoreleasepool {
+                    let storage = textView.textStorage
+                    updateStreamingCursor(in: storage, elapsed: elapsed)
+                }
                 return
             }
 
-            let elapsed = streamLastTimestamp > 0
-                ? max(0, timer.timestamp - streamLastTimestamp)
-                : 0.05
-            streamLastTimestamp = timer.timestamp
-
             streamCharacterBudget += elapsed * streamingCharactersPerSecond(for: pendingStreamingSuffix.count)
             let budgetStep = Int(streamCharacterBudget.rounded(.down))
-            let step = max(1, min(5, budgetStep))
+            let step = max(1, min(3, budgetStep))
             streamCharacterBudget = max(0, streamCharacterBudget - Double(step))
             let chunk = consumeStreamingPrefix(maxCharacters: step)
             guard !chunk.isEmpty else { return }
 
             autoreleasepool {
                 let storage = textView.textStorage
+                removeStreamingCursorIfNeeded(in: storage)
                 let appended = NSMutableAttributedString(string: chunk, attributes: streamAttributes)
                 storage.beginEditing()
                 storage.append(appended)
                 applyStreamingTailFade(in: storage)
+                updateStreamingCursor(in: storage, elapsed: elapsed, forceVisible: true)
                 storage.endEditing()
             }
         }
@@ -883,19 +895,19 @@ struct SelectableLinkTextView: UIViewRepresentable {
         private func streamingCharactersPerSecond(for pendingCharacters: Int) -> Double {
             switch pendingCharacters {
             case 6_000...:
-                return 180
+                return 68
             case 3_000...:
-                return 140
+                return 58
             case 1_600...:
-                return 110
+                return 50
             case 800...:
-                return 84
-            case 320...:
-                return 60
-            case 120...:
                 return 44
+            case 320...:
+                return 38
+            case 120...:
+                return 32
             default:
-                return 34
+                return 28
             }
         }
 
@@ -941,8 +953,10 @@ struct SelectableLinkTextView: UIViewRepresentable {
         private func normalizeStreamingTailAppearance() {
             guard let textView = activeTextView else {
                 lastStreamingTailRange = nil
+                lastStreamingCursorRange = nil
                 return
             }
+            removeStreamingCursorIfNeeded(in: textView.textStorage)
             guard let tailRange = lastStreamingTailRange,
                   tailRange.location != NSNotFound,
                   NSMaxRange(tailRange) <= textView.textStorage.length else {
@@ -954,6 +968,46 @@ struct SelectableLinkTextView: UIViewRepresentable {
             textView.textStorage.addAttribute(.foregroundColor, value: streamPrimaryColor, range: tailRange)
             textView.textStorage.endEditing()
             lastStreamingTailRange = nil
+        }
+
+        private func updateStreamingCursor(
+            in storage: NSTextStorage,
+            elapsed: CFTimeInterval,
+            forceVisible: Bool = false
+        ) {
+            cursorBlinkAccumulator += elapsed
+            if forceVisible {
+                isCursorVisible = true
+                cursorBlinkAccumulator = 0
+            } else if cursorBlinkAccumulator >= 0.46 {
+                isCursorVisible.toggle()
+                cursorBlinkAccumulator = 0
+            }
+
+            removeStreamingCursorIfNeeded(in: storage)
+            guard isCursorVisible else { return }
+
+            let cursorFont = (streamAttributes[.font] as? UIFont) ?? MinisTheme.assistantStrongUIFont
+            let cursor = NSAttributedString(
+                string: "▍",
+                attributes: [
+                    .font: cursorFont,
+                    .foregroundColor: streamPrimaryColor.withAlphaComponent(0.92)
+                ]
+            )
+            storage.append(cursor)
+            lastStreamingCursorRange = NSRange(location: max(0, storage.length - 1), length: 1)
+        }
+
+        private func removeStreamingCursorIfNeeded(in storage: NSTextStorage) {
+            guard let cursorRange = lastStreamingCursorRange,
+                  cursorRange.location != NSNotFound,
+                  NSMaxRange(cursorRange) <= storage.length else {
+                lastStreamingCursorRange = nil
+                return
+            }
+            storage.deleteCharacters(in: cursorRange)
+            lastStreamingCursorRange = nil
         }
 
         func cachedSizeIfAvailable(forWidth width: CGFloat, textCount: Int, lineBreakCount: Int) -> CGSize? {
