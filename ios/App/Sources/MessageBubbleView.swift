@@ -2595,12 +2595,43 @@ struct MessageBubbleView: View {
         return ExcelGenerationService.canGenerate(from: actionMessage)
     }
 
+    private var shouldOfferExcelGeneration: Bool {
+        guard canGenerateExcel else { return false }
+
+        let normalized = actionMessage.copyableText.lowercased()
+        if normalized.contains("excel")
+            || normalized.contains("xlsx")
+            || normalized.contains("csv")
+            || normalized.contains("tsv")
+            || normalized.contains("表格")
+            || normalized.contains("sheet")
+            || normalized.contains("工作表") {
+            return true
+        }
+
+        if actionMessage.fileAttachments.contains(where: { attachment in
+            let lowered = attachment.fileName.lowercased()
+            return lowered.hasSuffix(".csv")
+                || lowered.hasSuffix(".tsv")
+                || lowered.hasSuffix(".xls")
+                || lowered.hasSuffix(".xlsx")
+        }) {
+            return true
+        }
+
+        let segments = MessageContentParser.parse(actionMessage)
+        return segments.contains { segment in
+            if case .table = segment { return true }
+            return false
+        }
+    }
+
     private var shouldShowExcelCard: Bool {
-        generatedExcelPayload != nil || canGenerateExcel
+        generatedExcelPayload != nil || shouldOfferExcelGeneration
     }
 
     private var shouldAutoGenerateExcelCard: Bool {
-        guard canGenerateExcel else { return false }
+        guard shouldOfferExcelGeneration else { return false }
         guard generatedExcelPayload == nil else { return false }
         guard !isGeneratingExcel else { return false }
         guard !hasAutoTriggeredExcelGeneration else { return false }
@@ -2751,7 +2782,7 @@ struct MessageBubbleView: View {
                 .buttonStyle(.borderedProminent)
                 .tint(Color(red: 0.08, green: 0.52, blue: 0.58))
                 .font(.caption2)
-                .disabled(isGeneratingExcel || !canGenerateExcel)
+                .disabled(isGeneratingExcel || !shouldOfferExcelGeneration)
             }
         }
         .padding(.horizontal, 12)

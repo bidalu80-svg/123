@@ -6,7 +6,7 @@ enum MinisTheme {
         dynamicProvider: { trait in
             trait.userInterfaceStyle == .dark
                 ? UIColor(red: 0.05, green: 0.055, blue: 0.06, alpha: 1)
-                : UIColor(red: 0.985, green: 0.985, blue: 0.975, alpha: 1)
+                : UIColor.white
         }
     )
     static let appBackground = Color(

@@ -442,6 +442,63 @@ final class FrontendProjectBuilderTests: XCTestCase {
         )
     }
 
+    func testPythonProjectValidationPlanPrefersTestsWhenTestFileExists() throws {
+        let message = ChatMessage(
+            role: .assistant,
+            content: "",
+            fileAttachments: [
+                ChatFileAttachment(
+                    fileName: "main.py",
+                    mimeType: "text/x-python",
+                    textContent: """
+                    def add(a, b):
+                        return a + b
+                    """
+                ),
+                ChatFileAttachment(
+                    fileName: "tests.py",
+                    mimeType: "text/x-python",
+                    textContent: """
+                    import unittest
+                    from main import add
+
+                    class AddTests(unittest.TestCase):
+                        def test_add(self):
+                            self.assertEqual(add(1, 2), 3)
+                    """
+                )
+            ]
+        )
+
+        let result = try FrontendProjectBuilder.buildProject(from: message, mode: .createNewProject)
+        XCTAssertEqual(result.validationPlan?.installCommand, "python3 -m pip install pytest")
+        XCTAssertEqual(result.validationPlan?.runCommand, "python3 -m pytest || python3 -m unittest discover -v")
+    }
+
+    func testPythonNetworkProjectWithoutTestsFallsBackToCompileCheck() throws {
+        let message = ChatMessage(
+            role: .assistant,
+            content: "",
+            fileAttachments: [
+                ChatFileAttachment(
+                    fileName: "crawler.py",
+                    mimeType: "text/x-python",
+                    textContent: """
+                    import requests
+                    from bs4 import BeautifulSoup
+
+                    response = requests.get("https://example.com", timeout=10)
+                    print(response.status_code)
+                    """
+                )
+            ]
+        )
+
+        let result = try FrontendProjectBuilder.buildProject(from: message, mode: .createNewProject)
+        XCTAssertEqual(result.validationPlan?.installCommand, "python3 -m pip install -r requirements.txt")
+        XCTAssertEqual(result.validationPlan?.runCommand, "python3 -m compileall .")
+    }
+
     func testBuildProjectSynthesizesRequirementsForThirdPartyPythonImports() throws {
         let message = ChatMessage(
             role: .assistant,

@@ -857,11 +857,16 @@ enum FrontendProjectBuilder {
         if loweredPaths.contains(where: { $0.hasSuffix(".py") }) {
             let hasPytest = loweredPaths.contains(where: {
                 $0.contains("/tests/")
+                    || $0.contains("/test/")
+                    || $0.hasPrefix("tests.py")
+                    || $0.hasSuffix("/tests.py")
                     || $0.hasPrefix("tests/")
-                    || $0.hasPrefix("test_")
+                    || $0.hasPrefix("test")
+                    || $0.contains("/test_")
                     || $0.hasSuffix("_test.py")
+                    || $0.hasSuffix("test.py")
             })
-            let installCommand: String? = {
+            let installCommandBase: String? = {
                 if loweredSet.contains("requirements.txt") {
                     return "python3 -m pip install -r requirements.txt"
                 }
@@ -871,7 +876,20 @@ enum FrontendProjectBuilder {
                 return nil
             }()
             if hasPytest {
-                return ValidationPlan(installCommand: installCommand, runCommand: "python3 -m pytest")
+                let installCommand: String? = {
+                    if let installCommandBase {
+                        return "\(installCommandBase) && python3 -m pip install pytest"
+                    }
+                    return "python3 -m pip install pytest"
+                }()
+                return ValidationPlan(
+                    installCommand: installCommand,
+                    runCommand: "python3 -m pytest || python3 -m unittest discover -v"
+                )
+            }
+            let installCommand = installCommandBase
+            if looksLikeNetworkPythonProject(files: normalizedFiles) {
+                return ValidationPlan(installCommand: installCommand, runCommand: "python3 -m compileall .")
             }
             if let main = preferredPythonRunnablePath(from: loweredPaths) {
                 return ValidationPlan(installCommand: installCommand, runCommand: "python3 \(main)")
@@ -902,6 +920,23 @@ enum FrontendProjectBuilder {
                 && !$0.hasPrefix("test_")
                 && !$0.hasSuffix("_test.py")
         })
+    }
+
+    private static func looksLikeNetworkPythonProject(files: [String: String]) -> Bool {
+        for (path, content) in files {
+            guard path.lowercased().hasSuffix(".py") else { continue }
+            let lowered = content.lowercased()
+            if lowered.contains("import requests")
+                || lowered.contains("from requests import")
+                || lowered.contains("import aiohttp")
+                || lowered.contains("import httpx")
+                || lowered.contains("beautifulsoup")
+                || lowered.contains("https://")
+                || lowered.contains("http://") {
+                return true
+            }
+        }
+        return false
     }
 
     private static func synthesizePythonRequirementsIfNeeded(
