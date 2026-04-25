@@ -274,7 +274,31 @@ _chatapp_out = \(pythonLiteral(outputURL.path))
             let libDir = runtimeRoot.appendingPathComponent("lib")
             if let entries = try? FileManager.default.contentsOfDirectory(at: libDir, includingPropertiesForKeys: nil) {
                 if let versionDir = entries.first(where: { $0.lastPathComponent.hasPrefix("python3") }) {
-                    setenv("PYTHONPATH", versionDir.path, 1)
+                    var pythonPaths: [String] = [versionDir.path]
+
+                    let sitePackagesDir = versionDir.appendingPathComponent("site-packages", isDirectory: true)
+                    if FileManager.default.fileExists(atPath: sitePackagesDir.path, isDirectory: &isDir), isDir.boolValue {
+                        pythonPaths.append(sitePackagesDir.path)
+                    }
+
+                    let distPackagesDir = versionDir.appendingPathComponent("dist-packages", isDirectory: true)
+                    if FileManager.default.fileExists(atPath: distPackagesDir.path, isDirectory: &isDir), isDir.boolValue {
+                        pythonPaths.append(distPackagesDir.path)
+                    }
+
+                    if let existing = ProcessInfo.processInfo.environment["PYTHONPATH"]?
+                        .trimmingCharacters(in: .whitespacesAndNewlines),
+                       !existing.isEmpty {
+                        pythonPaths.append(existing)
+                    }
+
+                    let joined = pythonPaths
+                        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                        .filter { !$0.isEmpty }
+                        .joined(separator: ":")
+                    if !joined.isEmpty {
+                        setenv("PYTHONPATH", joined, 1)
+                    }
                 }
             }
         }

@@ -87,6 +87,25 @@ jobs:
             App/Resources/PythonRuntime/lib/python3.13/turtledemo \
             App/Resources/PythonRuntime/lib/python3.13/ensurepip
 
+      - name: Install bundled pure-Python packages
+        working-directory: ios
+        run: |
+          set -euo pipefail
+          PY_VER_DIR="App/Resources/PythonRuntime/lib/python3.13"
+          SITE_PACKAGES_DIR="$PY_VER_DIR/site-packages"
+          mkdir -p "$SITE_PACKAGES_DIR"
+
+          python3 -m pip install --upgrade pip
+          python3 -m pip install \
+            --no-compile \
+            --only-binary=:none: \
+            --target "$SITE_PACKAGES_DIR" \
+            -r Tools/embedded-python-requirements.txt
+
+          find "$SITE_PACKAGES_DIR" \
+            \( -name "*.so" -o -name "*.dylib" -o -name "*.a" -o -name "*.o" -o -name "__pycache__" \) \
+            -prune -exec rm -rf {} +
+
       - name: Decode signing assets
         env:
           IOS_P12_BASE64: ${{ secrets.IOS_P12_BASE64 }}
