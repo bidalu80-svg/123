@@ -1240,13 +1240,15 @@ struct ChatScreen: View {
         autoBuildInFlightAssistantIDs.insert(assistant.id)
         latestProjectValidationState = nil
         let sourceAssistant = assistant
+        let shouldMergeExistingProject = shouldMergeIntoExistingLatest(for: assistant, in: viewModel.messages)
 
         DispatchQueue.global(qos: .utility).async {
             let result = Result {
                 try FrontendProjectBuilder.buildProject(
                     from: sourceAssistant,
                     mode: .overwriteLatestProject,
-                    useParseCache: false
+                    useParseCache: false,
+                    mergeExistingProject: shouldMergeExistingProject
                 )
             }
             DispatchQueue.main.async {
@@ -1599,6 +1601,20 @@ struct ChatScreen: View {
         }
 
         return false
+    }
+
+    private func shouldMergeIntoExistingLatest(for assistant: ChatMessage, in messages: [ChatMessage]) -> Bool {
+        guard let index = messages.firstIndex(where: { $0.id == assistant.id }), index > 0 else {
+            return false
+        }
+        let prefix = messages[..<index]
+        guard let latestUser = prefix.last(where: { $0.role == .user }) else {
+            return false
+        }
+        guard recentConversationContainsProjectContext(in: prefix) else {
+            return false
+        }
+        return looksLikeProjectFollowupEdit(latestUser.content)
     }
 
     private func assistantContainsExplicitProjectPayload(_ assistant: ChatMessage) -> Bool {

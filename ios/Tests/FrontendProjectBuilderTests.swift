@@ -442,6 +442,62 @@ final class FrontendProjectBuilderTests: XCTestCase {
         )
     }
 
+    func testBuildProjectSynthesizesRequirementsForThirdPartyPythonImports() throws {
+        let message = ChatMessage(
+            role: .assistant,
+            content: """
+            ```python
+            import requests
+            from bs4 import BeautifulSoup
+
+            print("ok")
+            ```
+            """
+        )
+
+        let result = try FrontendProjectBuilder.buildProject(from: message, mode: .createNewProject)
+        let requirementsURL = result.projectDirectoryURL.appendingPathComponent("requirements.txt")
+        let requirements = try String(contentsOf: requirementsURL, encoding: .utf8).lowercased()
+
+        XCTAssertTrue(result.writtenRelativePaths.contains("requirements.txt"))
+        XCTAssertTrue(requirements.contains("requests"))
+        XCTAssertTrue(requirements.contains("beautifulsoup4"))
+    }
+
+    func testOverwriteLatestProjectDoesNotCarryOldFilesWhenMergeDisabled() throws {
+        let initial = ChatMessage(
+            role: .assistant,
+            content: """
+            [[file:requirements.txt]]
+            requests==2.31.0
+            [[endfile]]
+            """
+        )
+        _ = try FrontendProjectBuilder.buildProject(from: initial, mode: .overwriteLatestProject)
+
+        let replacement = ChatMessage(
+            role: .assistant,
+            content: """
+            [[file:main.py]]
+            print("fresh")
+            [[endfile]]
+            """
+        )
+        let result = try FrontendProjectBuilder.buildProject(
+            from: replacement,
+            mode: .overwriteLatestProject,
+            mergeExistingProject: false
+        )
+
+        XCTAssertTrue(result.writtenRelativePaths.contains("main.py"))
+        XCTAssertFalse(result.writtenRelativePaths.contains("requirements.txt"))
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: result.projectDirectoryURL.appendingPathComponent("requirements.txt").path
+            )
+        )
+    }
+
     func testHasExplicitProjectPayloadRejectsPlainMarkdownFence() {
         let message = ChatMessage(
             role: .assistant,
