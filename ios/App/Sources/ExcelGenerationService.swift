@@ -190,7 +190,7 @@ final class ExcelGenerationService {
             }
         }
 
-        if collected.isEmpty {
+        if collected.isEmpty, !looksLikeMarkupDocument(normalizedText) {
             let parsedCSV = parseDelimitedTable(normalizedText, delimiter: ",")
             if let normalized = normalizeSheet(
                 preferredName: preferredName.isEmpty ? "表1" : preferredName,
@@ -201,7 +201,7 @@ final class ExcelGenerationService {
             }
         }
 
-        if collected.isEmpty {
+        if collected.isEmpty, !looksLikeMarkupDocument(normalizedText) {
             let parsedTSV = parseDelimitedTable(normalizedText, delimiter: "\t")
             if let normalized = normalizeSheet(
                 preferredName: preferredName.isEmpty ? "表1" : preferredName,
@@ -393,6 +393,8 @@ final class ExcelGenerationService {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         guard !lines.isEmpty else { return ([], []) }
+        guard lines.count >= 2 else { return ([], []) }
+        guard lines.first?.contains(delimiter) == true else { return ([], []) }
 
         let parsedRows = lines.map { line in
             line
@@ -400,8 +402,27 @@ final class ExcelGenerationService {
                 .map { clippedCell(String($0)) }
         }
         guard let first = parsedRows.first else { return ([], []) }
+        guard first.count >= 2 else { return ([], []) }
+
+        let rowsWithDelimiter = lines.filter { $0.contains(delimiter) }.count
+        guard rowsWithDelimiter >= 2 else { return ([], []) }
+
+        let matchingColumnRows = parsedRows.filter { $0.count == first.count }.count
+        guard matchingColumnRows >= 2 else { return ([], []) }
+
         let dataRows = parsedRows.dropFirst().map(Array.init)
         return (headers: first, rows: dataRows)
+    }
+
+    private static func looksLikeMarkupDocument(_ text: String) -> Bool {
+        let lowered = text.lowercased()
+        return lowered.contains("<!doctype html")
+            || lowered.contains("<html")
+            || lowered.contains("<body")
+            || lowered.contains("<head")
+            || lowered.contains("<?xml")
+            || lowered.contains("<svg")
+            || lowered.contains("<?php")
     }
 
     private static func deduplicateSheets(_ sheets: [Sheet]) -> [Sheet] {
