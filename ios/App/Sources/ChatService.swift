@@ -18,6 +18,11 @@ struct ChatReply: Equatable {
 }
 
 struct ChatRequestBuilder {
+    enum PromptProfile {
+        case full
+        case lightweightProject
+    }
+
     private static let iexaIdentitySystemPrompt = """
     你是 IEXA，一款面向代码、终端和文件任务的智能助手。只有当用户问你“你是谁/你叫什么”或明确要求自我介绍时，才显式说你叫 IEXA；其余正常任务回复里不要反复强调名称，也不要把“我是 IEXA”当作默认开场。
     默认回答风格请接近 Open Minis / ChatGPT 的轻量 agent 体验：
@@ -101,7 +106,8 @@ struct ChatRequestBuilder {
         message: ChatMessage,
         realtimeSystemContext: String? = nil,
         memorySystemContext: String? = nil,
-        extraSystemPrompts: [String] = []
+        extraSystemPrompts: [String] = [],
+        promptProfile: PromptProfile = .full
     ) throws -> URLRequest {
         let completionURL = config.chatCompletionsURLString
         guard let url = URL(string: completionURL), !completionURL.isEmpty else {
@@ -123,7 +129,8 @@ struct ChatRequestBuilder {
             message: message,
             realtimeSystemContext: realtimeSystemContext,
             memorySystemContext: memorySystemContext,
-            extraSystemPrompts: extraSystemPrompts
+            extraSystemPrompts: extraSystemPrompts,
+            promptProfile: promptProfile
         )
 
         let payload: [String: Any] = [
@@ -142,7 +149,8 @@ struct ChatRequestBuilder {
         message: ChatMessage,
         realtimeSystemContext: String? = nil,
         memorySystemContext: String? = nil,
-        extraSystemPrompts: [String] = []
+        extraSystemPrompts: [String] = [],
+        promptProfile: PromptProfile = .full
     ) -> [[String: Any]] {
         buildMessagesWithIdentity(
             history: history,
@@ -152,7 +160,8 @@ struct ChatRequestBuilder {
             frontendAutoBuildEnabled: true,
             enabledBuiltinSkillIDs: config.enabledBuiltinSkillIDs,
             customBuiltinSkillPrompts: config.customBuiltinSkillPrompts,
-            extraSystemPrompts: extraSystemPrompts
+            extraSystemPrompts: extraSystemPrompts,
+            promptProfile: promptProfile
         )
     }
 
@@ -164,7 +173,8 @@ struct ChatRequestBuilder {
         frontendAutoBuildEnabled: Bool,
         enabledBuiltinSkillIDs: [String],
         customBuiltinSkillPrompts: [String: String],
-        extraSystemPrompts: [String]
+        extraSystemPrompts: [String],
+        promptProfile: PromptProfile
     ) -> [[String: Any]] {
         let hasSystemMessage = history.contains { $0.role == .system } || message.role == .system
         var prefix: [[String: Any]] = []
@@ -176,7 +186,7 @@ struct ChatRequestBuilder {
         }
 
         let trimmedRealtimeContext = realtimeSystemContext?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedRealtimeContext.isEmpty {
+        if promptProfile == .full, !trimmedRealtimeContext.isEmpty {
             prefix.append([
                 "role": "system",
                 "content": trimmedRealtimeContext
@@ -184,14 +194,15 @@ struct ChatRequestBuilder {
         }
 
         let trimmedMemoryContext = memorySystemContext?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedMemoryContext.isEmpty {
+        if promptProfile == .full, !trimmedMemoryContext.isEmpty {
             prefix.append([
                 "role": "system",
                 "content": trimmedMemoryContext
             ])
         }
 
-        if shouldInjectLatestProjectContext(message: message, history: history),
+        if promptProfile == .full,
+           shouldInjectLatestProjectContext(message: message, history: history),
            let latestProjectContext = FrontendProjectBuilder.latestProjectConversationContext(),
            !latestProjectContext.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             prefix.append([
@@ -225,14 +236,16 @@ struct ChatRequestBuilder {
             ])
         }
 
-        if shouldInjectExecutionTaskPrompt(message: message, history: history) {
+        if promptProfile == .full,
+           shouldInjectExecutionTaskPrompt(message: message, history: history) {
             prefix.append([
                 "role": "system",
                 "content": executionTaskSystemPrompt
             ])
         }
 
-        if shouldInjectBundledAgentContext(message: message, history: history) {
+        if promptProfile == .full,
+           shouldInjectBundledAgentContext(message: message, history: history) {
             if let memory = BundledAgentContextProvider.memoryContext() {
                 prefix.append([
                     "role": "system",
@@ -256,22 +269,40 @@ struct ChatRequestBuilder {
             ])
         }
 
-        for skill in enabledBuiltinSkills(from: enabledBuiltinSkillIDs) {
-            guard shouldInjectBuiltinSkillPrompt(skill: skill, userMessage: message) else {
-                continue
+        if promptProfile == .full {
+            for skill in enabledBuiltinSkills(from: enabledBuiltinSkillIDs) {
+                guard shouldInjectBuiltinSkillPrompt(skill: skill, userMessage: message) else {
+                    continue
+                }
+                let content = resolvedSkillPrompt(
+                    for: skill,
+                    customBuiltinSkillPrompts: customBuiltinSkillPrompts
+                )
+                prefix.append([
+                    "role": "system",
+                    "content": content
+                ])
             }
-            let content = resolvedSkillPrompt(
-                for: skill,
-                customBuiltinSkillPrompts: customBuiltinSkillPrompts
-            )
-            prefix.append([
-                "role": "system",
-                "content": content
-            ])
         }
 
         let compactHistory = compactHistoryForRequest(history)
         return prefix + compactHistory.map(\.apiPayload) + [message.apiPayload]
+    }
+
+    static func shouldUseLightweightProjectRetry(
+        config: ChatConfig,
+        history: [ChatMessage],
+        message: ChatMessage
+    ) -> Bool {
+        guard config.endpointMode == .chatCompletions || config.endpointMode == .responses else { return false }
+        guard message.role == .user else { return false }
+
+        return shouldInjectFrontendAutoBuildPrompt(
+            enabled: true,
+            message: message,
+            history: history
+        ) || shouldInjectLatestProjectContext(message: message, history: history)
+            || shouldInjectExecutionTaskPrompt(message: message, history: history)
     }
 
     private static func enabledBuiltinSkills(from ids: [String]) -> [BuiltinAISkill] {
@@ -844,6 +875,7 @@ struct ChatRequestBuilder {
     ) -> Bool {
         guard message.role == .user else { return false }
         guard config.endpointMode == .chatCompletions || config.endpointMode == .responses else { return false }
+        if isLikelyToolLoopIncompatibleProvider(config: config) { return false }
 
         switch config.resolvedProviderMode {
         case .anthropic, .gemini:
@@ -879,6 +911,22 @@ struct ChatRequestBuilder {
             return true
         }
 
+        return false
+    }
+
+    private static func isLikelyToolLoopIncompatibleProvider(config: ChatConfig) -> Bool {
+        let loweredModel = config.model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let loweredBase = config.normalizedBaseURL.lowercased()
+
+        if loweredModel.contains("qwen") {
+            return true
+        }
+        if loweredBase.contains("dashscope")
+            || loweredBase.contains("aliyun")
+            || loweredBase.contains("alibaba")
+            || loweredBase.contains("qwen") {
+            return true
+        }
         return false
     }
 
@@ -1271,14 +1319,16 @@ final class ChatService {
                 config: config,
                 history: history,
                 message: message,
-                onEvent: onEvent
+                onEvent: onEvent,
+                promptProfile: .full
             )
         case .responses:
             return try await sendResponses(
                 config: config,
                 history: history,
                 message: message,
-                onEvent: onEvent
+                onEvent: onEvent,
+                promptProfile: .full
             )
         case .imageGenerations:
             return try await sendImageGeneration(
@@ -1715,7 +1765,7 @@ final class ChatService {
 
         switch serviceError {
         case .httpError(let code):
-            return [400, 404, 405, 415, 422, 429, 500, 501, 502, 503, 504].contains(code)
+            return [400, 403, 404, 405, 415, 422, 429, 500, 501, 502, 503, 504].contains(code)
         case .invalidResponse, .noData:
             return true
         case .invalidInput, .invalidURL, .unsupported:
@@ -1727,20 +1777,26 @@ final class ChatService {
         config: ChatConfig,
         history: [ChatMessage],
         message: ChatMessage,
-        onEvent: @escaping @Sendable (StreamChunk) -> Void
+        onEvent: @escaping @Sendable (StreamChunk) -> Void,
+        promptProfile: ChatRequestBuilder.PromptProfile
     ) async throws -> ChatReply {
         let memoryContext: String?
-        if config.memoryModeEnabled {
+        if promptProfile == .full, config.memoryModeEnabled {
             await memoryStore.remember(message)
             memoryContext = await memoryStore.buildSystemContext()
         } else {
             memoryContext = nil
         }
 
-        let realtimeContext = await realtimeContextProvider.buildSystemContext(
-            config: config,
-            userPrompt: message.copyableText
-        )
+        let realtimeContext: String?
+        if promptProfile == .full {
+            realtimeContext = await realtimeContextProvider.buildSystemContext(
+                config: config,
+                userPrompt: message.copyableText
+            )
+        } else {
+            realtimeContext = nil
+        }
 
         if config.streamEnabled {
             do {
@@ -1750,31 +1806,87 @@ final class ChatService {
                     message: message,
                     realtimeSystemContext: realtimeContext,
                     memorySystemContext: memoryContext,
-                    onEvent: onEvent
+                    onEvent: onEvent,
+                    promptProfile: promptProfile
                 )
             } catch {
-                if shouldFallbackResponsesStreamError(error) {
-                    return try await sendResponsesNonStreaming(
+                if shouldRetryWithLightweightProjectProfile(
+                    error: error,
+                    config: config,
+                    history: history,
+                    message: message,
+                    promptProfile: promptProfile
+                ) {
+                    return try await sendResponses(
                         config: config,
                         history: history,
                         message: message,
-                        realtimeSystemContext: realtimeContext,
-                        memorySystemContext: memoryContext,
-                        onEvent: onEvent
+                        onEvent: onEvent,
+                        promptProfile: .lightweightProject
                     )
+                }
+                if shouldFallbackResponsesStreamError(error) {
+                    do {
+                        return try await sendResponsesNonStreaming(
+                            config: config,
+                            history: history,
+                            message: message,
+                            realtimeSystemContext: realtimeContext,
+                            memorySystemContext: memoryContext,
+                            onEvent: onEvent,
+                            promptProfile: promptProfile
+                        )
+                    } catch {
+                        if shouldRetryWithLightweightProjectProfile(
+                            error: error,
+                            config: config,
+                            history: history,
+                            message: message,
+                            promptProfile: promptProfile
+                        ) {
+                            return try await sendResponses(
+                                config: config,
+                                history: history,
+                                message: message,
+                                onEvent: onEvent,
+                                promptProfile: .lightweightProject
+                            )
+                        }
+                        throw error
+                    }
                 }
                 throw error
             }
         }
 
-        return try await sendResponsesNonStreaming(
-            config: config,
-            history: history,
-            message: message,
-            realtimeSystemContext: realtimeContext,
-            memorySystemContext: memoryContext,
-            onEvent: onEvent
-        )
+        do {
+            return try await sendResponsesNonStreaming(
+                config: config,
+                history: history,
+                message: message,
+                realtimeSystemContext: realtimeContext,
+                memorySystemContext: memoryContext,
+                onEvent: onEvent,
+                promptProfile: promptProfile
+            )
+        } catch {
+            if shouldRetryWithLightweightProjectProfile(
+                error: error,
+                config: config,
+                history: history,
+                message: message,
+                promptProfile: promptProfile
+            ) {
+                return try await sendResponses(
+                    config: config,
+                    history: history,
+                    message: message,
+                    onEvent: onEvent,
+                    promptProfile: .lightweightProject
+                )
+            }
+            throw error
+        }
     }
 
     private func sendResponsesStreaming(
@@ -1783,7 +1895,8 @@ final class ChatService {
         message: ChatMessage,
         realtimeSystemContext: String?,
         memorySystemContext: String?,
-        onEvent: @escaping @Sendable (StreamChunk) -> Void
+        onEvent: @escaping @Sendable (StreamChunk) -> Void,
+        promptProfile: ChatRequestBuilder.PromptProfile
     ) async throws -> ChatReply {
         var request = try ChatRequestBuilder.makeResponsesRequest(
             config: config,
@@ -1792,6 +1905,8 @@ final class ChatService {
             realtimeSystemContext: realtimeSystemContext,
             memorySystemContext: memorySystemContext,
             stream: true
+            ,
+            promptProfile: promptProfile
         )
         request.timeoutInterval = max(config.timeout, 90)
 
@@ -1935,7 +2050,8 @@ final class ChatService {
         message: ChatMessage,
         realtimeSystemContext: String?,
         memorySystemContext: String?,
-        onEvent: @escaping @Sendable (StreamChunk) -> Void
+        onEvent: @escaping @Sendable (StreamChunk) -> Void,
+        promptProfile: ChatRequestBuilder.PromptProfile
     ) async throws -> ChatReply {
         let request = try ChatRequestBuilder.makeResponsesRequest(
             config: config,
@@ -1943,7 +2059,8 @@ final class ChatService {
             message: message,
             realtimeSystemContext: realtimeSystemContext,
             memorySystemContext: memorySystemContext,
-            stream: false
+            stream: false,
+            promptProfile: promptProfile
         )
 
         let (data, response) = try await withRetry { [self] in
@@ -2063,25 +2180,32 @@ final class ChatService {
         config: ChatConfig,
         history: [ChatMessage],
         message: ChatMessage,
-        onEvent: @escaping @Sendable (StreamChunk) -> Void
+        onEvent: @escaping @Sendable (StreamChunk) -> Void,
+        promptProfile: ChatRequestBuilder.PromptProfile
     ) async throws -> ChatReply {
         let memoryContext: String?
-        if config.memoryModeEnabled {
+        if promptProfile == .full, config.memoryModeEnabled {
             await memoryStore.remember(message)
             memoryContext = await memoryStore.buildSystemContext()
         } else {
             memoryContext = nil
         }
-        let realtimeContext = await realtimeContextProvider.buildSystemContext(
-            config: config,
-            userPrompt: message.copyableText
-        )
+        let realtimeContext: String?
+        if promptProfile == .full {
+            realtimeContext = await realtimeContextProvider.buildSystemContext(
+                config: config,
+                userPrompt: message.copyableText
+            )
+        } else {
+            realtimeContext = nil
+        }
         let request = try ChatRequestBuilder.makeRequest(
             config: config,
             history: history,
             message: message,
             realtimeSystemContext: realtimeContext,
-            memorySystemContext: memoryContext
+            memorySystemContext: memoryContext,
+            promptProfile: promptProfile
         )
 
         if config.streamEnabled {
@@ -2200,6 +2324,21 @@ final class ChatService {
                 return ChatReply(text: mergedText, imageAttachments: images, usage: latestUsage)
                 }
             } catch {
+                if shouldRetryWithLightweightProjectProfile(
+                    error: error,
+                    config: config,
+                    history: history,
+                    message: message,
+                    promptProfile: promptProfile
+                ) {
+                    return try await sendChatCompletions(
+                        config: config,
+                        history: history,
+                        message: message,
+                        onEvent: onEvent,
+                        promptProfile: .lightweightProject
+                    )
+                }
                 if !shouldFallbackChatCompletionsStreamError(error) {
                     throw error
                 }
@@ -2213,7 +2352,8 @@ final class ChatService {
             history: history,
             message: message,
             realtimeSystemContext: realtimeContext,
-            memorySystemContext: memoryContext
+            memorySystemContext: memoryContext,
+            promptProfile: promptProfile
         )
 
         let (data, response) = try await withRetry { [self] in
@@ -2250,6 +2390,28 @@ final class ChatService {
         let snapshotChunk = StreamChunk(rawLine: "", deltaText: reply.text, imageURLs: reply.imageAttachments.map(\.requestURLString), isDone: false)
         onEvent(snapshotChunk)
         return reply
+    }
+
+    private func shouldRetryWithLightweightProjectProfile(
+        error: Error,
+        config: ChatConfig,
+        history: [ChatMessage],
+        message: ChatMessage,
+        promptProfile: ChatRequestBuilder.PromptProfile
+    ) -> Bool {
+        guard promptProfile == .full else { return false }
+        guard ChatRequestBuilder.shouldUseLightweightProjectRetry(
+            config: config,
+            history: history,
+            message: message
+        ) else {
+            return false
+        }
+        guard let serviceError = error as? ChatServiceError else { return false }
+        if case .httpError(let code) = serviceError {
+            return code == 403
+        }
+        return false
     }
 
     private func sendImageGeneration(

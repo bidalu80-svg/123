@@ -13,6 +13,7 @@ struct IEXATaskLiveActivityWidget: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: IEXATaskActivityAttributes.self) { context in
             lockScreenView(context: context)
+                .widgetURL(deepLinkURL(from: context.state.deepLinkURLString))
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
@@ -28,10 +29,17 @@ struct IEXATaskLiveActivityWidget: Widget {
                         .font(.system(size: 13, weight: .semibold, design: .monospaced))
                 }
                 DynamicIslandExpandedRegion(.center) {
-                    Text(context.state.statusText)
-                        .font(.system(size: 14, weight: .medium))
-                        .lineLimit(2)
-                        .multilineTextAlignment(.center)
+                    VStack(spacing: 2) {
+                        Text(context.state.currentStepText)
+                            .font(.system(size: 14, weight: .semibold))
+                            .lineLimit(1)
+                            .multilineTextAlignment(.center)
+                        Text(context.state.statusText)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .multilineTextAlignment(.center)
+                    }
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     HStack(spacing: 8) {
@@ -41,6 +49,11 @@ struct IEXATaskLiveActivityWidget: Widget {
                         Text(context.state.isInBackground ? "后台继续中" : "前台进行中")
                             .font(.system(size: 12, weight: .semibold))
                         Spacer(minLength: 0)
+                        if context.state.stepCount > 0 {
+                            Text("\(max(1, context.state.stepIndex))/\(context.state.stepCount)")
+                                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                .foregroundStyle(.primary)
+                        }
                         Text(context.state.modelText)
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(.secondary)
@@ -51,12 +64,18 @@ struct IEXATaskLiveActivityWidget: Widget {
                 Image(systemName: context.state.isFinished ? "checkmark.circle.fill" : "hammer.circle.fill")
                     .foregroundStyle(context.state.isFinished ? .green : .blue)
             } compactTrailing: {
-                Text(context.attributes.startedAt, style: .timer)
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                if context.state.stepCount > 0 {
+                    Text("\(max(1, context.state.stepIndex))/\(context.state.stepCount)")
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                } else {
+                    Text(context.attributes.startedAt, style: .timer)
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                }
             } minimal: {
                 Image(systemName: context.state.isFinished ? "checkmark.circle.fill" : "hammer.circle.fill")
                     .foregroundStyle(context.state.isFinished ? .green : .blue)
             }
+            .widgetURL(deepLinkURL(from: context.state.deepLinkURLString))
         }
     }
 
@@ -82,7 +101,21 @@ struct IEXATaskLiveActivityWidget: Widget {
 
             Text(context.state.statusText)
                 .font(.system(size: 15, weight: .medium))
-                .lineLimit(3)
+                .lineLimit(2)
+
+            HStack(spacing: 8) {
+                Image(systemName: context.state.isFinished ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath.circle.fill")
+                    .foregroundStyle(context.state.isFinished ? .green : .blue)
+                Text(context.state.currentStepText)
+                    .font(.system(size: 14, weight: .semibold))
+                    .lineLimit(2)
+                Spacer(minLength: 0)
+                if context.state.stepCount > 0 {
+                    Text("步骤 \(max(1, context.state.stepIndex))/\(context.state.stepCount)")
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+            }
 
             HStack(spacing: 8) {
                 Capsule(style: .continuous)
@@ -100,5 +133,12 @@ struct IEXATaskLiveActivityWidget: Widget {
         .padding(16)
         .activityBackgroundTint(Color(.systemBackground))
         .activitySystemActionForegroundColor(.primary)
+        .widgetURL(deepLinkURL(from: context.state.deepLinkURLString))
+    }
+
+    private func deepLinkURL(from raw: String) -> URL? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return URL(string: trimmed)
     }
 }

@@ -638,6 +638,19 @@ final class ChatViewModel: ObservableObject {
         appendLog("聊天：已删除 1 条回复。")
     }
 
+    func openSessionFromDeepLink(_ rawSessionID: String?) {
+        if let rawSessionID,
+           let uuid = UUID(uuidString: rawSessionID),
+           sessions.contains(where: { $0.id == uuid }) {
+            selectSession(uuid)
+            return
+        }
+
+        if currentSessionID == nil, let first = sessions.first?.id {
+            selectSession(first)
+        }
+    }
+
     func loadDemoContent() {
         if config.apiURL.isEmpty {
             config.apiURL = ChatConfig.default.apiURL
@@ -1459,11 +1472,16 @@ final class ChatViewModel: ObservableObject {
         let modelText = config.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? "未指定模型"
             : config.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        let step = currentLiveActivityStep()
         let snapshot = TaskLiveActivitySnapshot(
             isRunning: isSending,
             phaseText: currentLiveActivityPhaseText(),
             statusText: currentLiveActivityStatusText(),
             modelText: modelText,
+            currentStepText: step.title,
+            stepIndex: step.index,
+            stepCount: step.count,
+            deepLinkURLString: currentLiveActivityDeepLinkURLString(),
             isInBackground: isAppInBackground
         )
         Task {
@@ -1497,6 +1515,48 @@ final class ChatViewModel: ObservableObject {
             return "IEXA 正在处理你的任务"
         }
         return "任务已结束"
+    }
+
+    private func currentLiveActivityStep() -> (title: String, index: Int, count: Int) {
+        let latestAssistantText = messages.last(where: { $0.role == .assistant })?.content ?? ""
+        let normalized = [
+            statusMessage.trimmingCharacters(in: .whitespacesAndNewlines),
+            latestAssistantText.components(separatedBy: "\n").last?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        ]
+        .filter { !$0.isEmpty }
+        .joined(separator: "\n")
+        .lowercased()
+
+        let stepMap: [(markers: [String], title: String, index: Int, count: Int)] = [
+            (["检查 latest 工作区状态", "查看 `", "列出", "读取"], "检查工作区", 1, 4),
+            (["初始化前端项目结构", "创建目录", "创建文件", "生成项目代码", "写入"], "生成文件", 2, 4),
+            (["运行验证", "测试", "编译", "本地验证 python", "运行 python"], "执行验证", 3, 4),
+            (["预览入口", "准备入口预览", "打开预览"], "预览结果", 4, 4)
+        ]
+
+        for item in stepMap {
+            if item.markers.contains(where: { normalized.contains($0.lowercased()) }) {
+                return (item.title, item.index, item.count)
+            }
+        }
+
+        switch chatState {
+        case .sending:
+            return ("准备请求模型", 1, 3)
+        case .streaming:
+            return ("生成回复内容", 2, 3)
+        case .idle:
+            return ("任务完成", 3, 3)
+        case .error:
+            return ("任务中断", 3, 3)
+        }
+    }
+
+    private func currentLiveActivityDeepLinkURLString() -> String {
+        if let currentSessionID {
+            return "iexa://chat?session=\(currentSessionID.uuidString)"
+        }
+        return "iexa://chat"
     }
 
     private func normalizedConfigForSave(_ input: ChatConfig) -> ChatConfig {
