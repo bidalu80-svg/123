@@ -222,6 +222,27 @@ final class FrontendProjectBuilderTests: XCTestCase {
         XCTAssertNil(FrontendProjectBuilder.latestEntryFileURL())
     }
 
+    func testPythonFileContainingEmbeddedHTMLIsNotPromotedToHtmlEntry() throws {
+        let message = ChatMessage(
+            role: .assistant,
+            content: """
+            [[file:crawler.py]]
+            SAMPLE_HTML = \"\"\"
+            <!doctype html>
+            <html><body>fixture</body></html>
+            \"\"\"
+            print(SAMPLE_HTML)
+            [[endfile]]
+            """
+        )
+
+        let result = try FrontendProjectBuilder.buildProject(from: message, mode: .createNewProject)
+
+        XCTAssertEqual(result.entryFileURL.lastPathComponent.lowercased(), "crawler.py")
+        XCTAssertFalse(result.writtenRelativePaths.contains("crawler.html"))
+        XCTAssertFalse(result.shouldAutoOpenPreview)
+    }
+
     func testCanGenerateProjectFromTaggedNonWebFileOutput() throws {
         let message = ChatMessage(
             role: .assistant,

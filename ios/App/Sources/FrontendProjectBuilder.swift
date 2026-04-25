@@ -223,12 +223,10 @@ enum FrontendProjectBuilder {
 
         let hasHTMLPath = uniquePaths.contains(where: { isHTMLPath($0) })
         let hasPHPPath = uniquePaths.contains(where: { isPHPPath($0) })
-        let hasHTMLLikeFile = parsed.contains(where: { looksLikeHTML($0.content) })
-        let hasPHPLikeFile = parsed.contains(where: { looksLikePHP($0.content) })
 
         return ChatProgressSnapshot(
             detectedFileCount: uniquePaths.count,
-            hasEntryHTML: hasHTMLPath || hasPHPPath || hasHTMLLikeFile || hasPHPLikeFile
+            hasEntryHTML: hasHTMLPath || hasPHPPath
         )
     }
 
@@ -253,8 +251,6 @@ enum FrontendProjectBuilder {
 
         let hasHTMLPath = uniquePaths.contains(where: { isHTMLPath($0) })
         let hasPHPPath = uniquePaths.contains(where: { isPHPPath($0) })
-        let hasHTMLLikeFile = parsed.contains(where: { looksLikeHTML($0.content) })
-        let hasPHPLikeFile = parsed.contains(where: { looksLikePHP($0.content) })
         let hasTaggedFile = containsTaggedFile(in: text)
         let hasFencedProjectBlock = containsLikelyProjectFencedBlock(in: text)
         let hasHTMLText = looksLikeHTML(text)
@@ -271,14 +267,15 @@ enum FrontendProjectBuilder {
             || hasHTMLText
             || hasPHPText
             || hasProjectAttachment
+        let hasInlinePreviewText = uniquePaths.isEmpty
+            && !hasProjectAttachment
+            && !hasTaggedFile
+            && (hasHTMLText || hasPHPText)
         let snapshot: ChatProgressSnapshot? = shouldRenderProgress ? ChatProgressSnapshot(
             detectedFileCount: uniquePaths.count,
             hasEntryHTML: hasHTMLPath
                 || hasPHPPath
-                || hasHTMLLikeFile
-                || hasPHPLikeFile
-                || hasHTMLText
-                || hasPHPText
+                || hasInlinePreviewText
         ) : nil
 
         if !message.isStreaming {
@@ -289,7 +286,6 @@ enum FrontendProjectBuilder {
 
     private static func fastStreamingChatProgressSnapshot(from message: ChatMessage) -> ChatProgressSnapshot? {
         let text = message.content.replacingOccurrences(of: "\r\n", with: "\n")
-        let lowered = text.lowercased()
         let taggedFileCount = max(0, text.components(separatedBy: "[[file:").count - 1)
         let pathHintCount = countProjectPathHints(in: text)
         let attachmentCount = message.fileAttachments.count
@@ -299,6 +295,12 @@ enum FrontendProjectBuilder {
         let hasFencedProjectBlock = containsLikelyProjectFencedBlock(in: text)
         let hasHTMLText = looksLikeHTML(text)
         let hasPHPText = looksLikePHP(text)
+        let taggedPaths = explicitTaggedPaths(in: text)
+        let attachmentPaths = message.fileAttachments.compactMap { attachment -> String? in
+            guard attachment.binaryBase64 == nil else { return nil }
+            return sanitizeRelativePath(attachment.fileName)?.lowercased()
+        }
+        let hasPreviewPath = (taggedPaths + attachmentPaths).contains(where: { isHTMLPath($0) || isPHPPath($0) })
         let hasProjectAttachment = message.fileAttachments.contains(where: {
             $0.binaryBase64 == nil
                 && sanitizeRelativePath($0.fileName) != nil
@@ -314,11 +316,8 @@ enum FrontendProjectBuilder {
 
         guard shouldRenderProgress else { return nil }
 
-        let hasEntryHTML =
-            lowered.contains("index.html")
-            || lowered.contains("index.php")
-            || hasHTMLText
-            || hasPHPText
+        let hasEntryHTML = hasPreviewPath
+            || (!hasTaggedFile && !hasProjectAttachment && (hasHTMLText || hasPHPText))
 
         return ChatProgressSnapshot(
             detectedFileCount: max(detectedFileCount, 1),
@@ -2582,6 +2581,7 @@ enum FrontendProjectBuilder {
         guard !orderedPaths.contains(where: { isHTMLPath($0) }) else { return }
         guard let candidatePath = orderedPaths.first(where: { path in
             guard let content = merged[path] else { return false }
+            guard isHTMLPromotionCandidatePath(path) else { return false }
             return looksLikeHTML(content)
         }) else {
             return
@@ -2601,6 +2601,23 @@ enum FrontendProjectBuilder {
         } else {
             orderedPaths.append(promotedPath)
         }
+    }
+
+    private static func isHTMLPromotionCandidatePath(_ path: String) -> Bool {
+        let lowered = path.lowercased()
+        if isHTMLPath(lowered) || isPHPPath(lowered) {
+            return true
+        }
+
+        let ext = (lowered as NSString).pathExtension
+        if ext.isEmpty {
+            return true
+        }
+
+        let genericTextExtensions: Set<String> = [
+            "txt", "text", "code", "log", "tmp"
+        ]
+        return genericTextExtensions.contains(ext)
     }
 
     private static func promotedHTMLPath(from rawPath: String) -> String {

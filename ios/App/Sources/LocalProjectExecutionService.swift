@@ -91,6 +91,7 @@ os.chdir(workspace)
 for candidate in [workspace, os.path.join(workspace, "src")]:
     if os.path.isdir(candidate) and candidate not in sys.path:
         sys.path.insert(0, candidate)
+
 """
     }
 
