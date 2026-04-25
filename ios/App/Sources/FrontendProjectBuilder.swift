@@ -582,9 +582,12 @@ enum FrontendProjectBuilder {
     static func buildProject(
         from message: ChatMessage,
         mode: BuildMode,
-        useParseCache: Bool = true
+        useParseCache: Bool = true,
+        mergeExistingProject: Bool = false
     ) throws -> BuildResult {
-        let existingProject = mode == .overwriteLatestProject ? existingLatestProjectSnapshot() : nil
+        let existingProject = (mode == .overwriteLatestProject && mergeExistingProject)
+            ? existingLatestProjectSnapshot()
+            : nil
         var parsedFiles = useParseCache
             ? extractProjectFiles(from: message)
             : extractProjectFilesWithoutCache(from: message)
@@ -628,6 +631,7 @@ enum FrontendProjectBuilder {
             throw BuildError.noFrontendContent
         }
 
+        synthesizePythonRequirementsIfNeeded(merged: &merged, orderedPaths: &orderedPaths)
         promoteHTMLLikeFilePathsIfNeeded(merged: &merged, orderedPaths: &orderedPaths)
 
         let hadNaturalPreviewEntry = orderedPaths.contains(where: { isPreviewEntryPath($0) })
@@ -898,6 +902,114 @@ enum FrontendProjectBuilder {
                 && !$0.hasPrefix("test_")
                 && !$0.hasSuffix("_test.py")
         })
+    }
+
+    private static func synthesizePythonRequirementsIfNeeded(
+        merged: inout [String: String],
+        orderedPaths: inout [String]
+    ) {
+        let loweredPaths = orderedPaths.map { $0.lowercased() }
+        let hasPythonFiles = loweredPaths.contains(where: { $0.hasSuffix(".py") })
+        guard hasPythonFiles else { return }
+
+        let hasDependencyManifest = loweredPaths.contains("requirements.txt")
+            || loweredPaths.contains("pyproject.toml")
+            || loweredPaths.contains("setup.py")
+            || loweredPaths.contains("pipfile")
+            || loweredPaths.contains("poetry.lock")
+        guard !hasDependencyManifest else { return }
+
+        let inferred = inferredPythonDependencies(from: merged)
+        guard !inferred.isEmpty else { return }
+
+        let requirementsPath = "requirements.txt"
+        let content = inferred.joined(separator: "\n")
+        merged[requirementsPath] = content
+        if !orderedPaths.contains(requirementsPath) {
+            orderedPaths.append(requirementsPath)
+        }
+    }
+
+    private static func inferredPythonDependencies(from files: [String: String]) -> [String] {
+        let packageMap: [String: String] = [
+            "requests": "requests",
+            "bs4": "beautifulsoup4",
+            "beautifulsoup4": "beautifulsoup4",
+            "lxml": "lxml",
+            "yaml": "pyyaml",
+            "pandas": "pandas",
+            "numpy": "numpy",
+            "aiohttp": "aiohttp",
+            "httpx": "httpx",
+            "selenium": "selenium",
+            "playwright": "playwright",
+            "PIL": "pillow",
+            "cv2": "opencv-python",
+            "sklearn": "scikit-learn",
+            "dotenv": "python-dotenv",
+            "dateutil": "python-dateutil",
+            "Crypto": "pycryptodome"
+        ]
+        let stdlibImports: Set<String> = [
+            "abc", "argparse", "asyncio", "base64", "collections", "concurrent", "contextlib",
+            "copy", "csv", "datetime", "decimal", "functools", "hashlib", "heapq", "html",
+            "http", "importlib", "inspect", "io", "itertools", "json", "logging", "math",
+            "multiprocessing", "os", "pathlib", "queue", "random", "re", "shutil", "signal",
+            "socket", "sqlite3", "statistics", "string", "subprocess", "sys", "tempfile",
+            "threading", "time", "traceback", "typing", "unittest", "urllib", "uuid",
+            "xml", "zipfile"
+        ]
+
+        var packages = Set<String>()
+        for (path, content) in files {
+            guard path.lowercased().hasSuffix(".py") else { continue }
+            let normalized = content.replacingOccurrences(of: "\r\n", with: "\n")
+            let lines = normalized.components(separatedBy: "\n")
+            for line in lines {
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.hasPrefix("#") || trimmed.isEmpty { continue }
+
+                if let match = firstRegexCapture(in: trimmed, pattern: #"^import\s+([A-Za-z_][A-Za-z0-9_\.]*)"#) {
+                    let root = match.components(separatedBy: ".").first ?? match
+                    if let package = mappedPythonDependency(rootImport: root, packageMap: packageMap, stdlibImports: stdlibImports) {
+                        packages.insert(package)
+                    }
+                }
+                if let match = firstRegexCapture(in: trimmed, pattern: #"^from\s+([A-Za-z_][A-Za-z0-9_\.]*)\s+import\s+"#) {
+                    let root = match.components(separatedBy: ".").first ?? match
+                    if let package = mappedPythonDependency(rootImport: root, packageMap: packageMap, stdlibImports: stdlibImports) {
+                        packages.insert(package)
+                    }
+                }
+            }
+        }
+
+        return packages.sorted()
+    }
+
+    private static func mappedPythonDependency(
+        rootImport: String,
+        packageMap: [String: String],
+        stdlibImports: Set<String>
+    ) -> String? {
+        guard !stdlibImports.contains(rootImport) else { return nil }
+        if let mapped = packageMap[rootImport] {
+            return mapped
+        }
+        let lowered = rootImport.lowercased()
+        guard !stdlibImports.contains(lowered) else { return nil }
+        return packageMap[lowered] ?? lowered
+    }
+
+    private static func firstRegexCapture(in text: String, pattern: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let nsText = text as NSString
+        let range = NSRange(location: 0, length: nsText.length)
+        guard let match = regex.firstMatch(in: text, range: range),
+              match.numberOfRanges > 1 else {
+            return nil
+        }
+        return nsText.substring(with: match.range(at: 1))
     }
 
     private static func extractProjectFiles(from message: ChatMessage) -> [ParsedWebFile] {
