@@ -41,6 +41,20 @@ final class ChatServiceTests: XCTestCase {
         XCTAssertEqual(messages.count, 3)
     }
 
+    func testBuildRequestSystemPromptAvoidsRepeatedSelfIntroduction() throws {
+        let config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
+        let requestMessage = ChatMessage(role: .user, content: "帮我修一下这个函数")
+
+        let request = try ChatRequestBuilder.makeRequest(config: config, history: [], message: requestMessage)
+        let payload = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+        let messages = try XCTUnwrap(json["messages"] as? [[String: Any]])
+        let firstSystem = try XCTUnwrap(messages.first?["content"] as? String)
+
+        XCTAssertTrue(firstSystem.contains("不要反复强调名称"))
+        XCTAssertTrue(firstSystem.contains("不要把“我是 IEXA”当作默认开场"))
+    }
+
     func testBuildRequestSupportsMultipleImageAttachments() throws {
         let config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: false)
         let attachments = [

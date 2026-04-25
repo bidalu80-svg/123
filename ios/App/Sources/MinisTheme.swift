@@ -91,7 +91,7 @@ enum MinisTheme {
     static let codeText = UIColor(red: 0.33, green: 0.95, blue: 0.58, alpha: 1)
     static let codeSecondaryText = UIColor(red: 0.82, green: 0.87, blue: 0.83, alpha: 1)
     static let codeComment = UIColor(red: 0.58, green: 0.69, blue: 0.61, alpha: 1)
-    static let assistantUIFont = UIFont.systemFont(ofSize: 17, weight: .regular)
+    static let assistantUIFont = UIFont.systemFont(ofSize: 17, weight: .medium)
     static let assistantStrongUIFont = UIFont.systemFont(ofSize: 17, weight: .semibold)
     static let composerUIFont = UIFont.systemFont(ofSize: 17, weight: .regular)
     static let codeUIFont = UIFont.monospacedSystemFont(ofSize: 15.5, weight: .medium)

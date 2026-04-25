@@ -223,31 +223,22 @@ enum MessageContentParser {
                 let codeStart = token.range.upperBound
                 if let fenceEnd = raw[codeStart...].range(of: "```") {
                     let block = String(raw[codeStart..<fenceEnd.lowerBound])
-                    let parsed = parseCodeBlock(block)
-                    if let table = parseDelimitedTableFromCode(language: parsed.0, content: parsed.1) {
-                        segments.append(.table(headers: table.headers, rows: table.rows))
-                    } else if !parsed.1.isEmpty {
-                        let inferredLanguage = inferCodeLanguage(language: parsed.0, content: parsed.1)
-                        if isLikelyStructuredCodeContent(languageHint: inferredLanguage ?? parsed.0, content: parsed.1) {
-                            segments.append(.code(language: inferredLanguage, content: parsed.1))
-                        } else {
-                            segments.append(contentsOf: parseTablesAndInlineImages(in: parsed.1))
-                        }
-                    }
+                    appendParsedCodeFenceSegments(
+                        parseCodeBlock(block),
+                        allowMixedNarrationSplit: true,
+                        to: &segments
+                    )
                     cursor = fenceEnd.upperBound
                 } else {
                     // Streaming unfinished fence: enter code module immediately.
                     let block = String(raw[codeStart...])
                     let parsed = parseCodeBlock(block)
-                    if let table = parseDelimitedTableFromCode(language: parsed.0, content: parsed.1) {
-                        segments.append(.table(headers: table.headers, rows: table.rows))
-                    } else if allowUnclosedFencedCode, !parsed.1.isEmpty {
-                        let inferredLanguage = inferCodeLanguage(language: parsed.0, content: parsed.1)
-                        if isLikelyStructuredCodeContent(languageHint: inferredLanguage ?? parsed.0, content: parsed.1) {
-                            segments.append(.code(language: inferredLanguage, content: parsed.1))
-                        } else {
-                            segments.append(contentsOf: parseTablesAndInlineImages(in: parsed.1))
-                        }
+                    if allowUnclosedFencedCode {
+                        appendParsedCodeFenceSegments(
+                            parsed,
+                            allowMixedNarrationSplit: true,
+                            to: &segments
+                        )
                     } else if !parsed.1.isEmpty {
                         let inferredLanguage = inferCodeLanguage(language: parsed.0, content: parsed.1)
                         let split = splitLikelyCodePrefix(
@@ -414,6 +405,36 @@ enum MessageContentParser {
 
         flushTextBuffer()
         return segments
+    }
+
+    private static func appendParsedCodeFenceSegments(
+        _ parsed: (String?, String),
+        allowMixedNarrationSplit: Bool,
+        to segments: inout [MessageSegment]
+    ) {
+        let (language, content) = parsed
+        guard !content.isEmpty else { return }
+
+        if let table = parseDelimitedTableFromCode(language: language, content: content) {
+            segments.append(.table(headers: table.headers, rows: table.rows))
+            return
+        }
+
+        let inferredLanguage = inferCodeLanguage(language: language, content: content)
+        let languageHint = inferredLanguage ?? language
+
+        if allowMixedNarrationSplit,
+           let mixedSplit = splitMixedCodeAndNarration(from: content, languageHint: languageHint) {
+            segments.append(.code(language: inferredLanguage, content: mixedSplit.code))
+            segments.append(contentsOf: parseTablesAndInlineImages(in: mixedSplit.remainder))
+            return
+        }
+
+        if isLikelyStructuredCodeContent(languageHint: languageHint, content: content) {
+            segments.append(.code(language: inferredLanguage, content: content))
+        } else {
+            segments.append(contentsOf: parseTablesAndInlineImages(in: content))
+        }
     }
 
     private static func parseInlineImagesAndImplicitCode(in text: String) -> [MessageSegment] {
@@ -945,6 +966,40 @@ enum MessageContentParser {
             .joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return (code, remainder)
+    }
+
+    private static func splitMixedCodeAndNarration(
+        from raw: String,
+        languageHint: String?
+    ) -> (code: String, remainder: String)? {
+        let split = splitLikelyCodePrefix(from: raw, languageHint: languageHint)
+        let code = split.code.trimmingCharacters(in: .whitespacesAndNewlines)
+        let remainder = split.remainder.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !code.isEmpty, !remainder.isEmpty else { return nil }
+        guard isLikelyStructuredCodeContent(languageHint: languageHint, content: code) else { return nil }
+        guard !isLikelyStructuredCodeContent(languageHint: languageHint, content: remainder) else { return nil }
+
+        let remainderLines = remainder
+            .components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !remainderLines.isEmpty else { return nil }
+        guard !remainderLines.allSatisfy({ isLikelyCodeCommentLine($0) }) else { return nil }
+
+        let naturalLineCount = remainderLines.reduce(into: 0) { count, line in
+            if looksLikeNaturalLanguageSentence(line) || isLikelyNaturalLanguageBullet(line) {
+                count += 1
+            }
+        }
+        guard naturalLineCount >= 1 else { return nil }
+        return (code, remainder)
+    }
+
+    private static func isLikelyCodeCommentLine(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let commentPrefixes = ["#", "//", "/*", "*", "--", "<!--", "///"]
+        return commentPrefixes.contains { trimmed.hasPrefix($0) }
     }
 
     private static func isLikelyCodeLeadInLine(_ text: String) -> Bool {

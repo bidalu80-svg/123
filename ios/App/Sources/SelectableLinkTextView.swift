@@ -781,9 +781,9 @@ struct SelectableLinkTextView: UIViewRepresentable {
             guard streamTimer == nil else { return }
             let timer = CADisplayLink(target: self, selector: #selector(handleStreamAnimationTick(_:)))
             if #available(iOS 15.0, *) {
-                timer.preferredFrameRateRange = CAFrameRateRange(minimum: 24, maximum: 45, preferred: 45)
+                timer.preferredFrameRateRange = CAFrameRateRange(minimum: 20, maximum: 20, preferred: 20)
             } else {
-                timer.preferredFramesPerSecond = 45
+                timer.preferredFramesPerSecond = 20
             }
             timer.add(to: .main, forMode: .common)
             streamTimer = timer
@@ -808,12 +808,12 @@ struct SelectableLinkTextView: UIViewRepresentable {
 
             let elapsed = streamLastTimestamp > 0
                 ? max(0, timer.timestamp - streamLastTimestamp)
-                : (1.0 / 45.0)
+                : 0.05
             streamLastTimestamp = timer.timestamp
 
             streamCharacterBudget += elapsed * streamingCharactersPerSecond(for: pendingStreamingSuffix.count)
             let budgetStep = Int(streamCharacterBudget.rounded(.down))
-            let step = max(1, min(6, budgetStep))
+            let step = max(1, min(5, budgetStep))
             streamCharacterBudget = max(0, streamCharacterBudget - Double(step))
             let chunk = consumeStreamingPrefix(maxCharacters: step)
             guard !chunk.isEmpty else { return }
@@ -830,32 +830,72 @@ struct SelectableLinkTextView: UIViewRepresentable {
 
         private func consumeStreamingPrefix(maxCharacters: Int) -> String {
             guard maxCharacters > 0, !pendingStreamingSuffix.isEmpty else { return "" }
+            let lookahead = 12
             let end = pendingStreamingSuffix.index(
                 pendingStreamingSuffix.startIndex,
-                offsetBy: maxCharacters,
+                offsetBy: min(pendingStreamingSuffix.count, maxCharacters + lookahead),
                 limitedBy: pendingStreamingSuffix.endIndex
             ) ?? pendingStreamingSuffix.endIndex
-            let prefix = String(pendingStreamingSuffix[..<end])
-            pendingStreamingSuffix.removeSubrange(..<end)
+            let candidate = String(pendingStreamingSuffix[..<end])
+            let minBreakDistance = min(8, maxCharacters)
+
+            if let newlineIndex = candidate.firstIndex(of: "\n"),
+               candidate.distance(from: candidate.startIndex, to: newlineIndex) >= minBreakDistance {
+                let chunkEnd = pendingStreamingSuffix.index(
+                    pendingStreamingSuffix.startIndex,
+                    offsetBy: candidate.distance(from: candidate.startIndex, to: candidate.index(after: newlineIndex))
+                )
+                let prefix = String(pendingStreamingSuffix[..<chunkEnd])
+                pendingStreamingSuffix.removeSubrange(..<chunkEnd)
+                return prefix
+            }
+
+            let breakScalars = CharacterSet(charactersIn: "。！？!?；;，,、：:")
+            var preferredIndex: String.Index?
+            for index in candidate.indices.reversed() {
+                let distance = candidate.distance(from: candidate.startIndex, to: index)
+                guard distance >= minBreakDistance else { break }
+                let scalars = candidate[index].unicodeScalars
+                if scalars.allSatisfy({ breakScalars.contains($0) }) {
+                    preferredIndex = candidate.index(after: index)
+                    break
+                }
+            }
+
+            if let preferredIndex {
+                let length = candidate.distance(from: candidate.startIndex, to: preferredIndex)
+                let chunkEnd = pendingStreamingSuffix.index(pendingStreamingSuffix.startIndex, offsetBy: length)
+                let prefix = String(pendingStreamingSuffix[..<chunkEnd])
+                pendingStreamingSuffix.removeSubrange(..<chunkEnd)
+                return prefix
+            }
+
+            let fallbackEnd = pendingStreamingSuffix.index(
+                pendingStreamingSuffix.startIndex,
+                offsetBy: min(maxCharacters, pendingStreamingSuffix.count),
+                limitedBy: pendingStreamingSuffix.endIndex
+            ) ?? pendingStreamingSuffix.endIndex
+            let prefix = String(pendingStreamingSuffix[..<fallbackEnd])
+            pendingStreamingSuffix.removeSubrange(..<fallbackEnd)
             return prefix
         }
 
         private func streamingCharactersPerSecond(for pendingCharacters: Int) -> Double {
             switch pendingCharacters {
             case 6_000...:
-                return 420
+                return 180
             case 3_000...:
-                return 320
-            case 1_600...:
-                return 250
-            case 800...:
-                return 190
-            case 320...:
                 return 140
+            case 1_600...:
+                return 110
+            case 800...:
+                return 84
+            case 320...:
+                return 60
             case 120...:
-                return 100
+                return 44
             default:
-                return 72
+                return 34
             }
         }
 
