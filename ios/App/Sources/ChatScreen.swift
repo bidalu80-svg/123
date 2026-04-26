@@ -150,6 +150,7 @@ struct ChatScreen: View {
     @State private var autoBuildInFlightAssistantIDs: Set<UUID> = []
     @State private var projectFormatRetryAttemptedUserIDs: Set<UUID> = []
     @State private var pythonSyntaxRetryAttemptedUserIDs: Set<UUID> = []
+    @State private var pythonValidationRetryAttemptedUserIDs: Set<UUID> = []
     @State private var composerMeasuredHeight: CGFloat = 0
     @State private var composerStableHeight: CGFloat = 58
     @State private var keyboardOverlapHeight: CGFloat = 0
@@ -1153,6 +1154,8 @@ struct ChatScreen: View {
         autoBuildEligibleAssistantIDs.formIntersection(currentAssistantIDs)
         autoBuildInFlightAssistantIDs.formIntersection(currentAssistantIDs)
         projectFormatRetryAttemptedUserIDs.formIntersection(currentUserIDs)
+        pythonSyntaxRetryAttemptedUserIDs.formIntersection(currentUserIDs)
+        pythonValidationRetryAttemptedUserIDs.formIntersection(currentUserIDs)
     }
 
     private func runAutoFrontendBuildIfNeeded(
@@ -1519,6 +1522,33 @@ struct ChatScreen: View {
                 )
                 FrontendProjectBuilder.saveLatestValidationResult(command: command, result: snapshot)
 
+                if snapshot.exitCode != 0,
+                   let sourceUserID {
+                    let retryInstruction = pythonValidationCorrectionInstruction(
+                        for: buildResult,
+                        command: command,
+                        validationOutput: snapshot.output
+                    )
+                    let shouldRetry = await MainActor.run { () -> Bool in
+                        guard !pythonValidationRetryAttemptedUserIDs.contains(sourceUserID) else {
+                            return false
+                        }
+                        pythonValidationRetryAttemptedUserIDs.insert(sourceUserID)
+                        latestProjectValidationState = ProjectValidationState(
+                            phase: .running,
+                            command: command,
+                            output: "检测到本地运行/测试失败，正在根据日志自动修正并重新生成…",
+                            exitCode: snapshot.exitCode
+                        )
+                        viewModel.statusMessage = "检测到本地运行失败，正在自动修正重试…"
+                        return true
+                    }
+                    if shouldRetry {
+                        await viewModel.regenerateLastAssistantReply(correctionInstruction: retryInstruction)
+                        return
+                    }
+                }
+
                 await MainActor.run {
                     if snapshot.exitCode == 0 {
                         latestProjectValidationState = ProjectValidationState(
@@ -1577,6 +1607,39 @@ struct ChatScreen: View {
         \(filesText)
 
         本地报错摘要：
+        \(errorSummary)
+        """
+    }
+
+    private func pythonValidationCorrectionInstruction(
+        for buildResult: FrontendProjectBuilder.BuildResult,
+        command: String,
+        validationOutput: String
+    ) -> String {
+        let pythonPaths = buildResult.writtenRelativePaths.filter { $0.lowercased().hasSuffix(".py") }
+        let filesText: String
+        if pythonPaths.isEmpty {
+            filesText = "- 请重新输出所有相关 Python 文件"
+        } else {
+            filesText = pythonPaths.map { "- \($0)" }.joined(separator: "\n")
+        }
+
+        let errorSummary = LocalProjectExecutionService.syntaxFailureSummary(from: validationOutput)
+        return """
+        [系统自动运行修正重试]
+        你上一轮生成的 Python 项目已经成功落盘，但在本地执行/测试时失败。请直接重答，并只输出修复后的项目文件载荷。
+        要求：
+        1) 保持原始目标不变，重点修复运行错误、测试失败、输出缺失、编码处理错误或状态码输出缺失。
+        2) 如果用户要的是单文件脚本，不要擅自改成 `unittest`、`test_runner.py` 或多文件测试工程，除非用户明确要求。
+        3) 若涉及网页请求，必须显式输出状态码，并正确处理响应编码，避免中文乱码。
+        4) 严格使用 `[[file:relative/path.py]] ... [[endfile]]` 输出完整文件。
+        5) 优先修复这些 Python 文件：
+        \(filesText)
+
+        本地执行命令：
+        \(command)
+
+        本地失败摘要：
         \(errorSummary)
         """
     }

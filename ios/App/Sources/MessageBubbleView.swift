@@ -3217,6 +3217,8 @@ struct MessageBubbleView: View {
         let revealID = attachment.requestURLString.isEmpty
             ? attachment.id.uuidString
             : attachment.requestURLString
+        let previewMaxWidth: CGFloat = message.role == .user ? 124 : 300
+        let previewMaxHeight: CGFloat = message.role == .user ? 124 : 900
 
         if let data = attachment.decodedImageData, let uiImage = UIImage(data: data) {
             GeneratedImageRevealCard(revealID: revealID) {
@@ -3224,7 +3226,7 @@ struct MessageBubbleView: View {
                     .resizable()
                     .scaledToFit()
             }
-                .frame(maxWidth: 300, maxHeight: 900, alignment: .leading)
+                .frame(maxWidth: previewMaxWidth, maxHeight: previewMaxHeight, alignment: .leading)
                 .onTapGesture {
                     openImagePreview(attachment)
                 }
@@ -3235,7 +3237,7 @@ struct MessageBubbleView: View {
             GeneratedImageRevealCard(revealID: revealID) {
                 RemoteImageView(urlString: urlString, apiKey: apiKey, baseURL: apiBaseURL)
             }
-                .frame(maxWidth: 300, maxHeight: 900, alignment: .leading)
+                .frame(maxWidth: previewMaxWidth, maxHeight: previewMaxHeight, alignment: .leading)
                 .onTapGesture {
                     openImagePreview(attachment)
                 }
