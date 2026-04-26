@@ -181,6 +181,7 @@ jobs:
 
       - name: Prepare build metadata
         run: |
+          echo "IEXA_BUILD_NUMBER=${GITHUB_RUN_NUMBER}" >> $GITHUB_ENV
           echo "IEXA_BUILD_GIT_SHA=${GITHUB_SHA}" >> $GITHUB_ENV
           echo "IEXA_BUILD_RUN_ID=${GITHUB_RUN_ID}" >> $GITHUB_ENV
           echo "IEXA_BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_ENV
@@ -201,6 +202,7 @@ jobs:
             -scheme ChatApp \
             -configuration Debug \
             -destination "platform=iOS Simulator,name=$SIM_NAME" \
+            CURRENT_PROJECT_VERSION="${IEXA_BUILD_NUMBER:-2}" \
             GOOGLE_CLIENT_ID="${GOOGLE_CLIENT_ID:-}" \
             GOOGLE_REVERSED_CLIENT_ID="${GOOGLE_REVERSED_CLIENT_ID:-}" \
             test
@@ -251,6 +253,7 @@ jobs:
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/ChatApp.xcarchive" \
             PRODUCT_BUNDLE_IDENTIFIER="${IOS_BUNDLE_ID:-com.chatapp.ios}" \
+            CURRENT_PROJECT_VERSION="${IEXA_BUILD_NUMBER:-2}" \
             IEXA_BUILD_GIT_SHA="${IEXA_BUILD_GIT_SHA:-local-dev}" \
             IEXA_BUILD_RUN_ID="${IEXA_BUILD_RUN_ID:-local}" \
             IEXA_BUILD_TIME="${IEXA_BUILD_TIME:-local-build}" \
