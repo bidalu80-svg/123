@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 struct ChatTokenUsage: Equatable {
     var inputTokens: Int
@@ -86,6 +87,16 @@ struct ChatRequestBuilder {
     - 如果是在继续修 bug / 继续实现功能，默认是在接手同一个项目继续推进。
     - 如果用户要求“测试运行结果”，优先让项目具备稳定可验证的测试，不要把真实外网调用当成默认成功标准。
     - 不要把普通问答硬包装成执行任务；与工作区无关时正常回答即可。
+    """
+    private static let mcpIntentRouterSystemPrompt = """
+    你正在充当 IEXA 内置的 MCP 风格意图路由智能体，目标是把用户的人话稳妥地翻译成动作，而不是机械按关键词响应。
+    工作方式：
+    - 优先理解用户真正想完成的目标，再决定是否需要查看文件、修改代码、删除目录、继续上一个项目或只是正常回答。
+    - 用户说“把这个删了 / 接着改 / 按刚才那个来 / 上一个项目继续 / 顺手修一下”时，要结合当前 latest 工作区、最近报错和上下文自动补足指代。
+    - 遇到模糊请求时，先做最安全且最可能正确的一步；只有在不同解释会造成明显后果差异时，才用一句很短的话澄清。
+    - 对删除、清空、覆盖类操作要缩小作用范围：能删文件就不要删整个项目，能改局部就不要重写整站。
+    - 如果系统已经给了 latest 工作区上下文或工具能力，就把它们当成真实环境来推理，不要假设用户需要重复描述文件结构。
+    - 输出风格保持自然，不要暴露“关键词触发”“规则命中”“路由判断”等内部术语。
     """
     private static let strictCodeOnlySystemPrompt = """
     当用户明确提出“只输出代码、不输出解释、保持逻辑不变、自动修复格式”时，必须严格执行：
@@ -241,6 +252,14 @@ struct ChatRequestBuilder {
             prefix.append([
                 "role": "system",
                 "content": executionTaskSystemPrompt
+            ])
+        }
+
+        if promptProfile == .full,
+           shouldInjectMCPIntentRouterPrompt(message: message, history: history) {
+            prefix.append([
+                "role": "system",
+                "content": mcpIntentRouterSystemPrompt
             ])
         }
 
@@ -764,6 +783,41 @@ struct ChatRequestBuilder {
         )
     }
 
+    private static func shouldInjectMCPIntentRouterPrompt(
+        message: ChatMessage,
+        history: [ChatMessage]
+    ) -> Bool {
+        guard message.role == .user else { return false }
+
+        let raw = message.copyableText
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard !raw.isEmpty else { return false }
+        if looksLikeGeneralChatRequest(raw) { return false }
+
+        if shouldInjectExecutionTaskPrompt(message: message, history: history) {
+            return true
+        }
+        if shouldInjectLatestProjectContext(message: message, history: history) {
+            return true
+        }
+        if shouldInjectFrontendAutoBuildPrompt(
+            enabled: true,
+            message: message,
+            history: history
+        ) {
+            return true
+        }
+
+        let naturalLanguageMarkers = [
+            "这个", "那个", "刚才", "上一个项目", "上个项目", "继续", "接着", "顺手",
+            "把它", "帮我改", "帮我修", "你看下", "说人话", "懂人话",
+            "this", "that", "keep going", "continue", "same project", "human language"
+        ]
+        return naturalLanguageMarkers.contains(where: { raw.contains($0) })
+    }
+
     private static func looksLikeGeneralChatRequest(_ raw: String) -> Bool {
         let markers = [
             "你是谁", "你叫什么", "介绍你自己", "介绍一下你自己", "详细介绍自己", "详细介绍你自己",
@@ -1117,7 +1171,7 @@ struct ChatRequestBuilder {
             throw ChatServiceError.invalidURL
         }
 
-        var request = URLRequest(url: url, timeoutInterval: config.timeout)
+        var request = URLRequest(url: url, timeoutInterval: max(config.timeout, 180))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
@@ -2033,6 +2087,7 @@ final class ChatService {
 
             var fullReplyParts: [String] = []
             var imageURLs = Set<String>()
+            var structuredImageURLs = Set<String>()
             var videoURLStrings = Set<String>()
             var citationURLs = Set<String>()
             var pendingDeltaParts: [String] = []
@@ -2103,6 +2158,10 @@ final class ChatService {
                     if let usage = extractTokenUsage(from: eventObject) {
                         latestUsage = usage
                     }
+                    let eventImages = extractImageReferences(from: eventObject, baseURL: config.normalizedBaseURL)
+                    if !eventImages.isEmpty {
+                        eventImages.forEach { structuredImageURLs.insert($0) }
+                    }
                     let videos = extractVideoAttachments(from: eventObject, baseURL: config.normalizedBaseURL)
                     if !videos.isEmpty {
                         videos.forEach { videoURLStrings.insert($0.requestURLString) }
@@ -2131,8 +2190,9 @@ final class ChatService {
             let fullReply = fullReplyParts.joined()
             let cleanedText = ResponseCleaner.cleanAssistantText(fullReply)
             let mergedText = mergeTextWithCitationURLs(cleanedText, citationURLs: Array(citationURLs))
-            let images = deduplicateImages(
-                imageURLs.map { ChatImageAttachment(dataURL: $0, mimeType: "image/*", remoteURL: $0) }
+            let images = makeImageAttachments(
+                from: Array(structuredImageURLs.isEmpty ? imageURLs : structuredImageURLs),
+                baseURL: config.normalizedBaseURL
             )
             let videos = deduplicateVideos(
                 videoURLStrings.map {
@@ -2194,9 +2254,7 @@ final class ChatService {
         let cleanedText = ResponseCleaner.cleanAssistantText(parsed.text)
         let mergedText = mergeTextWithCitationURLs(cleanedText, citationURLs: citationURLs)
         let usage = extractTokenUsage(from: object)
-        let images = deduplicateImages(
-            parsed.imageURLs.map { ChatImageAttachment(dataURL: $0, mimeType: "image/*", remoteURL: $0) }
-        )
+        let images = extractImageAttachments(from: object, baseURL: config.normalizedBaseURL)
         let videos = deduplicateVideos(extractVideoAttachments(from: object, baseURL: config.normalizedBaseURL))
 
         if mergedText.isEmpty && images.isEmpty && videos.isEmpty {
@@ -2332,6 +2390,7 @@ final class ChatService {
 
                 var fullReplyParts: [String] = []
                 var imageURLs = Set<String>()
+                var structuredImageURLs = Set<String>()
                 var citationURLs = Set<String>()
                 var pendingDeltaParts: [String] = []
                 var pendingDeltaCharacters = 0
@@ -2397,9 +2456,14 @@ final class ChatService {
                         chunk.imageURLs.forEach { pendingImageURLs.insert($0) }
                     }
 
-                    if let eventObject = parseJSONObjectFromSSELine(line),
-                       let usage = extractTokenUsage(from: eventObject) {
-                        latestUsage = usage
+                    if let eventObject = parseJSONObjectFromSSELine(line) {
+                        if let usage = extractTokenUsage(from: eventObject) {
+                            latestUsage = usage
+                        }
+                        let eventImages = extractImageReferences(from: eventObject, baseURL: config.normalizedBaseURL)
+                        if !eventImages.isEmpty {
+                            eventImages.forEach { structuredImageURLs.insert($0) }
+                        }
                     }
 
                     emitPending()
@@ -2424,7 +2488,10 @@ final class ChatService {
                 let fullReply = fullReplyParts.joined()
                 let cleaned = ResponseCleaner.cleanAssistantText(fullReply)
                 let mergedText = mergeTextWithCitationURLs(cleaned, citationURLs: Array(citationURLs))
-                let images = imageURLs.map { ChatImageAttachment(dataURL: $0, mimeType: "image/*", remoteURL: $0) }
+                let images = makeImageAttachments(
+                    from: Array(structuredImageURLs.isEmpty ? imageURLs : structuredImageURLs),
+                    baseURL: config.normalizedBaseURL
+                )
                 if mergedText.isEmpty && images.isEmpty {
                     throw ChatServiceError.noData
                 }
@@ -2485,9 +2552,7 @@ final class ChatService {
         let usage = extractTokenUsage(from: object)
         let reply = ChatReply(
             text: mergeTextWithCitationURLs(cleanedText, citationURLs: citationURLs),
-            imageAttachments: deduplicateImages(
-                parsed.imageURLs.map { ChatImageAttachment(dataURL: $0, mimeType: "image/*", remoteURL: $0) }
-            ),
+            imageAttachments: extractImageAttachments(from: object, baseURL: config.normalizedBaseURL),
             usage: usage
         )
         if reply.text.isEmpty && reply.imageAttachments.isEmpty {
@@ -2556,24 +2621,29 @@ final class ChatService {
                     throw ChatServiceError.noData
                 }
 
-                let parsed = StreamParser.extractPayload(from: object)
-                let images = deduplicateImages(
-                    parsed.imageURLs.map { ChatImageAttachment(dataURL: $0, mimeType: "image/*", remoteURL: $0) }
-                )
-                guard !images.isEmpty else {
+                let images = extractImageAttachments(from: object, baseURL: attempt.config.normalizedBaseURL)
+                if images.isEmpty {
+                    let taskID = extractImageTaskID(from: object)
+                    if let pollURL = resolveImagePollURL(from: object, taskID: taskID, config: attempt.config) {
+                        onEvent(
+                            StreamChunk(
+                                rawLine: "",
+                                deltaText: "图片任务已提交，正在生成…",
+                                imageURLs: [],
+                                isDone: false
+                            )
+                        )
+                        return try await pollImageGeneration(
+                            config: attempt.config,
+                            pollURLString: pollURL,
+                            taskID: taskID,
+                            onEvent: onEvent
+                        )
+                    }
                     throw ChatServiceError.noData
                 }
 
-                let revisedPrompt = object["revised_prompt"] as? String
-                let parsedText = parsed.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                let text: String
-                if !parsedText.isEmpty {
-                    text = parsedText
-                } else if let revisedPrompt, !revisedPrompt.isEmpty {
-                    text = "优化提示词：\(revisedPrompt)"
-                } else {
-                    text = ""
-                }
+                let text = imageReplyText(from: object, fallbackCount: images.count)
 
                 onEvent(
                     StreamChunk(
@@ -2602,6 +2672,89 @@ final class ChatService {
         }
 
         throw lastError
+    }
+
+    private func pollImageGeneration(
+        config: ChatConfig,
+        pollURLString: String,
+        taskID: String?,
+        onEvent: @escaping @Sendable (StreamChunk) -> Void
+    ) async throws -> ChatReply {
+        let timeout = max(config.timeout, 180)
+        let deadline = Date().addingTimeInterval(timeout)
+        var statusURL = pollURLString
+        var lastStatusLine = ""
+        var attempts = 0
+
+        while Date() < deadline {
+            try Task.checkCancellation()
+
+            guard let statusRequest = makeAuthorizedGETRequest(
+                urlString: statusURL,
+                apiKey: config.apiKey,
+                timeoutInterval: min(max(config.timeout, 45), 120)
+            ) else {
+                throw ChatServiceError.invalidURL
+            }
+            let (data, response) = try await withRetry { [self] in
+                try await session.data(for: statusRequest)
+            }
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw ChatServiceError.invalidResponse
+            }
+            guard (200...299).contains(httpResponse.statusCode) else {
+                throw ChatServiceError.httpError(httpResponse.statusCode)
+            }
+
+            if let directImage = directImageAttachment(from: data, response: response) {
+                onEvent(StreamChunk(rawLine: "", deltaText: "\n图片生成完成。", imageURLs: [], isDone: false))
+                return ChatReply(text: "图片生成完成（1 张）", imageAttachments: [directImage])
+            }
+
+            guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw ChatServiceError.noData
+            }
+
+            let images = extractImageAttachments(from: object, baseURL: config.normalizedBaseURL)
+            let status = extractImageTaskStatus(from: object)
+            let progress = extractImageProgress(from: object)
+            let statusLine = readableImageStatusLine(status: status, progress: progress)
+            if !statusLine.isEmpty, statusLine != lastStatusLine {
+                onEvent(StreamChunk(rawLine: "", deltaText: "\n\(statusLine)", imageURLs: [], isDone: false))
+                lastStatusLine = statusLine
+            }
+
+            if let status, isImageTaskFailureStatus(status) {
+                let reason = extractImageFailureReason(from: object)
+                if let reason, !reason.isEmpty {
+                    throw ChatServiceError.invalidInput("图片生成失败：\(reason)")
+                }
+                throw ChatServiceError.invalidInput("图片生成失败（状态：\(status)）。")
+            }
+
+            if !images.isEmpty, status == nil || isImageTaskSuccessStatus(status ?? "") {
+                let text = imageReplyText(from: object, fallbackCount: images.count)
+                onEvent(StreamChunk(rawLine: "", deltaText: "\n图片生成完成。", imageURLs: [], isDone: false))
+                return ChatReply(text: text, imageAttachments: images)
+            }
+
+            if let status, isImageTaskSuccessStatus(status), images.isEmpty {
+                if attempts >= 1 {
+                    throw ChatServiceError.noData
+                }
+            }
+
+            if let nextURL = resolveImagePollURL(from: object, taskID: taskID, config: config) {
+                statusURL = nextURL
+            }
+
+            attempts += 1
+            let sleepSeconds = min(2.6, 1.4 + (Double(attempts) * 0.06))
+            try await Task.sleep(nanoseconds: UInt64(sleepSeconds * 1_000_000_000))
+        }
+
+        throw ChatServiceError.invalidInput("图片生成超时，请稍后重试。")
     }
 
     private func buildImageGenerationAttempts(
@@ -2664,7 +2817,7 @@ final class ChatService {
         case .invalidResponse, .noData:
             return true
         case .httpError(let status):
-            return [400, 404, 405, 415, 422, 429, 500, 501, 502, 503, 504].contains(status)
+            return [400, 404, 405, 408, 409, 415, 422, 425, 429, 500, 501, 502, 503, 504, 524].contains(status)
         case .invalidInput, .invalidURL, .unsupported:
             return false
         }
@@ -2822,6 +2975,419 @@ final class ChatService {
         }
 
         throw ChatServiceError.invalidInput("视频生成超时，请稍后重试。")
+    }
+
+    private func extractImageAttachments(from object: [String: Any], baseURL: String) -> [ChatImageAttachment] {
+        makeImageAttachments(
+            from: extractImageReferences(from: object, baseURL: baseURL),
+            baseURL: baseURL
+        )
+    }
+
+    private func makeImageAttachments(from rawReferences: [String], baseURL: String) -> [ChatImageAttachment] {
+        var result: [ChatImageAttachment] = []
+        var seen = Set<String>()
+
+        for raw in rawReferences {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+
+            if trimmed.hasPrefix("data:image") {
+                guard seen.insert(trimmed).inserted else { continue }
+                let mimeType = mimeTypeFromDataURL(trimmed) ?? "image/png"
+                result.append(ChatImageAttachment(dataURL: trimmed, mimeType: mimeType))
+                continue
+            }
+
+            guard let normalized = normalizeImageURL(trimmed, baseURL: baseURL),
+                  seen.insert(normalized).inserted else {
+                continue
+            }
+            result.append(ChatImageAttachment(dataURL: normalized, mimeType: "image/*", remoteURL: normalized))
+        }
+
+        return deduplicateImages(result)
+    }
+
+    private func extractImageReferences(from object: [String: Any], baseURL: String) -> [String] {
+        var collected: [String] = StreamParser.extractPayload(from: object).imageURLs
+        collectImageCandidates(in: object, keyPath: [], collected: &collected)
+
+        var normalized: [String] = []
+        var seen = Set<String>()
+        for raw in collected {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+
+            let candidate: String
+            if trimmed.hasPrefix("data:image") {
+                candidate = trimmed
+            } else if let resolved = normalizeImageURL(trimmed, baseURL: baseURL) {
+                candidate = resolved
+            } else {
+                continue
+            }
+
+            guard seen.insert(candidate).inserted else { continue }
+            normalized.append(candidate)
+        }
+        return normalized
+    }
+
+    private func collectImageCandidates(in node: Any, keyPath: [String], collected: inout [String]) {
+        if let dict = node as? [String: Any] {
+            for (rawKey, value) in dict {
+                let key = rawKey.lowercased()
+                let nextPath = keyPath + [key]
+
+                if let stringValue = value as? String {
+                    if shouldTreatAsImageReference(stringValue, key: key, path: nextPath) {
+                        collected.append(stringValue)
+                    }
+                } else if let nested = value as? [String: Any] {
+                    collectImageCandidates(in: nested, keyPath: nextPath, collected: &collected)
+                } else if let array = value as? [Any] {
+                    collectImageCandidates(in: array, keyPath: nextPath, collected: &collected)
+                }
+            }
+            return
+        }
+
+        if let array = node as? [Any] {
+            for item in array {
+                collectImageCandidates(in: item, keyPath: keyPath, collected: &collected)
+            }
+        }
+    }
+
+    private func shouldTreatAsImageReference(_ raw: String, key: String, path: [String]) -> Bool {
+        let cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return false }
+
+        if cleaned.hasPrefix("data:image") {
+            return true
+        }
+
+        let looksLikeURL = cleaned.hasPrefix("http://")
+            || cleaned.hasPrefix("https://")
+            || cleaned.hasPrefix("//")
+            || cleaned.hasPrefix("/")
+        guard looksLikeURL else { return false }
+
+        let lowerPath = path.joined(separator: ".")
+        if key.contains("status") || key.contains("poll") || key.contains("operation") || key.contains("task") {
+            return false
+        }
+        if lowerPath.contains("status_url")
+            || lowerPath.contains("poll_url")
+            || lowerPath.contains("operation_url")
+            || lowerPath.contains("task_url") {
+            return false
+        }
+
+        if isLikelyImageURL(cleaned) {
+            return true
+        }
+
+        if key.contains("image")
+            || key.contains("thumbnail")
+            || key.contains("preview")
+            || lowerPath.contains("image")
+            || lowerPath.contains("thumbnail")
+            || lowerPath.contains("preview") {
+            return true
+        }
+
+        return lowerPath.contains("data.url")
+            || lowerPath.contains("images.url")
+            || lowerPath.contains("output.url")
+            || lowerPath.contains("result.url")
+    }
+
+    private func isLikelyImageURL(_ raw: String) -> Bool {
+        let lowered = raw.lowercased()
+        let imageSuffixes = [
+            ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp",
+            ".svg", ".avif", ".heic", ".heif", ".tiff", ".ico"
+        ]
+        if imageSuffixes.contains(where: { lowered.contains($0) }) {
+            return true
+        }
+        if lowered.contains("mime=image/")
+            || lowered.contains("content-type=image/")
+            || lowered.contains("format=png")
+            || lowered.contains("format=jpg")
+            || lowered.contains("format=jpeg")
+            || lowered.contains("format=webp") {
+            return true
+        }
+        return false
+    }
+
+    private func normalizeImageURL(_ raw: String, baseURL: String) -> String? {
+        var cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        cleaned = cleaned.trimmingCharacters(in: CharacterSet(charactersIn: "<>\"'"))
+        cleaned = cleaned.replacingOccurrences(of: "\\/", with: "/")
+        cleaned = cleaned.replacingOccurrences(of: "&amp;", with: "&")
+        cleaned = cleaned.replacingOccurrences(of: "\\u0026", with: "&", options: .caseInsensitive)
+        cleaned = cleaned.replacingOccurrences(of: "\\u003d", with: "=", options: .caseInsensitive)
+        cleaned = cleaned.replacingOccurrences(of: "\\u003f", with: "?", options: .caseInsensitive)
+        cleaned = cleaned.replacingOccurrences(of: "\\u002b", with: "+", options: .caseInsensitive)
+        cleaned = cleaned.replacingOccurrences(of: "\\u0025", with: "%", options: .caseInsensitive)
+
+        if cleaned.hasPrefix("//") {
+            return "https:\(cleaned)"
+        }
+
+        if cleaned.hasPrefix("http://") || cleaned.hasPrefix("https://") || cleaned.hasPrefix("data:") {
+            return cleaned
+        }
+
+        let normalizedBase = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedBase.isEmpty, let base = URL(string: normalizedBase) else { return nil }
+        if let resolved = URL(string: cleaned, relativeTo: base)?.absoluteURL,
+           let scheme = resolved.scheme?.lowercased(),
+           scheme == "http" || scheme == "https" {
+            return resolved.absoluteString
+        }
+        return nil
+    }
+
+    private func mimeTypeFromDataURL(_ dataURL: String) -> String? {
+        guard dataURL.lowercased().hasPrefix("data:") else { return nil }
+        let header = dataURL
+            .split(separator: ",", maxSplits: 1)
+            .first
+            .map(String.init) ?? ""
+        let trimmed = header.replacingOccurrences(of: "data:", with: "")
+        return trimmed.components(separatedBy: ";").first
+    }
+
+    private func extractImageTaskID(from object: [String: Any]) -> String? {
+        let keys = ["task_id", "id", "job_id", "generation_id", "request_id", "operation_id"]
+        return firstStringValue(for: keys, in: object)
+    }
+
+    private func extractImageTaskStatus(from object: [String: Any]) -> String? {
+        let keys = ["status", "state", "task_status", "job_status", "operation_status"]
+        return firstStringValue(for: keys, in: object)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+    }
+
+    private func extractImageProgress(from object: [String: Any]) -> Int? {
+        let keyCandidates = ["progress", "percent", "percentage"]
+        if let number = firstNumberValue(for: keyCandidates, in: object) {
+            if number <= 1 {
+                return max(0, min(100, Int(number * 100)))
+            }
+            return max(0, min(100, Int(number)))
+        }
+        return nil
+    }
+
+    private func resolveImagePollURL(from object: [String: Any], taskID: String?, config: ChatConfig) -> String? {
+        let keys = ["status_url", "poll_url", "operation_url", "task_url"]
+        if let direct = firstStringValue(for: keys, in: object),
+           let normalized = normalizeImageURL(direct, baseURL: config.normalizedBaseURL) {
+            return normalized
+        }
+
+        guard let taskID, !taskID.isEmpty else { return nil }
+        let endpoint = config.imagesGenerationsURLString
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !endpoint.isEmpty else { return nil }
+
+        let encodedID = taskID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? taskID
+        return "\(endpoint)/\(encodedID)"
+    }
+
+    private func readableImageStatusLine(status: String?, progress: Int?) -> String {
+        let normalized = status?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if normalized.isEmpty {
+            if let progress {
+                return "图片生成中（\(progress)%）…"
+            }
+            return "图片生成中…"
+        }
+
+        if isImageTaskSuccessStatus(normalized) {
+            return "图片已生成，正在整理结果…"
+        }
+        if isImageTaskFailureStatus(normalized) {
+            return "图片生成失败（\(normalized)）"
+        }
+
+        if let progress {
+            return "图片生成中（\(progress)%）…"
+        }
+        return "图片生成状态：\(normalized)"
+    }
+
+    private func isImageTaskSuccessStatus(_ status: String) -> Bool {
+        let normalized = status.lowercased()
+        return normalized == "succeeded"
+            || normalized == "success"
+            || normalized == "completed"
+            || normalized == "done"
+            || normalized == "finished"
+            || normalized == "ready"
+    }
+
+    private func isImageTaskFailureStatus(_ status: String) -> Bool {
+        let normalized = status.lowercased()
+        return normalized == "failed"
+            || normalized == "error"
+            || normalized == "cancelled"
+            || normalized == "canceled"
+            || normalized == "rejected"
+            || normalized == "expired"
+    }
+
+    private func extractImageFailureReason(from object: [String: Any]) -> String? {
+        if let errorNode = object["error"] {
+            if let text = errorNode as? String, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return text.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            if let dict = errorNode as? [String: Any] {
+                let keys = ["message", "detail", "reason", "error_message"]
+                if let text = firstStringValue(for: keys, in: dict),
+                   !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return text.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            }
+        }
+
+        let keys = ["message", "detail", "reason", "error_message"]
+        if let text = firstStringValue(for: keys, in: object),
+           !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return nil
+    }
+
+    private func imageReplyText(from object: [String: Any], fallbackCount: Int) -> String {
+        let payloadText = StreamParser.extractPayload(from: object).text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !payloadText.isEmpty {
+            return payloadText
+        }
+
+        if let revisedPrompt = firstStringValue(for: ["revised_prompt"], in: object),
+           !revisedPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "优化提示词：\(revisedPrompt)"
+        }
+        return "图片生成完成（\(fallbackCount) 张）"
+    }
+
+    private func makeAuthorizedGETRequest(
+        urlString: String,
+        apiKey: String,
+        timeoutInterval: TimeInterval
+    ) -> URLRequest? {
+        guard let url = URL(string: urlString), !urlString.isEmpty else { return nil }
+        var request = URLRequest(url: url, timeoutInterval: timeoutInterval)
+        request.httpMethod = "GET"
+        request.setValue("application/json,image/*,*/*;q=0.8", forHTTPHeaderField: "Accept")
+
+        let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedAPIKey.isEmpty {
+            request.setValue("Bearer \(trimmedAPIKey)", forHTTPHeaderField: "Authorization")
+            request.setValue(trimmedAPIKey, forHTTPHeaderField: "x-api-key")
+            request.setValue(trimmedAPIKey, forHTTPHeaderField: "api-key")
+        }
+        return request
+    }
+
+    private func directImageAttachment(from data: Data, response: URLResponse) -> ChatImageAttachment? {
+        let mimeType = normalizeMIMEType(
+            (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type") ?? ""
+        )
+
+        if mimeType.contains("svg"),
+           let text = String(data: data, encoding: .utf8),
+           text.contains("<svg") {
+            return ChatImageAttachment(
+                dataURL: "data:image/svg+xml;base64,\(data.base64EncodedString())",
+                mimeType: "image/svg+xml"
+            )
+        }
+
+        if let image = UIImage(data: data) {
+            if let pngData = image.pngData() {
+                return ChatImageAttachment.fromImageData(pngData, mimeType: "image/png")
+            }
+            return ChatImageAttachment.fromImageData(data, mimeType: mimeType.isEmpty ? "image/png" : mimeType)
+        }
+
+        let sniffed = sniffImageMIMEType(data: data)
+        if let resolvedMIME = sniffed ?? (!mimeType.isEmpty ? mimeType : nil),
+           resolvedMIME.hasPrefix("image/") {
+            return ChatImageAttachment.fromImageData(data, mimeType: resolvedMIME)
+        }
+
+        return nil
+    }
+
+    private func normalizeMIMEType(_ raw: String) -> String {
+        raw
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .split(separator: ";", maxSplits: 1)
+            .first
+            .map(String.init) ?? ""
+    }
+
+    private func sniffImageMIMEType(data: Data) -> String? {
+        let bytes = [UInt8](data.prefix(16))
+        guard !bytes.isEmpty else { return nil }
+
+        if bytes.count >= 4 {
+            if bytes[0] == 0x89, bytes[1] == 0x50, bytes[2] == 0x4E, bytes[3] == 0x47 {
+                return "image/png"
+            }
+            if bytes[0] == 0xFF, bytes[1] == 0xD8, bytes[2] == 0xFF {
+                return "image/jpeg"
+            }
+            if bytes[0] == 0x47, bytes[1] == 0x49, bytes[2] == 0x46, bytes[3] == 0x38 {
+                return "image/gif"
+            }
+            if bytes[0] == 0x42, bytes[1] == 0x4D {
+                return "image/bmp"
+            }
+            if bytes[0] == 0x00, bytes[1] == 0x00, bytes[2] == 0x01, bytes[3] == 0x00 {
+                return "image/x-icon"
+            }
+        }
+
+        if bytes.count >= 12,
+           bytes[0] == 0x52, bytes[1] == 0x49, bytes[2] == 0x46, bytes[3] == 0x46,
+           bytes[8] == 0x57, bytes[9] == 0x45, bytes[10] == 0x42, bytes[11] == 0x50 {
+            return "image/webp"
+        }
+
+        if data.count >= 12 {
+            let box = data.subdata(in: 4..<8)
+            let brand = data.subdata(in: 8..<12)
+            if let boxName = String(data: box, encoding: .ascii),
+               boxName == "ftyp",
+               let brandName = String(data: brand, encoding: .ascii)?.lowercased() {
+                if brandName.hasPrefix("avif") || brandName.hasPrefix("avis") {
+                    return "image/avif"
+                }
+                if brandName.hasPrefix("heic")
+                    || brandName.hasPrefix("heix")
+                    || brandName.hasPrefix("hevc")
+                    || brandName.hasPrefix("hevx")
+                    || brandName.hasPrefix("mif1")
+                    || brandName.hasPrefix("msf1") {
+                    return "image/heic"
+                }
+            }
+        }
+
+        return nil
     }
 
     private func extractVideoAttachments(from object: [String: Any], baseURL: String) -> [ChatVideoAttachment] {

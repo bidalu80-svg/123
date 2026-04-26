@@ -3367,17 +3367,25 @@ struct MessageBubbleView: View {
         cleaned = cleaned.trimmingCharacters(in: CharacterSet(charactersIn: "<>\"'"))
         cleaned = cleaned.replacingOccurrences(of: "\\/", with: "/")
         cleaned = cleaned.replacingOccurrences(of: "&amp;", with: "&")
+        cleaned = cleaned.replacingOccurrences(of: "\\u0026", with: "&", options: .caseInsensitive)
+        cleaned = cleaned.replacingOccurrences(of: "\\u003d", with: "=", options: .caseInsensitive)
+        cleaned = cleaned.replacingOccurrences(of: "\\u003f", with: "?", options: .caseInsensitive)
+        cleaned = cleaned.replacingOccurrences(of: "\\u002b", with: "+", options: .caseInsensitive)
+        cleaned = cleaned.replacingOccurrences(of: "\\u0025", with: "%", options: .caseInsensitive)
         if cleaned.hasPrefix("//") {
             cleaned = "https:\(cleaned)"
         }
-        if cleaned.hasPrefix("/") {
-            let base = apiBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            if !base.isEmpty {
-                cleaned = "\(base)\(cleaned)"
-            }
-        }
         if cleaned.hasPrefix("http://") || cleaned.hasPrefix("https://") {
             return cleaned
+        }
+        let baseString = apiBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !baseString.isEmpty, let baseURL = URL(string: baseString) else {
+            return nil
+        }
+        if let resolved = URL(string: cleaned, relativeTo: baseURL)?.absoluteURL,
+           let scheme = resolved.scheme?.lowercased(),
+           scheme == "http" || scheme == "https" {
+            return resolved.absoluteString
         }
         return nil
     }

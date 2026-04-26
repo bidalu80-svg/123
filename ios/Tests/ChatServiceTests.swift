@@ -302,6 +302,7 @@ final class ChatServiceTests: XCTestCase {
 
         XCTAssertTrue(systemContents.contains(where: { $0.contains("[当前工作区上下文]") }))
         XCTAssertTrue(systemContents.contains(where: { $0.contains("当前任务更接近 agent 执行") }))
+        XCTAssertTrue(systemContents.contains(where: { $0.contains("MCP 风格意图路由智能体") }))
     }
 
     func testBuildImagesGenerationRequestUsesConfiguredEndpoint() throws {
@@ -319,6 +320,7 @@ final class ChatServiceTests: XCTestCase {
         XCTAssertEqual(json["model"] as? String, "gpt-image")
         XCTAssertEqual(json["prompt"] as? String, "a cat")
         XCTAssertEqual(json["size"] as? String, "1024x1024")
+        XCTAssertEqual(request.timeoutInterval, 180)
     }
 
     func testBuildImagesGenerationRequestUsesXAIShapeForGrokImagine() throws {
@@ -335,6 +337,89 @@ final class ChatServiceTests: XCTestCase {
         XCTAssertEqual(json["aspect_ratio"] as? String, "1:1")
         XCTAssertEqual(json["resolution"] as? String, "1k")
         XCTAssertNil(json["size"])
+    }
+
+    func testSendImageGenerationRetriesAfter524() async throws {
+        var config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-image", timeout: 30, streamEnabled: false)
+        config.endpointMode = .imageGenerations
+        config.imagesGenerationsPath = "/v1/images/generations"
+
+        var requestCount = 0
+        URLProtocolStub.handler = { request in
+            requestCount += 1
+            let url = try XCTUnwrap(request.url)
+            let response = try XCTUnwrap(
+                HTTPURLResponse(url: url, statusCode: requestCount == 1 ? 524 : 200, httpVersion: nil, headerFields: [
+                    "Content-Type": "application/json"
+                ])
+            )
+            let body = requestCount == 1
+                ? #"{"error":{"message":"gateway timeout"}}"#
+                : #"{"data":[{"url":"https://cdn.example.com/final.png"}],"revised_prompt":"a cat"}"#
+            return (response, Data(body.utf8))
+        }
+
+        let service = makeStubbedChatService()
+        let reply = try await service.sendMessage(
+            config: config,
+            history: [],
+            message: ChatMessage(role: .user, content: "a cat"),
+            onEvent: { _ in }
+        )
+
+        XCTAssertGreaterThanOrEqual(requestCount, 2)
+        XCTAssertEqual(reply.imageAttachments.first?.requestURLString, "https://cdn.example.com/final.png")
+    }
+
+    func testSendImageGenerationPollsAsyncTaskUntilImageReady() async throws {
+        var config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-image", timeout: 30, streamEnabled: false)
+        config.endpointMode = .imageGenerations
+        config.imagesGenerationsPath = "/v1/images/generations"
+
+        var requestedURLs: [String] = []
+        var streamedTexts: [String] = []
+        URLProtocolStub.handler = { request in
+            let url = try XCTUnwrap(request.url).absoluteString
+            requestedURLs.append(url)
+
+            if url == "https://example.com/v1/images/generations" {
+                let response = try XCTUnwrap(
+                    HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 202, httpVersion: nil, headerFields: [
+                        "Content-Type": "application/json"
+                    ])
+                )
+                let body = #"{"task_id":"img-task-1","status":"queued","status_url":"https://example.com/v1/images/generations/img-task-1"}"#
+                return (response, Data(body.utf8))
+            }
+
+            let response = try XCTUnwrap(
+                HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: [
+                    "Content-Type": "application/json"
+                ])
+            )
+            let body = #"{"status":"succeeded","data":[{"url":"https://cdn.example.com/final-polled.png"}],"revised_prompt":"a cat"}"#
+            return (response, Data(body.utf8))
+        }
+
+        let service = makeStubbedChatService()
+        let reply = try await service.sendMessage(
+            config: config,
+            history: [],
+            message: ChatMessage(role: .user, content: "a cat"),
+            onEvent: { chunk in
+                if !chunk.deltaText.isEmpty {
+                    streamedTexts.append(chunk.deltaText)
+                }
+            }
+        )
+
+        XCTAssertEqual(Array(requestedURLs.prefix(2)), [
+            "https://example.com/v1/images/generations",
+            "https://example.com/v1/images/generations/img-task-1"
+        ])
+        XCTAssertEqual(reply.imageAttachments.first?.requestURLString, "https://cdn.example.com/final-polled.png")
+        XCTAssertTrue(streamedTexts.contains(where: { $0.contains("图片任务已提交") }))
+        XCTAssertTrue(streamedTexts.contains(where: { $0.contains("图片生成完成") }))
     }
 
     func testBuildEmbeddingsRequestUsesConfiguredEndpoint() throws {
