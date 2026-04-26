@@ -41,8 +41,6 @@ targets:
       - path: App/Resources/PythonRuntime
         type: folder
     dependencies:
-      - target: IEXATaskLiveActivityExtension
-        embed: true
       - framework: Vendor/Python.xcframework
         embed: true
         codeSign: true
