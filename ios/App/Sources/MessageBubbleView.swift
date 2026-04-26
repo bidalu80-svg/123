@@ -1802,7 +1802,7 @@ struct MessageBubbleView: View {
     }
 
     private func selectableTextContent(_ text: String, streamingTextAnimated: Bool = false) -> some View {
-        let displayText = text
+        let displayText = MessageContentParser.plainDisplayText(from: text)
         return SelectableLinkTextView(
             text: displayText,
             textColor: UIColor.label,

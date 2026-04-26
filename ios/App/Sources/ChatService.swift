@@ -2430,8 +2430,8 @@ final class ChatService {
             var accumulatedResponseText = ""
             var latestUsage: ChatTokenUsage?
             var lastEmitAt = Date.distantPast
-            let streamEmitInterval: TimeInterval = 0.050
-            let streamForceEmitCharacterThreshold = 64
+            let streamEmitInterval: TimeInterval = 0.0
+            let streamForceEmitCharacterThreshold = 1
 
             func emitPending(force: Bool = false) {
                 guard pendingDeltaCharacters > 0 || !pendingImageURLs.isEmpty else { return }
@@ -2760,9 +2760,10 @@ final class ChatService {
                 var accumulatedResponseText = ""
                 var latestUsage: ChatTokenUsage?
                 var lastEmitAt = Date.distantPast
-                // Emit moderate batched deltas to balance smoothness and main-thread load.
-                let streamEmitInterval: TimeInterval = 0.050
-                let streamForceEmitCharacterThreshold = 64
+                // Let the renderer own the visible 50ms cadence; network chunks should
+                // reach the buffer immediately so they do not bunch up and feel delayed.
+                let streamEmitInterval: TimeInterval = 0.0
+                let streamForceEmitCharacterThreshold = 1
 
                 func emitPending(force: Bool = false) {
                     guard pendingDeltaCharacters > 0 || !pendingImageURLs.isEmpty else { return }

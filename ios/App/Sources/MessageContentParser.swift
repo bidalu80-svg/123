@@ -209,6 +209,10 @@ enum MessageContentParser {
         return dedupe(collected)
     }
 
+    static func plainDisplayText(from raw: String) -> String {
+        cleanMarkdownForDisplay(raw).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private static func parseTextContent(_ raw: String, allowUnclosedFencedCode: Bool) -> [MessageSegment] {
         guard !raw.isEmpty else { return [] }
         var segments: [MessageSegment] = []

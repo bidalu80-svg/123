@@ -1204,7 +1204,6 @@ struct ChatScreen: View {
 
         let shouldAttemptBuild =
             shouldAttemptAutoProjectBuild(for: latestAssistant, in: newMessages)
-            || assistantContainsExplicitProjectPayload(latestAssistant)
         let hasExplicitPayload = assistantContainsExplicitProjectPayload(latestAssistant)
 
         if latestAssistant.isStreaming {
@@ -1848,10 +1847,6 @@ struct ChatScreen: View {
     }
 
     private func shouldAttemptAutoProjectBuild(for assistant: ChatMessage, in messages: [ChatMessage]) -> Bool {
-        if assistantContainsExplicitProjectPayload(assistant) {
-            return true
-        }
-
         guard let index = messages.firstIndex(where: { $0.id == assistant.id }), index > 0 else {
             return false
         }
