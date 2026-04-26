@@ -1629,10 +1629,15 @@ final class ChatViewModel: ObservableObject {
             timeout: min(max(input.timeout, 5), 120),
             streamEnabled: input.streamEnabled,
             frontendAutoBuildEnabled: true,
-            shellExecutionPath: "",
-            shellExecutionAPIKey: "",
-            shellExecutionTimeout: ChatConfig.default.shellExecutionTimeout,
-            shellExecutionWorkingDirectory: ChatConfig.default.shellExecutionWorkingDirectory,
+            shellExecutionPath: ChatConfigStore.normalizeEndpointPath(
+                input.shellExecutionPath,
+                fallback: ChatConfig.defaultShellExecutionPath
+            ),
+            shellExecutionAPIKey: input.shellExecutionAPIKey.trimmingCharacters(in: .whitespacesAndNewlines),
+            shellExecutionTimeout: min(max(input.shellExecutionTimeout, 5), 300),
+            shellExecutionWorkingDirectory: input.shellExecutionWorkingDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? ChatConfig.default.shellExecutionWorkingDirectory
+                : input.shellExecutionWorkingDirectory.trimmingCharacters(in: .whitespacesAndNewlines),
             themeMode: input.themeMode,
             codeThemeMode: input.codeThemeMode,
             realtimeContextEnabled: input.realtimeContextEnabled,

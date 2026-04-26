@@ -23,22 +23,31 @@ final class ChatConfigStoreTests: XCTestCase {
         )
     }
 
-    func testShellExecutionURLIsDisabledByDefault() {
+    func testShellExecutionURLBuildsEndpointFromConfiguredPath() {
         var config = ChatConfig(apiURL: "https://chat.example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
-        config.shellExecutionPath = "http://192.168.1.20:8787/v1/shell/execute"
+        config.shellExecutionPath = "http://192.168.1.20:8787/v1/mcp/call_tool"
 
         XCTAssertEqual(
             config.shellExecutionURLString,
-            ""
+            "http://192.168.1.20:8787/v1/mcp/call_tool"
         )
     }
 
-    func testResolvedShellExecutionAPIKeyStaysEmptyWhenShellIsDisabled() {
+    func testShellExecutionURLUsesDefaultMCPBridgePathWhenNotOverridden() {
+        let config = ChatConfig(apiURL: "https://chat.example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
+
+        XCTAssertEqual(
+            config.shellExecutionURLString,
+            "https://chat.example.com/v1/mcp/call_tool"
+        )
+    }
+
+    func testResolvedShellExecutionAPIKeyFallsBackToMainAPIKey() {
         var config = ChatConfig(apiURL: "https://example.com", apiKey: "chat-token", model: "gpt-test", timeout: 30, streamEnabled: true)
-        XCTAssertEqual(config.resolvedShellExecutionAPIKey, "")
+        XCTAssertEqual(config.resolvedShellExecutionAPIKey, "chat-token")
 
         config.shellExecutionAPIKey = "shell-token"
-        XCTAssertEqual(config.resolvedShellExecutionAPIKey, "")
+        XCTAssertEqual(config.resolvedShellExecutionAPIKey, "shell-token")
     }
 
     func testDecodeLegacyConfigDefaultsRealtimeFields() throws {

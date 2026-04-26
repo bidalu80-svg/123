@@ -19,9 +19,10 @@ struct SelectableCodeTextView: UIViewRepresentable {
     }
 
     func makeUIView(context: Context) -> UITextView {
-        let view = UITextView()
+        let view = NoCaretTextView()
         view.isEditable = false
         view.isSelectable = true
+        view.tintColor = .clear
         view.isScrollEnabled = isScrollEnabled
         view.showsVerticalScrollIndicator = isScrollEnabled
         view.alwaysBounceVertical = isScrollEnabled
@@ -42,6 +43,7 @@ struct SelectableCodeTextView: UIViewRepresentable {
 
     func updateUIView(_ uiView: UITextView, context: Context) {
         let coordinator = context.coordinator
+        uiView.selectedTextRange = nil
         if uiView.isScrollEnabled != isScrollEnabled {
             uiView.isScrollEnabled = isScrollEnabled
         }

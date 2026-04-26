@@ -253,7 +253,7 @@ struct ChatConfig: Codable, Equatable {
     static let defaultAudioTranscriptionsPath = "/v1/audio/transcriptions"
     static let defaultEmbeddingsPath = "/v1/embeddings"
     static let defaultModelsPath = "/v1/models"
-    static let defaultShellExecutionPath = ""
+    static let defaultShellExecutionPath = "/v1/mcp/call_tool"
 
     var apiURL: String
     var apiKey: String
@@ -519,7 +519,7 @@ struct ChatConfig: Codable, Equatable {
     }
 
     var shellExecutionURLString: String {
-        ""
+        ChatConfigStore.endpointURL(apiURL, path: shellExecutionPath, fallback: ChatConfig.defaultShellExecutionPath)
     }
 
     var resolvedShellExecutionAPIKey: String {
@@ -769,10 +769,15 @@ enum ChatConfigStore {
             timeout: min(max(config.timeout, 5), 120),
             streamEnabled: config.streamEnabled,
             frontendAutoBuildEnabled: true,
-            shellExecutionPath: "",
-            shellExecutionAPIKey: "",
-            shellExecutionTimeout: ChatConfig.default.shellExecutionTimeout,
-            shellExecutionWorkingDirectory: ChatConfig.default.shellExecutionWorkingDirectory,
+            shellExecutionPath: ChatConfigStore.normalizeEndpointPath(
+                config.shellExecutionPath,
+                fallback: ChatConfig.defaultShellExecutionPath
+            ),
+            shellExecutionAPIKey: config.shellExecutionAPIKey.trimmingCharacters(in: .whitespacesAndNewlines),
+            shellExecutionTimeout: min(max(config.shellExecutionTimeout, 5), 300),
+            shellExecutionWorkingDirectory: config.shellExecutionWorkingDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? ChatConfig.default.shellExecutionWorkingDirectory
+                : config.shellExecutionWorkingDirectory.trimmingCharacters(in: .whitespacesAndNewlines),
             themeMode: config.themeMode,
             codeThemeMode: config.codeThemeMode,
             realtimeContextEnabled: config.realtimeContextEnabled,

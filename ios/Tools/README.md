@@ -30,3 +30,22 @@ open ./web/index.html
 ```bash
 swift ios/Tools/terminal_agent.swift --api-url https://your-host.com --interactive
 ```
+
+## Real MCP Bridge
+
+Zero-cost local MCP bridge (WSL):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File ios/Tools/start_mcp_bridge_wsl.ps1
+```
+
+This starts:
+
+- `ios/Tools/local_mcp_server.py`: a real stdio MCP server
+- `ios/Tools/mcp_bridge_server.py`: an HTTP bridge for the iOS app
+
+Default app endpoint shape:
+
+```text
+http://<host>:8790/v1/mcp/call_tool
+```

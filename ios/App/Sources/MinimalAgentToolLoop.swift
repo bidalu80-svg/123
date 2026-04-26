@@ -189,6 +189,7 @@ final class MinimalAgentToolRuntime {
     """
 
     private let fileManager = FileManager.default
+    private let remoteBridgeClient = RemoteMCPBridgeClient.shared
 
     init() {}
 
@@ -342,7 +343,11 @@ final class MinimalAgentToolRuntime {
         ]
     }
 
-    func execute(call: MinimalAgentToolCall, config _: ChatConfig) async -> MinimalAgentToolExecution {
+    func execute(call: MinimalAgentToolCall, config: ChatConfig) async -> MinimalAgentToolExecution {
+        if let remote = await executeViaRemoteBridgeIfAvailable(call: call, config: config) {
+            return remote
+        }
+
         switch call.name {
         case "list_dir":
             return executeListDir(arguments: call.arguments)
@@ -365,6 +370,27 @@ final class MinimalAgentToolRuntime {
                 renderedLog: "工具 `\(call.name)` 不可用",
                 output: "错误：未知工具 `\(call.name)`。"
             )
+        }
+    }
+
+    private func executeViaRemoteBridgeIfAvailable(
+        call: MinimalAgentToolCall,
+        config: ChatConfig
+    ) async -> MinimalAgentToolExecution? {
+        let endpoint = config.shellExecutionURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !endpoint.isEmpty else { return nil }
+
+        do {
+            return try await remoteBridgeClient.callTool(
+                endpointURLString: endpoint,
+                apiKey: config.resolvedShellExecutionAPIKey,
+                timeout: config.shellExecutionTimeout,
+                workingDirectory: config.shellExecutionWorkingDirectory,
+                toolName: call.name,
+                arguments: call.arguments
+            )
+        } catch {
+            return nil
         }
     }
 
@@ -746,5 +772,67 @@ final class MinimalAgentToolRuntime {
         let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard normalized.count > limit else { return normalized }
         return String(normalized.prefix(limit)) + "\n...[truncated]"
+    }
+}
+
+private final class RemoteMCPBridgeClient {
+    static let shared = RemoteMCPBridgeClient()
+
+    private let session: URLSession
+
+    private init(session: URLSession = .shared) {
+        self.session = session
+    }
+
+    func callTool(
+        endpointURLString: String,
+        apiKey: String,
+        timeout: Double,
+        workingDirectory: String,
+        toolName: String,
+        arguments: [String: Any]
+    ) async throws -> MinimalAgentToolExecution {
+        guard let url = URL(string: endpointURLString) else {
+            throw NSError(domain: "RemoteMCPBridgeClient", code: 1, userInfo: [NSLocalizedDescriptionKey: "MCP bridge URL 无效"])
+        }
+
+        var request = URLRequest(url: url, timeoutInterval: max(5, min(timeout, 300)))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let token = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        let cwd = workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+        let payload: [String: Any] = [
+            "tool": toolName,
+            "arguments": arguments,
+            "cwd": cwd.isEmpty ? "latest" : cwd,
+            "timeout": Int(max(5, min(timeout, 300)).rounded())
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw NSError(domain: "RemoteMCPBridgeClient", code: 2, userInfo: [NSLocalizedDescriptionKey: "MCP bridge 响应无效"])
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw NSError(domain: "RemoteMCPBridgeClient", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "MCP bridge HTTP \(httpResponse.statusCode)"])
+        }
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw NSError(domain: "RemoteMCPBridgeClient", code: 3, userInfo: [NSLocalizedDescriptionKey: "MCP bridge 返回 JSON 无效"])
+        }
+
+        let renderedLog = (object["renderedLog"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? "执行 MCP 工具 `\(toolName)`"
+        let output = (object["output"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? "MCP bridge 未返回输出。"
+
+        return MinimalAgentToolExecution(
+            renderedLog: renderedLog,
+            output: output
+        )
     }
 }

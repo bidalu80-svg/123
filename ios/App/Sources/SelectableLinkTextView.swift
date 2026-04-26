@@ -1,6 +1,12 @@
 import SwiftUI
 import UIKit
 
+final class NoCaretTextView: UITextView {
+    override func caretRect(for position: UITextPosition) -> CGRect {
+        .zero
+    }
+}
+
 struct StreamingMarkdownTextView: UIViewRepresentable {
     let text: String
     var textColor: UIColor = .label
@@ -33,10 +39,11 @@ struct StreamingMarkdownTextView: UIViewRepresentable {
     }
 
     func makeUIView(context: Context) -> UITextView {
-        let view = UITextView()
+        let view = NoCaretTextView()
         view.isEditable = false
         view.isScrollEnabled = false
         view.isSelectable = true
+        view.tintColor = .clear
         view.backgroundColor = .clear
         view.textContainerInset = .zero
         view.textContainer.lineFragmentPadding = 0
@@ -455,7 +462,7 @@ struct SelectableLinkTextView: UIViewRepresentable {
     }
 
     func makeUIView(context: Context) -> UITextView {
-        let view = UITextView()
+        let view = NoCaretTextView()
         view.isEditable = false
         view.isScrollEnabled = false
         view.isSelectable = true
