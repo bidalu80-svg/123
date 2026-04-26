@@ -1519,6 +1519,8 @@ private final class AgentToolLoopProgress {
 }
 
 final class ChatService {
+    private static let agentToolLoopTurnLimit = 24
+    private static let agentToolLoopLimitReachedText = "当前任务较长，我会继续自动推进；如果还没完成，你再发一句“继续”即可无缝接着做。"
     private let session: URLSession
     private let realtimeContextProvider: RealtimeContextProvider
     private let memoryStore: ConversationMemoryStore
@@ -1700,7 +1702,7 @@ final class ChatService {
         var pendingRepairInstruction: String?
         var forcedRepairCount = 0
 
-        for turn in 0..<8 {
+        for turn in 0..<Self.agentToolLoopTurnLimit {
             let toolSpecs = await toolRuntime.availableToolSpecs(config: config)
             let request = try makeChatCompletionsAgentToolRequest(
                 config: config,
@@ -1779,10 +1781,10 @@ final class ChatService {
                 }
             }
 
-            if turn == 7 {
+            if turn == Self.agentToolLoopTurnLimit - 1 {
                 let finalText = mergedAgentLoopReplyText(
                     logs: renderedLogs,
-                    finalAssistantText: "已达到本轮工具调用上限，请让我继续下一步。"
+                    finalAssistantText: Self.agentToolLoopLimitReachedText
                 )
                 return AgentToolLoopOutcome(
                     reply: ChatReply(text: finalText, usage: aggregatedUsage)
@@ -1810,7 +1812,7 @@ final class ChatService {
         var pendingRepairInstruction: String?
         var forcedRepairCount = 0
 
-        for turn in 0..<8 {
+        for turn in 0..<Self.agentToolLoopTurnLimit {
             let toolSpecs = await toolRuntime.availableToolSpecs(config: config)
             let request = try makeResponsesAgentToolRequest(
                 config: config,
@@ -1901,10 +1903,10 @@ final class ChatService {
 
             input = outputs
 
-            if turn == 7 {
+            if turn == Self.agentToolLoopTurnLimit - 1 {
                 let finalText = mergedAgentLoopReplyText(
                     logs: renderedLogs,
-                    finalAssistantText: "已达到本轮工具调用上限，请让我继续下一步。"
+                    finalAssistantText: Self.agentToolLoopLimitReachedText
                 )
                 return AgentToolLoopOutcome(
                     reply: ChatReply(text: finalText, usage: aggregatedUsage)

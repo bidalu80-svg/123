@@ -1261,6 +1261,73 @@ final class ChatServiceTests: XCTestCase {
         XCTAssertTrue(reply.text.contains("两个工具结果都收到了。"))
     }
 
+    func testAgentToolLoopLimitMessageUsesSoftContinuationCopy() async throws {
+        try? FrontendProjectBuilder.clearLatestProject()
+        defer { try? FrontendProjectBuilder.clearLatestProject() }
+
+        URLProtocolStub.handler = { request in
+            let payload = try XCTUnwrap(request.httpBody)
+            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+            let messages = try XCTUnwrap(json["messages"] as? [[String: Any]])
+
+            let toolCallCount = messages.filter { ($0["role"] as? String) == "tool" }.count
+            let shouldReturnAssistant = toolCallCount >= 24
+
+            let responseObject: [String: Any]
+            if shouldReturnAssistant {
+                responseObject = [
+                    "choices": [[
+                        "message": [
+                            "role": "assistant",
+                            "content": ""
+                        ]
+                    ]]
+                ]
+            } else {
+                responseObject = [
+                    "choices": [[
+                        "message": [
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [[
+                                "id": "call_\(toolCallCount + 1)",
+                                "type": "function",
+                                "function": [
+                                    "name": "list_dir",
+                                    "arguments": #"{"path":".","limit":1}"#
+                                ]
+                            ]]
+                        ]
+                    ]]
+                ]
+            }
+
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+            return (response, try JSONSerialization.data(withJSONObject: responseObject))
+        }
+
+        let service = makeStubbedChatService()
+        var config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: false)
+        config.endpointMode = .chatCompletions
+
+        let reply = try await service.sendMessage(
+            config: config,
+            history: [],
+            message: ChatMessage(role: .user, content: "继续处理项目"),
+            onEvent: { _ in }
+        )
+
+        XCTAssertTrue(reply.text.contains("当前任务较长"))
+        XCTAssertFalse(reply.text.contains("已达到本轮工具调用上限"))
+    }
+
     func testWebsiteCreationDoesNotUseAgentToolLoopForInitialProjectOutput() {
         let config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
         let message = ChatMessage(role: .user, content: "做一个公司官网")

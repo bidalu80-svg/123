@@ -19,14 +19,14 @@ struct ChatScreen: View {
     private let maxSingleRenderedCodeMessageChars = 65_000
     private let maxSingleRenderedStreamingMessageChars = 8_000
     private let maxRenderedFilePreviewChars = 4_000
-    private let autoSessionRotateMessageCount = 60
-    private let autoSessionRotateCharacterCount = 100_000
-    private let autoSessionRotateAssistantCharacterCount = 70_000
-    private let autoSessionRotateSingleAssistantCharacterCount = 12_000
-    private let autoSessionRotateViewportOverflowRatio: CGFloat = 4.0
-    private let autoSessionRotateViewportOverflowAbsoluteGap: CGFloat = 180
-    private let autoSessionRotateViewportMinAssistantCharacters = 32_000
-    private let autoSessionRotateViewportMinMessageCount = 20
+    private let autoSessionRotateMessageCount = 120
+    private let autoSessionRotateCharacterCount = 220_000
+    private let autoSessionRotateAssistantCharacterCount = 150_000
+    private let autoSessionRotateSingleAssistantCharacterCount = 28_000
+    private let autoSessionRotateViewportOverflowRatio: CGFloat = 6.0
+    private let autoSessionRotateViewportOverflowAbsoluteGap: CGFloat = 320
+    private let autoSessionRotateViewportMinAssistantCharacters = 70_000
+    private let autoSessionRotateViewportMinMessageCount = 36
     private static let frontendOverlayCodeEntriesCacheLimit = 8
 
     private struct OutgoingEcho {
