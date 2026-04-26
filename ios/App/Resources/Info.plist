@@ -65,10 +65,6 @@
     <string>用于语音输入，将语音实时转换为文本消息。</string>
     <key>NSSpeechRecognitionUsageDescription</key>
     <string>用于识别中文语音并转换为文本，便于快速输入消息。</string>
-    <key>NSSupportsLiveActivities</key>
-    <true/>
-    <key>NSSupportsLiveActivitiesFrequentUpdates</key>
-    <true/>
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsArbitraryLoads</key>
