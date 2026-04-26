@@ -33,7 +33,6 @@ targets:
     platform: iOS
     deploymentTarget: "17.0"
     sources:
-      - path: Shared
       - path: App/Sources
       - path: App/Resources
         excludes:
