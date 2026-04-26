@@ -1637,6 +1637,8 @@ final class ChatService {
         var messages = initialMessages
         var aggregatedUsage: ChatTokenUsage?
         var renderedLogs: [String] = []
+        var pendingRepairInstruction: String?
+        var forcedRepairCount = 0
 
         for turn in 0..<8 {
             let request = try makeChatCompletionsAgentToolRequest(
@@ -1652,6 +1654,15 @@ final class ChatService {
 
             let parsed = MinimalAgentToolResponseParser.parseChatCompletionsResponse(object)
             if parsed.toolCalls.isEmpty {
+                if let pendingRepairInstruction,
+                   forcedRepairCount < 2 {
+                    forcedRepairCount += 1
+                    messages.append([
+                        "role": "system",
+                        "content": pendingRepairInstruction
+                    ])
+                    continue
+                }
                 let finalText = mergedAgentLoopReplyText(logs: renderedLogs, finalAssistantText: parsed.assistantText)
                 if finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     throw ChatServiceError.noData
@@ -1692,6 +1703,11 @@ final class ChatService {
                     "tool_call_id": call.id,
                     "content": execution.output
                 ])
+                if let repairInstruction = repairInstructionAfterToolExecution(callName: call.name, output: execution.output) {
+                    pendingRepairInstruction = repairInstruction
+                } else if clearsRepairInstructionAfterToolExecution(callName: call.name, output: execution.output) {
+                    pendingRepairInstruction = nil
+                }
             }
 
             if turn == 7 {
@@ -1721,6 +1737,8 @@ final class ChatService {
         var input = ChatRequestBuilder.makeResponsesInput(from: initialMessages)
         var aggregatedUsage: ChatTokenUsage?
         var renderedLogs: [String] = []
+        var pendingRepairInstruction: String?
+        var forcedRepairCount = 0
 
         for turn in 0..<8 {
             let request = try makeResponsesAgentToolRequest(
@@ -1738,6 +1756,18 @@ final class ChatService {
             let parsed = MinimalAgentToolResponseParser.parseResponsesResponse(object)
             previousResponseID = parsed.responseID ?? previousResponseID
             if parsed.toolCalls.isEmpty {
+                if let pendingRepairInstruction,
+                   forcedRepairCount < 2 {
+                    forcedRepairCount += 1
+                    input = [[
+                        "role": "developer",
+                        "content": [[
+                            "type": "input_text",
+                            "text": pendingRepairInstruction
+                        ]]
+                    ]]
+                    continue
+                }
                 let finalText = mergedAgentLoopReplyText(logs: renderedLogs, finalAssistantText: parsed.assistantText)
                 if finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     throw ChatServiceError.noData
@@ -1783,6 +1813,11 @@ final class ChatService {
                     "call_id": call.id,
                     "output": execution.output
                 ])
+                if let repairInstruction = repairInstructionAfterToolExecution(callName: call.name, output: execution.output) {
+                    pendingRepairInstruction = repairInstruction
+                } else if clearsRepairInstructionAfterToolExecution(callName: call.name, output: execution.output) {
+                    pendingRepairInstruction = nil
+                }
             }
 
             input = outputs
@@ -1801,6 +1836,49 @@ final class ChatService {
         return AgentToolLoopOutcome(
             reply: ChatReply(text: mergedAgentLoopReplyText(logs: renderedLogs, finalAssistantText: ""), usage: aggregatedUsage)
         )
+    }
+
+    private func repairInstructionAfterToolExecution(callName: String, output: String) -> String? {
+        let loweredName = callName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let loweredOutput = output.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+        let looksLikeFailure = loweredOutput.contains("traceback")
+            || loweredOutput.contains("indentationerror")
+            || loweredOutput.contains("syntaxerror")
+            || loweredOutput.contains("taberror")
+            || loweredOutput.contains("[exit code ")
+            || loweredOutput.contains("错误：")
+            || loweredOutput.hasPrefix("错误:")
+
+        guard looksLikeFailure else { return nil }
+
+        if loweredName == "run_python_file" {
+            return """
+            刚才 `run_python_file` 运行失败了。你必须继续像 agent 一样处理：
+            1) 先根据报错继续读取相关文件；
+            2) 再最小改动修复代码；
+            3) 然后再次调用 `run_python_file` 验证；
+            4) 在脚本真正成功前，不要停在解释层，不要只总结原因。
+            若这是单文件脚本，优先保持单文件结构，不要擅自改成测试工程。
+            """
+        }
+
+        return """
+        刚才工具执行失败了。你必须继续调用工具修复问题，再重新验证；不要只输出解释。
+        """
+    }
+
+    private func clearsRepairInstructionAfterToolExecution(callName: String, output: String) -> Bool {
+        let loweredName = callName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard loweredName == "run_python_file" else { return false }
+        let loweredOutput = output.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return !loweredOutput.contains("traceback")
+            && !loweredOutput.contains("indentationerror")
+            && !loweredOutput.contains("syntaxerror")
+            && !loweredOutput.contains("taberror")
+            && !loweredOutput.contains("[exit code ")
+            && !loweredOutput.contains("错误：")
+            && !loweredOutput.hasPrefix("错误:")
     }
 
     private func makeChatCompletionsAgentToolRequest(
