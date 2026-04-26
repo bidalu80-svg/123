@@ -301,9 +301,9 @@ struct ChatConfig: Codable, Equatable {
     var customBuiltinSkillPrompts: [String: String]
 
     static let `default` = ChatConfig(
-        apiURL: "http://8.218.177.114",
+        apiURL: "",
         apiKey: "",
-        model: "astron-code-latest",
+        model: "",
         providerMode: .auto,
         providerAPIVersion: "",
         endpointMode: .chatCompletions,
@@ -626,6 +626,8 @@ enum ChatConfigStore {
     private static let configKey = "chatapp.chat.config"
     private static let onboardingDoneKey = "chatapp.config.onboarding.done"
     private static let legacyDefaultModel = "gpt-5.4-pro"
+    private static let legacyBundledDefaultAPIURL = "http://8.218.177.114"
+    private static let legacyBundledDefaultModel = "astron-code-latest"
 
     static func load() -> ChatConfig {
         let bundleURL = (Bundle.main.object(forInfoDictionaryKey: "CHAT_API_URL") as? String) ?? ChatConfig.default.apiURL
@@ -635,6 +637,7 @@ enum ChatConfigStore {
         if let data = UserDefaults.standard.data(forKey: configKey),
            let config = try? JSONDecoder().decode(ChatConfig.self, from: data) {
             var normalizedConfig = normalize(config)
+            clearLegacyBundledDefaultsIfNeeded(&normalizedConfig)
             if shouldReplacePlaceholderAPIURL(normalizedConfig.apiURL) {
                 normalizedConfig.apiURL = normalizedBaseURL(bundleURL)
                 if normalizedConfig.model.isEmpty
@@ -871,6 +874,19 @@ enum ChatConfigStore {
             return ChatConfig.default.model
         }
         return trimmed
+    }
+
+    private static func clearLegacyBundledDefaultsIfNeeded(_ config: inout ChatConfig) {
+        let hasAuth = !config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if !hasAuth,
+           normalizedBaseURL(config.apiURL) == normalizedBaseURL(legacyBundledDefaultAPIURL) {
+            config.apiURL = ""
+        }
+
+        if !hasAuth,
+           config.model.trimmingCharacters(in: .whitespacesAndNewlines) == legacyBundledDefaultModel {
+            config.model = ""
+        }
     }
 
     private static func normalizedRemotePythonExecutionEnabled(_ config: ChatConfig) -> Bool {

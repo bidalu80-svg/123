@@ -19,8 +19,8 @@ settings:
     SWIFT_VERSION: 5.0
     IPHONEOS_DEPLOYMENT_TARGET: 17.0
     CODE_SIGN_STYLE: Manual
-    CHAT_API_URL: "http://8.218.177.114"
-    CHAT_MODEL: "astron-code-latest"
+    CHAT_API_URL: ""
+    CHAT_MODEL: ""
     IEXA_BUILD_GIT_SHA: "local-dev"
     IEXA_BUILD_RUN_ID: "local"
     IEXA_BUILD_TIME: "local-build"
