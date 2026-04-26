@@ -44,7 +44,7 @@ struct MessageBubbleView: View {
     @State private var wordGenerationTask: Task<Void, Never>?
     @State private var excelGenerationTask: Task<Void, Never>?
     @State private var frontendBuildRequestID: Int = 0
-    private let chatUIFont = MinisTheme.assistantStrongUIFont
+    private let chatUIFont = MinisTheme.assistantUIFont
 
     init(
         message: ChatMessage,
@@ -491,11 +491,16 @@ struct MessageBubbleView: View {
             streamingContent
         } else {
             let segments = MessageContentParser.parse(message)
+            let renderDirectMarkdown = shouldRenderAssistantMarkdownDirectly(segments: segments)
 
             if segments.isEmpty {
                 VStack(alignment: .leading, spacing: 10) {
                     if let fallback = fallbackPlainText {
-                        selectableTextContent(fallback)
+                        if renderDirectMarkdown {
+                            assistantMarkdownContent(message.content, streaming: false)
+                        } else {
+                            selectableTextContent(fallback)
+                        }
                     } else {
                         Text("（空响应）")
                             .foregroundStyle(.secondary)
@@ -512,8 +517,12 @@ struct MessageBubbleView: View {
                 }
             } else {
                 VStack(alignment: .leading, spacing: 10) {
-                    ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
-                        segmentView(segment, streamingTextAnimated: false)
+                    if renderDirectMarkdown {
+                        assistantMarkdownContent(message.content, streaming: false)
+                    } else {
+                        ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                            segmentView(segment, streamingTextAnimated: false)
+                        }
                     }
                     if shouldShowPPTCard {
                         pptGenerationCard
@@ -555,18 +564,7 @@ struct MessageBubbleView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         if hasStreamingText {
-                            if shouldRenderStreamingTextDirectly(displayText) {
-                                assistantTextSegmentView(displayText, streamingTextAnimated: true)
-                            } else {
-                                let segments = parsedStreamingSegments(for: displayText)
-                                if segments.isEmpty {
-                                    assistantTextSegmentView(displayText, streamingTextAnimated: true)
-                                } else {
-                                    ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
-                                        segmentView(segment, streamingTextAnimated: true)
-                                    }
-                                }
-                            }
+                            assistantMarkdownContent(displayText, streaming: true)
                         }
                         ForEach(message.imageAttachments) { attachment in
                             messageImage(attachment)
@@ -1153,48 +1151,52 @@ struct MessageBubbleView: View {
         guard message.role == .assistant else {
             return [.plain(text)]
         }
-        if streamingTextAnimated {
-            return [.plain(text)]
+        return [.plain(text)]
+    }
+
+    @ViewBuilder
+    private func assistantMarkdownContent(_ text: String, streaming: Bool) -> some View {
+        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
+        if streaming {
+            StreamingMarkdownTextView(
+                text: normalized,
+                textColor: .label,
+                linkColor: MinisTheme.accentBlueUIColor,
+                font: chatUIFont
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            SelectableLinkTextView(
+                text: normalized,
+                textColor: UIColor.label,
+                linkColor: MinisTheme.accentBlueUIColor,
+                font: chatUIFont,
+                renderMarkdown: true,
+                streamingAnimated: false,
+                onFileLinkTap: { path in
+                    openCodeViewerForLinkedPath(path)
+                }
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        // Avoid expensive per-line step parsing for very long responses.
-        if text.count > 9_000 {
-            return [.plain(text)]
+    }
+
+    private func shouldRenderAssistantMarkdownDirectly(segments: [MessageSegment]) -> Bool {
+        guard message.role == .assistant else { return false }
+        guard !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        guard message.imageAttachments.isEmpty, message.videoAttachments.isEmpty, message.fileAttachments.isEmpty else {
+            return false
         }
 
-        let lines = text.components(separatedBy: "\n")
-        guard lines.count >= 2 else { return [.plain(text)] }
-
-        var output: [AssistantTextBlock] = []
-        var plainBuffer: [String] = []
-
-        func flushPlainBuffer() {
-            guard !plainBuffer.isEmpty else { return }
-            let plain = plainBuffer.joined(separator: "\n")
-            if !plain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                output.append(.plain(plain))
+        for segment in segments {
+            switch segment {
+            case .code, .file, .table, .image, .video:
+                return false
+            case .text, .divider:
+                continue
             }
-            plainBuffer.removeAll(keepingCapacity: true)
         }
-
-        for line in lines {
-            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let parsed = parseAssistantStepLine(trimmed) {
-                flushPlainBuffer()
-                output.append(
-                    .step(
-                        title: parsed.title,
-                        duration: parsed.duration,
-                        status: parsed.status,
-                        kind: parsed.kind
-                    )
-                )
-            } else {
-                plainBuffer.append(line)
-            }
-        }
-
-        flushPlainBuffer()
-        return output.isEmpty ? [.plain(text)] : output
+        return true
     }
 
     private func parseAssistantStepLine(
