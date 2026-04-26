@@ -539,6 +539,42 @@ final class ChatServiceTests: XCTestCase {
         XCTAssertEqual(reply.imageAttachments.first?.requestURLString, "https://cdn.example.com/final.png")
     }
 
+    func testSendImageGenerationUsesUrlAndAsyncHintsBeforeFallbackForGPTImage2() async throws {
+        var config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-image-2", timeout: 30, streamEnabled: false)
+        config.endpointMode = .imageGenerations
+        config.imagesGenerationsPath = "/v1/images/generations"
+
+        var capturedBodies: [[String: Any]] = []
+        URLProtocolStub.handler = { request in
+            let payload = try XCTUnwrap(request.httpBody)
+            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+            capturedBodies.append(json)
+
+            let response = try XCTUnwrap(
+                HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: [
+                    "Content-Type": "application/json"
+                ])
+            )
+            let body = #"{"data":[{"url":"https://cdn.example.com/final.png"}],"revised_prompt":"a cat"}"#
+            return (response, Data(body.utf8))
+        }
+
+        let service = makeStubbedChatService()
+        let reply = try await service.sendMessage(
+            config: config,
+            history: [],
+            message: ChatMessage(role: .user, content: "a cat"),
+            onEvent: { _ in }
+        )
+
+        let firstPayload = try XCTUnwrap(capturedBodies.first)
+        XCTAssertEqual(firstPayload["response_format"] as? String, "url")
+        XCTAssertEqual(firstPayload["background"] as? Bool, true)
+        XCTAssertEqual(firstPayload["async"] as? Bool, true)
+        XCTAssertEqual(firstPayload["wait_for_generation"] as? Bool, false)
+        XCTAssertEqual(reply.imageAttachments.first?.requestURLString, "https://cdn.example.com/final.png")
+    }
+
     func testSendImageGenerationPollsAsyncTaskUntilImageReady() async throws {
         var config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-image", timeout: 30, streamEnabled: false)
         config.endpointMode = .imageGenerations

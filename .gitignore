@@ -12,3 +12,5 @@ ios/App/Resources/PythonRuntime/
 
 # Repo-local scratch files
 .tmp/
+latest/
+流式修改方案.md

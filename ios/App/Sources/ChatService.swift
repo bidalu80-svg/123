@@ -1230,7 +1230,9 @@ struct ChatRequestBuilder {
     static func makeImagesGenerationRequest(
         config: ChatConfig,
         prompt: String,
-        forceMinimalPayload: Bool = false
+        forceMinimalPayload: Bool = false,
+        responseFormatOverride: String? = nil,
+        preferAsyncResponse: Bool = false
     ) throws -> URLRequest {
         let endpoint = config.imagesGenerationsURLString
         guard let url = URL(string: endpoint), !endpoint.isEmpty else {
@@ -1249,7 +1251,9 @@ struct ChatRequestBuilder {
         let payload = makeImageGenerationPayload(
             config: config,
             prompt: prompt,
-            forceMinimalPayload: forceMinimalPayload
+            forceMinimalPayload: forceMinimalPayload,
+            responseFormatOverride: responseFormatOverride,
+            preferAsyncResponse: preferAsyncResponse
         )
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
         return request
@@ -1347,7 +1351,9 @@ struct ChatRequestBuilder {
     private static func makeImageGenerationPayload(
         config: ChatConfig,
         prompt: String,
-        forceMinimalPayload: Bool
+        forceMinimalPayload: Bool,
+        responseFormatOverride: String?,
+        preferAsyncResponse: Bool
     ) -> [String: Any] {
         let size = config.imageGenerationSize.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? ChatConfig.default.imageGenerationSize
@@ -1367,6 +1373,10 @@ struct ChatRequestBuilder {
             }
             if let resolution = normalizedResolution(from: size) {
                 payload["resolution"] = resolution
+            }
+            if preferAsyncResponse {
+                payload["background"] = true
+                payload["async"] = true
             }
             return payload
         }
@@ -1388,10 +1398,20 @@ struct ChatRequestBuilder {
         let normalizedImageModelName = loweredModel
             .replacingOccurrences(of: " ", with: "")
             .replacingOccurrences(of: "_", with: "")
-        if normalizedImageModelName.contains("gptimage")
+        if let responseFormatOverride,
+           !responseFormatOverride.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            payload["response_format"] = responseFormatOverride
+        } else if normalizedImageModelName.contains("gptimage")
             || normalizedImageModelName.contains("dalle")
             || normalizedImageModelName.contains("gptimage2") {
             payload["response_format"] = "b64_json"
+        }
+
+        if preferAsyncResponse {
+            payload["background"] = true
+            payload["async"] = true
+            payload["wait_for_generation"] = false
+            payload["wait_for_completion"] = false
         }
         return payload
     }
@@ -2846,7 +2866,9 @@ final class ChatService {
                 let request = try ChatRequestBuilder.makeImagesGenerationRequest(
                     config: attempt.config,
                     prompt: prompt,
-                    forceMinimalPayload: attempt.forceMinimalPayload
+                    forceMinimalPayload: attempt.forceMinimalPayload,
+                    responseFormatOverride: attempt.responseFormatOverride,
+                    preferAsyncResponse: attempt.preferAsyncResponse
                 )
                 let (data, response) = try await withRetry { [self] in
                     try await session.data(for: request)
@@ -3029,21 +3051,56 @@ final class ChatService {
 
     private func buildImageGenerationAttempts(
         config: ChatConfig
-    ) -> [(config: ChatConfig, forceMinimalPayload: Bool)] {
-        var attempts: [(config: ChatConfig, forceMinimalPayload: Bool)] = []
+    ) -> [(config: ChatConfig, forceMinimalPayload: Bool, responseFormatOverride: String?, preferAsyncResponse: Bool)] {
+        var attempts: [(config: ChatConfig, forceMinimalPayload: Bool, responseFormatOverride: String?, preferAsyncResponse: Bool)] = []
         var seen: Set<String> = []
 
-        func append(_ candidate: ChatConfig, forceMinimalPayload: Bool) {
+        func append(
+            _ candidate: ChatConfig,
+            forceMinimalPayload: Bool,
+            responseFormatOverride: String?,
+            preferAsyncResponse: Bool
+        ) {
             let normalizedPath = ChatConfigStore.normalizeEndpointPath(
                 candidate.imagesGenerationsPath,
                 fallback: ChatConfig.defaultImagesGenerationsPath
             ).lowercased()
-            let key = "\(normalizedPath)|\(candidate.model.lowercased())|\(forceMinimalPayload ? "1" : "0")"
+            let formatKey = responseFormatOverride?.lowercased() ?? "-"
+            let asyncKey = preferAsyncResponse ? "1" : "0"
+            let key = "\(normalizedPath)|\(candidate.model.lowercased())|\(forceMinimalPayload ? "1" : "0")|\(formatKey)|\(asyncKey)"
             guard seen.insert(key).inserted else { return }
-            attempts.append((candidate, forceMinimalPayload))
+            attempts.append((candidate, forceMinimalPayload, responseFormatOverride, preferAsyncResponse))
         }
 
-        append(config, forceMinimalPayload: false)
+        let loweredModel = config.model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedImageModelName = loweredModel
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: "_", with: "")
+        let isGPTStyleImageModel = normalizedImageModelName.contains("gptimage")
+            || normalizedImageModelName.contains("dalle")
+            || normalizedImageModelName.contains("gptimage2")
+
+        if isGPTStyleImageModel {
+            append(
+                config,
+                forceMinimalPayload: false,
+                responseFormatOverride: "url",
+                preferAsyncResponse: true
+            )
+            append(
+                config,
+                forceMinimalPayload: false,
+                responseFormatOverride: "url",
+                preferAsyncResponse: false
+            )
+        }
+
+        append(
+            config,
+            forceMinimalPayload: false,
+            responseFormatOverride: nil,
+            preferAsyncResponse: false
+        )
 
         let normalizedPath = ChatConfigStore.normalizeEndpointPath(
             config.imagesGenerationsPath,
@@ -3054,29 +3111,106 @@ final class ChatService {
             var withoutV1 = config
             let stripped = String(normalizedPath.dropFirst(3))
             withoutV1.imagesGenerationsPath = stripped.hasPrefix("/") ? stripped : "/\(stripped)"
-            append(withoutV1, forceMinimalPayload: false)
+            if isGPTStyleImageModel {
+                append(
+                    withoutV1,
+                    forceMinimalPayload: false,
+                    responseFormatOverride: "url",
+                    preferAsyncResponse: true
+                )
+                append(
+                    withoutV1,
+                    forceMinimalPayload: false,
+                    responseFormatOverride: "url",
+                    preferAsyncResponse: false
+                )
+            }
+            append(
+                withoutV1,
+                forceMinimalPayload: false,
+                responseFormatOverride: nil,
+                preferAsyncResponse: false
+            )
         } else if loweredPath.hasPrefix("/images/") {
             var withV1 = config
             withV1.imagesGenerationsPath = "/v1" + normalizedPath
-            append(withV1, forceMinimalPayload: false)
+            if isGPTStyleImageModel {
+                append(
+                    withV1,
+                    forceMinimalPayload: false,
+                    responseFormatOverride: "url",
+                    preferAsyncResponse: true
+                )
+                append(
+                    withV1,
+                    forceMinimalPayload: false,
+                    responseFormatOverride: "url",
+                    preferAsyncResponse: false
+                )
+            }
+            append(
+                withV1,
+                forceMinimalPayload: false,
+                responseFormatOverride: nil,
+                preferAsyncResponse: false
+            )
         }
 
         if isLikelyNonImageModel(config.model) {
             var imageModel = config
             imageModel.model = "gpt-image-1"
-            append(imageModel, forceMinimalPayload: false)
+            append(
+                imageModel,
+                forceMinimalPayload: false,
+                responseFormatOverride: "url",
+                preferAsyncResponse: true
+            )
+            append(
+                imageModel,
+                forceMinimalPayload: false,
+                responseFormatOverride: "url",
+                preferAsyncResponse: false
+            )
+            append(
+                imageModel,
+                forceMinimalPayload: false,
+                responseFormatOverride: nil,
+                preferAsyncResponse: false
+            )
 
             if loweredPath.hasPrefix("/v1/") {
                 var imageModelWithoutV1 = imageModel
                 let stripped = String(normalizedPath.dropFirst(3))
                 imageModelWithoutV1.imagesGenerationsPath = stripped.hasPrefix("/") ? stripped : "/\(stripped)"
-                append(imageModelWithoutV1, forceMinimalPayload: false)
+                append(
+                    imageModelWithoutV1,
+                    forceMinimalPayload: false,
+                    responseFormatOverride: "url",
+                    preferAsyncResponse: true
+                )
+                append(
+                    imageModelWithoutV1,
+                    forceMinimalPayload: false,
+                    responseFormatOverride: "url",
+                    preferAsyncResponse: false
+                )
+                append(
+                    imageModelWithoutV1,
+                    forceMinimalPayload: false,
+                    responseFormatOverride: nil,
+                    preferAsyncResponse: false
+                )
             }
         }
 
         let standardAttempts = attempts
         for attempt in standardAttempts {
-            append(attempt.config, forceMinimalPayload: true)
+            append(
+                attempt.config,
+                forceMinimalPayload: true,
+                responseFormatOverride: attempt.responseFormatOverride,
+                preferAsyncResponse: attempt.preferAsyncResponse
+            )
         }
 
         return attempts
