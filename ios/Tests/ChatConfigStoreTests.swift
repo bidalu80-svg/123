@@ -50,6 +50,23 @@ final class ChatConfigStoreTests: XCTestCase {
         XCTAssertEqual(config.resolvedShellExecutionAPIKey, "shell-token")
     }
 
+    func testRemotePythonExecutionURLUsesMainSiteDefaultPath() {
+        let config = ChatConfig(apiURL: "https://chat.example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
+
+        XCTAssertEqual(
+            config.remotePythonExecutionURLString,
+            "https://chat.example.com/v1/python/execute"
+        )
+    }
+
+    func testResolvedRemotePythonExecutionAPIKeyUsesMainAPIKey() {
+        var config = ChatConfig(apiURL: "https://example.com", apiKey: "chat-token", model: "gpt-test", timeout: 30, streamEnabled: true)
+        XCTAssertEqual(config.resolvedRemotePythonExecutionAPIKey, "chat-token")
+
+        config.remotePythonExecutionAPIKey = "remote-token"
+        XCTAssertEqual(config.resolvedRemotePythonExecutionAPIKey, "chat-token")
+    }
+
     func testDecodeLegacyConfigDefaultsRealtimeFields() throws {
         let legacyJSON = """
         {
@@ -72,6 +89,7 @@ final class ChatConfigStoreTests: XCTestCase {
         XCTAssertTrue(config.marketContextEnabled)
         XCTAssertTrue(config.hotNewsContextEnabled)
         XCTAssertEqual(config.hotNewsCount, 6)
+        XCTAssertTrue(config.remotePythonExecutionEnabled)
         XCTAssertEqual(config.endpointMode, .chatCompletions)
         XCTAssertEqual(config.imagesGenerationsPath, "/v1/images/generations")
     }

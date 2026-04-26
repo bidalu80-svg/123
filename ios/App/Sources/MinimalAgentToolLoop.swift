@@ -364,6 +364,11 @@ final class MinimalAgentToolRuntime {
     private let remoteBridgeClient = RemoteMCPBridgeClient.shared
     private let mcpConnectionManager = MCPConnectionManager.shared
 
+    private struct WorkspaceToolProfile {
+        let hasFiles: Bool
+        let hasPythonFiles: Bool
+    }
+
     init() {}
 
     var toolSpecs: [MinimalAgentToolSpec] {
@@ -527,9 +532,10 @@ final class MinimalAgentToolRuntime {
     }
 
     func availableToolSpecs(config: ChatConfig) async -> [MinimalAgentToolSpec] {
-        var specsByName = Dictionary(uniqueKeysWithValues: toolSpecs.map { ($0.name, $0) })
+        let localSpecs = filteredLocalToolSpecs()
+        var specsByName = Dictionary(uniqueKeysWithValues: localSpecs.map { ($0.name, $0) })
         guard shouldProbeMCPBridge(config: config) else {
-            return toolSpecs
+            return localSpecs
         }
 
         let endpoint = config.shellExecutionURLString.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -538,7 +544,7 @@ final class MinimalAgentToolRuntime {
             apiKey: config.resolvedShellExecutionAPIKey,
             timeout: config.shellExecutionTimeout
         ) else {
-            return toolSpecs
+            return localSpecs
         }
 
         for tool in snapshot.tools {
@@ -548,6 +554,57 @@ final class MinimalAgentToolRuntime {
         }
 
         return specsByName.values.sorted { $0.name < $1.name }
+    }
+
+    private func filteredLocalToolSpecs() -> [MinimalAgentToolSpec] {
+        guard let profile = latestWorkspaceToolProfile(),
+              profile.hasFiles,
+              !profile.hasPythonFiles else {
+            return toolSpecs
+        }
+
+        return toolSpecs.filter { $0.name != "run_python_file" }
+    }
+
+    private func latestWorkspaceToolProfile() -> WorkspaceToolProfile? {
+        guard let latest = FrontendProjectBuilder.latestProjectURL(),
+              fileManager.fileExists(atPath: latest.path),
+              let enumerator = fileManager.enumerator(
+                at: latest,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+              ) else {
+            return nil
+        }
+
+        let pythonMarkers: Set<String> = [
+            "requirements.txt", "pyproject.toml", "pipfile", "setup.py", "main.py"
+        ]
+        var hasFiles = false
+        var hasPythonFiles = false
+        var scanned = 0
+
+        for case let fileURL as URL in enumerator {
+            guard let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey]),
+                  values.isRegularFile == true else {
+                continue
+            }
+            hasFiles = true
+            scanned += 1
+
+            let fileName = fileURL.lastPathComponent.lowercased()
+            let fileExtension = fileURL.pathExtension.lowercased()
+            if fileExtension == "py" || pythonMarkers.contains(fileName) {
+                hasPythonFiles = true
+                break
+            }
+
+            if scanned >= 180 {
+                break
+            }
+        }
+
+        return WorkspaceToolProfile(hasFiles: hasFiles, hasPythonFiles: hasPythonFiles)
     }
 
     func executionMode(for call: MinimalAgentToolCall) -> AgentToolExecutionMode {
@@ -901,7 +958,8 @@ final class MinimalAgentToolRuntime {
             let result = try await LocalProjectExecutionService.shared.runPythonFile(
                 atRelativePath: resolved.path,
                 projectURL: rootURL,
-                stdin: stdin
+                stdin: stdin,
+                runtimeConfig: config
             )
             LocalMCPActionMemory.record(summary: "运行 Python 文件", path: resolved.path)
             let suffix = result.exitCode == 0 ? "" : "\n\n[exit code \(result.exitCode)]"

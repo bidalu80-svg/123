@@ -64,6 +64,14 @@ final class StreamParserTests: XCTestCase {
         XCTAssertEqual(chunk?.imageURLs, ["https://cdn.example.com/out/final.avif"])
     }
 
+    func testParseTextContentExtractsUnsplashBareImageURLWithoutSuffix() {
+        let line = #"{"choices":[{"message":{"content":"Ferrari 488:\nhttps://images.unsplash.com/photo-1542362567-b07e54358753"}}]}"#
+        let chunk = StreamParser.parse(line: line)
+
+        XCTAssertEqual(chunk?.isDone, false)
+        XCTAssertEqual(chunk?.imageURLs, ["https://images.unsplash.com/photo-1542362567-b07e54358753"])
+    }
+
     func testExtractPayloadSupportsImageDataArray() {
         let payload: [String: Any] = [
             "data": [

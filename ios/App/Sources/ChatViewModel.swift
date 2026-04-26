@@ -1615,6 +1615,13 @@ final class ChatViewModel: ObservableObject {
             shellExecutionWorkingDirectory: input.shellExecutionWorkingDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ? ChatConfig.default.shellExecutionWorkingDirectory
                 : input.shellExecutionWorkingDirectory.trimmingCharacters(in: .whitespacesAndNewlines),
+            remotePythonExecutionEnabled: input.remotePythonExecutionEnabled,
+            remotePythonExecutionPath: ChatConfigStore.normalizeEndpointPath(
+                input.remotePythonExecutionPath,
+                fallback: ChatConfig.defaultRemotePythonExecutionPath
+            ),
+            remotePythonExecutionAPIKey: input.remotePythonExecutionAPIKey.trimmingCharacters(in: .whitespacesAndNewlines),
+            remotePythonExecutionTimeout: min(max(input.remotePythonExecutionTimeout, 10), 900),
             themeMode: input.themeMode,
             codeThemeMode: input.codeThemeMode,
             realtimeContextEnabled: input.realtimeContextEnabled,
@@ -1625,6 +1632,7 @@ final class ChatViewModel: ObservableObject {
             hotNewsContextEnabled: input.hotNewsContextEnabled,
             hotNewsCount: min(max(input.hotNewsCount, 1), 12),
             memoryModeEnabled: input.memoryModeEnabled,
+            autoSkillActivationEnabled: input.autoSkillActivationEnabled,
             soundEffectsEnabled: input.soundEffectsEnabled,
             replySpeechPlaybackEnabled: input.replySpeechPlaybackEnabled,
             replySpeechVoicePreset: input.replySpeechVoicePreset

@@ -1464,7 +1464,8 @@ struct ChatScreen: View {
             do {
                 let syntaxCheck = try await LocalProjectExecutionService.shared.runPythonCompileAll(
                     in: buildResult.projectDirectoryURL,
-                    skipDependencyCheck: true
+                    skipDependencyCheck: true,
+                    runtimeConfig: viewModel.config
                 )
                 if syntaxCheck.exitCode != 0,
                    LocalProjectExecutionService.isSyntaxFailure(syntaxCheck.output) {
@@ -1522,15 +1523,18 @@ struct ChatScreen: View {
                 case .pythonScript(let path):
                     validationResult = try await LocalProjectExecutionService.shared.runPythonFile(
                         atRelativePath: path,
-                        projectURL: buildResult.projectDirectoryURL
+                        projectURL: buildResult.projectDirectoryURL,
+                        runtimeConfig: viewModel.config
                     )
                 case .pythonUnitTests:
                     validationResult = try await LocalProjectExecutionService.shared.runPythonUnitTests(
-                        in: buildResult.projectDirectoryURL
+                        in: buildResult.projectDirectoryURL,
+                        runtimeConfig: viewModel.config
                     )
                 case .pythonCompileAll:
                     validationResult = try await LocalProjectExecutionService.shared.runPythonCompileAll(
-                        in: buildResult.projectDirectoryURL
+                        in: buildResult.projectDirectoryURL,
+                        runtimeConfig: viewModel.config
                     )
                 }
                 let snapshot = ShellExecutionResult(

@@ -254,6 +254,7 @@ struct ChatConfig: Codable, Equatable {
     static let defaultEmbeddingsPath = "/v1/embeddings"
     static let defaultModelsPath = "/v1/models"
     static let defaultShellExecutionPath = "/v1/mcp/call_tool"
+    static let defaultRemotePythonExecutionPath = "/v1/python/execute"
 
     var apiURL: String
     var apiKey: String
@@ -276,6 +277,10 @@ struct ChatConfig: Codable, Equatable {
     var shellExecutionAPIKey: String
     var shellExecutionTimeout: Double
     var shellExecutionWorkingDirectory: String
+    var remotePythonExecutionEnabled: Bool
+    var remotePythonExecutionPath: String
+    var remotePythonExecutionAPIKey: String
+    var remotePythonExecutionTimeout: Double
     var themeMode: AppThemeMode
     var codeThemeMode: CodeThemeMode
     var realtimeContextEnabled: Bool
@@ -286,6 +291,7 @@ struct ChatConfig: Codable, Equatable {
     var hotNewsContextEnabled: Bool
     var hotNewsCount: Int
     var memoryModeEnabled: Bool
+    var autoSkillActivationEnabled: Bool
     var soundEffectsEnabled: Bool
     var replySpeechPlaybackEnabled: Bool
     var replySpeechVoicePreset: ReplySpeechVoicePreset
@@ -314,6 +320,10 @@ struct ChatConfig: Codable, Equatable {
         shellExecutionAPIKey: "",
         shellExecutionTimeout: 90,
         shellExecutionWorkingDirectory: "latest",
+        remotePythonExecutionEnabled: true,
+        remotePythonExecutionPath: ChatConfig.defaultRemotePythonExecutionPath,
+        remotePythonExecutionAPIKey: "",
+        remotePythonExecutionTimeout: 180,
         themeMode: .system,
         codeThemeMode: .followApp,
         realtimeContextEnabled: false,
@@ -324,6 +334,7 @@ struct ChatConfig: Codable, Equatable {
         hotNewsContextEnabled: false,
         hotNewsCount: 6,
         memoryModeEnabled: false,
+        autoSkillActivationEnabled: true,
         soundEffectsEnabled: true,
         replySpeechPlaybackEnabled: false,
         replySpeechVoicePreset: .systemNatural,
@@ -353,6 +364,10 @@ struct ChatConfig: Codable, Equatable {
         shellExecutionAPIKey: String = "",
         shellExecutionTimeout: Double = 90,
         shellExecutionWorkingDirectory: String = "latest",
+        remotePythonExecutionEnabled: Bool = true,
+        remotePythonExecutionPath: String = ChatConfig.defaultRemotePythonExecutionPath,
+        remotePythonExecutionAPIKey: String = "",
+        remotePythonExecutionTimeout: Double = 180,
         themeMode: AppThemeMode = .system,
         codeThemeMode: CodeThemeMode = .followApp,
         realtimeContextEnabled: Bool = false,
@@ -363,6 +378,7 @@ struct ChatConfig: Codable, Equatable {
         hotNewsContextEnabled: Bool = false,
         hotNewsCount: Int = 6,
         memoryModeEnabled: Bool = false,
+        autoSkillActivationEnabled: Bool = true,
         soundEffectsEnabled: Bool = true,
         replySpeechPlaybackEnabled: Bool = false,
         replySpeechVoicePreset: ReplySpeechVoicePreset = .systemNatural,
@@ -391,6 +407,10 @@ struct ChatConfig: Codable, Equatable {
         self.shellExecutionAPIKey = shellExecutionAPIKey
         self.shellExecutionTimeout = shellExecutionTimeout
         self.shellExecutionWorkingDirectory = shellExecutionWorkingDirectory
+        self.remotePythonExecutionEnabled = remotePythonExecutionEnabled
+        self.remotePythonExecutionPath = remotePythonExecutionPath
+        self.remotePythonExecutionAPIKey = remotePythonExecutionAPIKey
+        self.remotePythonExecutionTimeout = remotePythonExecutionTimeout
         self.themeMode = themeMode
         self.codeThemeMode = codeThemeMode
         self.realtimeContextEnabled = realtimeContextEnabled
@@ -401,6 +421,7 @@ struct ChatConfig: Codable, Equatable {
         self.hotNewsContextEnabled = hotNewsContextEnabled
         self.hotNewsCount = hotNewsCount
         self.memoryModeEnabled = memoryModeEnabled
+        self.autoSkillActivationEnabled = autoSkillActivationEnabled
         self.soundEffectsEnabled = soundEffectsEnabled
         self.replySpeechPlaybackEnabled = replySpeechPlaybackEnabled
         self.replySpeechVoicePreset = replySpeechVoicePreset
@@ -431,6 +452,10 @@ struct ChatConfig: Codable, Equatable {
         shellExecutionAPIKey = try c.decodeIfPresent(String.self, forKey: .shellExecutionAPIKey) ?? ""
         shellExecutionTimeout = try c.decodeIfPresent(Double.self, forKey: .shellExecutionTimeout) ?? 90
         shellExecutionWorkingDirectory = try c.decodeIfPresent(String.self, forKey: .shellExecutionWorkingDirectory) ?? "latest"
+        remotePythonExecutionEnabled = try c.decodeIfPresent(Bool.self, forKey: .remotePythonExecutionEnabled) ?? true
+        remotePythonExecutionPath = try c.decodeIfPresent(String.self, forKey: .remotePythonExecutionPath) ?? ChatConfig.defaultRemotePythonExecutionPath
+        remotePythonExecutionAPIKey = try c.decodeIfPresent(String.self, forKey: .remotePythonExecutionAPIKey) ?? ""
+        remotePythonExecutionTimeout = try c.decodeIfPresent(Double.self, forKey: .remotePythonExecutionTimeout) ?? 180
         themeMode = try c.decodeIfPresent(AppThemeMode.self, forKey: .themeMode) ?? .system
         codeThemeMode = try c.decodeIfPresent(CodeThemeMode.self, forKey: .codeThemeMode) ?? .followApp
         realtimeContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .realtimeContextEnabled) ?? false
@@ -441,6 +466,7 @@ struct ChatConfig: Codable, Equatable {
         hotNewsContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .hotNewsContextEnabled) ?? false
         hotNewsCount = try c.decodeIfPresent(Int.self, forKey: .hotNewsCount) ?? 6
         memoryModeEnabled = try c.decodeIfPresent(Bool.self, forKey: .memoryModeEnabled) ?? false
+        autoSkillActivationEnabled = try c.decodeIfPresent(Bool.self, forKey: .autoSkillActivationEnabled) ?? true
         soundEffectsEnabled = try c.decodeIfPresent(Bool.self, forKey: .soundEffectsEnabled) ?? true
         replySpeechPlaybackEnabled = try c.decodeIfPresent(Bool.self, forKey: .replySpeechPlaybackEnabled) ?? false
         replySpeechVoicePreset = try c.decodeIfPresent(ReplySpeechVoicePreset.self, forKey: .replySpeechVoicePreset) ?? .systemNatural
@@ -531,6 +557,19 @@ struct ChatConfig: Codable, Equatable {
         return apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    var remotePythonExecutionURLString: String {
+        ChatConfigStore.endpointURL(
+            apiURL,
+            path: ChatConfig.defaultRemotePythonExecutionPath,
+            fallback: ChatConfig.defaultRemotePythonExecutionPath
+        )
+    }
+
+    var resolvedRemotePythonExecutionAPIKey: String {
+        guard !remotePythonExecutionURLString.isEmpty else { return "" }
+        return apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     var activeEndpointURLString: String {
         switch endpointMode {
         case .chatCompletions:
@@ -614,6 +653,10 @@ enum ChatConfigStore {
             shellExecutionAPIKey: ChatConfig.default.shellExecutionAPIKey,
             shellExecutionTimeout: ChatConfig.default.shellExecutionTimeout,
             shellExecutionWorkingDirectory: ChatConfig.default.shellExecutionWorkingDirectory,
+            remotePythonExecutionEnabled: ChatConfig.default.remotePythonExecutionEnabled,
+            remotePythonExecutionPath: ChatConfig.default.remotePythonExecutionPath,
+            remotePythonExecutionAPIKey: ChatConfig.default.remotePythonExecutionAPIKey,
+            remotePythonExecutionTimeout: ChatConfig.default.remotePythonExecutionTimeout,
             themeMode: ChatConfig.default.themeMode,
             codeThemeMode: ChatConfig.default.codeThemeMode,
             realtimeContextEnabled: ChatConfig.default.realtimeContextEnabled,
@@ -624,6 +667,7 @@ enum ChatConfigStore {
             hotNewsContextEnabled: ChatConfig.default.hotNewsContextEnabled,
             hotNewsCount: ChatConfig.default.hotNewsCount,
             memoryModeEnabled: ChatConfig.default.memoryModeEnabled,
+            autoSkillActivationEnabled: ChatConfig.default.autoSkillActivationEnabled,
             soundEffectsEnabled: ChatConfig.default.soundEffectsEnabled,
             replySpeechPlaybackEnabled: ChatConfig.default.replySpeechPlaybackEnabled,
             replySpeechVoicePreset: ChatConfig.default.replySpeechVoicePreset,
@@ -778,6 +822,13 @@ enum ChatConfigStore {
             shellExecutionWorkingDirectory: config.shellExecutionWorkingDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ? ChatConfig.default.shellExecutionWorkingDirectory
                 : config.shellExecutionWorkingDirectory.trimmingCharacters(in: .whitespacesAndNewlines),
+            remotePythonExecutionEnabled: config.remotePythonExecutionEnabled,
+            remotePythonExecutionPath: ChatConfigStore.normalizeEndpointPath(
+                config.remotePythonExecutionPath,
+                fallback: ChatConfig.defaultRemotePythonExecutionPath
+            ),
+            remotePythonExecutionAPIKey: config.remotePythonExecutionAPIKey.trimmingCharacters(in: .whitespacesAndNewlines),
+            remotePythonExecutionTimeout: min(max(config.remotePythonExecutionTimeout, 10), 900),
             themeMode: config.themeMode,
             codeThemeMode: config.codeThemeMode,
             realtimeContextEnabled: config.realtimeContextEnabled,
@@ -788,6 +839,7 @@ enum ChatConfigStore {
             hotNewsContextEnabled: config.hotNewsContextEnabled,
             hotNewsCount: min(max(config.hotNewsCount, 1), 12),
             memoryModeEnabled: config.memoryModeEnabled,
+            autoSkillActivationEnabled: config.autoSkillActivationEnabled,
             soundEffectsEnabled: config.soundEffectsEnabled,
             replySpeechPlaybackEnabled: config.replySpeechPlaybackEnabled,
             replySpeechVoicePreset: config.replySpeechVoicePreset,

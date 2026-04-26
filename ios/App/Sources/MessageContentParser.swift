@@ -1465,7 +1465,10 @@ enum MessageContentParser {
         let indicators = [
             "/images/", "/image/", "/img/", "/v1/images", "image=", "mime=image/",
             "format=png", "format=jpg", "format=jpeg", "format=webp", "format=avif",
-            "b64_json", "generated-image", "/files/"
+            "b64_json", "generated-image", "/generated/", "/generate/", "/outputs/", "/files/",
+            "images.unsplash.com", "source.unsplash.com", "images.pexels.com",
+            "cdn.openai.com", "oaidalleapiprod", "replicate.delivery", "fal.media",
+            "cdn.midjourney.com", "image.pollinations.ai"
         ]
         return indicators.contains(where: { cleaned.contains($0) })
     }

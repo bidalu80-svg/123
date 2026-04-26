@@ -25,6 +25,54 @@ final class LocalProjectExecutionServiceTests: XCTestCase {
         )
     }
 
+    func testUnsupportedPyprojectDependenciesAllowsBundledPackages() {
+        let raw = """
+        [project]
+        dependencies = [
+          "requests>=2.32.0",
+          "click",
+          "httpx"
+        ]
+        """
+
+        XCTAssertEqual(LocalProjectExecutionService.unsupportedPyprojectDependencies(from: raw), [])
+    }
+
+    func testUnsupportedPyprojectDependenciesFlagsNonBundledPackages() {
+        let raw = """
+        [project]
+        dependencies = [
+          "numpy>=2.0",
+          "pandas"
+        ]
+
+        [dependency-groups]
+        dev = [
+          "pytest",
+          "aiohttp"
+        ]
+        """
+
+        XCTAssertEqual(
+            LocalProjectExecutionService.unsupportedPyprojectDependencies(from: raw),
+            ["numpy", "pandas", "aiohttp"]
+        )
+    }
+
+    func testUnsupportedPyprojectDependenciesSupportsPoetrySections() {
+        let raw = """
+        [tool.poetry.dependencies]
+        python = "^3.11"
+        requests = "^2.32.0"
+        lxml = "^5.3.0"
+        """
+
+        XCTAssertEqual(
+            LocalProjectExecutionService.unsupportedPyprojectDependencies(from: raw),
+            ["lxml"]
+        )
+    }
+
     func testIsSyntaxFailureRecognizesIndentationError() {
         let output = """
         *** Error compiling '/tmp/crawler.py'...

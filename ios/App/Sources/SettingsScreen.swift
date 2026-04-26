@@ -153,6 +153,40 @@ struct SettingsScreen: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
 
+                Toggle("自动激活项目技能", isOn: $viewModel.config.autoSkillActivationEnabled)
+
+                Text(viewModel.config.autoSkillActivationEnabled ? "会根据当前请求和工作区类型自动补充 iOS / Python / 前端项目技能提示，让 agent 更贴近当前工程。" : "关闭后仅保留你手动启用或基础内置的提示，不再按项目类型自动补充技能。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+
+                Toggle("启用远端 Python 执行", isOn: $viewModel.config.remotePythonExecutionEnabled)
+
+                if viewModel.config.remotePythonExecutionEnabled {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("内置远端执行入口")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        Text(viewModel.config.remotePythonExecutionURLString)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                        HStack {
+                            Text("远端 Python 超时")
+                            Spacer()
+                            Text("\(Int(viewModel.config.remotePythonExecutionTimeout)) 秒")
+                                .foregroundStyle(.secondary)
+                        }
+                        Slider(value: $viewModel.config.remotePythonExecutionTimeout, in: 30...900, step: 15)
+
+                        Text("不需要单独填写额外地址。App 会默认使用当前主站地址下的 `/v1/python/execute`，并优先复用主 API Key。适合把远端 Python 挂到你现有主服务后面。")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 HStack {
                     Text("超时")
                     Spacer()
@@ -388,6 +422,11 @@ struct SettingsScreen: View {
                     statusRow("朗读声线", value: viewModel.config.replySpeechVoicePreset.title)
                 }
                 statusRow("记忆模式", value: viewModel.config.memoryModeEnabled ? "开启" : "关闭")
+                statusRow("自动项目技能", value: viewModel.config.autoSkillActivationEnabled ? "开启" : "关闭")
+                statusRow("远端 Python", value: viewModel.config.remotePythonExecutionEnabled ? "开启" : "关闭")
+                if viewModel.config.remotePythonExecutionEnabled {
+                    statusRow("远端 Python 入口", value: viewModel.config.remotePythonExecutionURLString)
+                }
                 statusRow("内置技能", value: "\(viewModel.config.enabledBuiltinSkillIDs.count) 个已启用")
             }
         }

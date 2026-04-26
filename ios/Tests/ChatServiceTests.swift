@@ -258,6 +258,87 @@ final class ChatServiceTests: XCTestCase {
         XCTAssertEqual(messages[1]["content"] as? String, "以下是用户跨会话记忆：\n• 我喜欢简洁回答")
     }
 
+    func testBuildRequestInjectsAdaptiveIOSSkillPromptForSwiftTask() throws {
+        let config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
+        let requestMessage = ChatMessage(role: .user, content: "帮我修一下这个 SwiftUI 页面和 Info.plist 配置")
+
+        let request = try ChatRequestBuilder.makeRequest(config: config, history: [], message: requestMessage)
+        let payload = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+        let messages = try XCTUnwrap(json["messages"] as? [[String: Any]])
+        let systemContents = messages
+            .filter { ($0["role"] as? String) == "system" }
+            .compactMap { $0["content"] as? String }
+
+        XCTAssertTrue(systemContents.contains(where: { $0.contains("[iOS 项目技能]") }))
+    }
+
+    func testBuildRequestInjectsAdaptivePythonSkillPromptForPythonTask() throws {
+        let config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
+        let requestMessage = ChatMessage(role: .user, content: "帮我修一下这个 Python 脚本的编码和状态码输出")
+
+        let request = try ChatRequestBuilder.makeRequest(config: config, history: [], message: requestMessage)
+        let payload = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+        let messages = try XCTUnwrap(json["messages"] as? [[String: Any]])
+        let systemContents = messages
+            .filter { ($0["role"] as? String) == "system" }
+            .compactMap { $0["content"] as? String }
+
+        XCTAssertTrue(systemContents.contains(where: { $0.contains("[Python 项目技能]") }))
+    }
+
+    func testBuildRequestInjectsAdaptiveFrontendSkillPromptForFrontendFollowup() throws {
+        try? FrontendProjectBuilder.clearLatestProject()
+        defer { try? FrontendProjectBuilder.clearLatestProject() }
+
+        let seededProject = ChatMessage(
+            role: .assistant,
+            content: """
+            [[file:index.html]]
+            <!doctype html>
+            <html><body><div class="card">OK</div></body></html>
+            [[endfile]]
+
+            [[file:package.json]]
+            {"name":"demo","version":"1.0.0"}
+            [[endfile]]
+            """
+        )
+        _ = try FrontendProjectBuilder.buildProject(from: seededProject, mode: .overwriteLatestProject)
+
+        let config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
+        let requestMessage = ChatMessage(role: .user, content: "继续调整这个页面的布局和样式")
+
+        let request = try ChatRequestBuilder.makeRequest(config: config, history: [seededProject], message: requestMessage)
+        let payload = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+        let messages = try XCTUnwrap(json["messages"] as? [[String: Any]])
+        let systemContents = messages
+            .filter { ($0["role"] as? String) == "system" }
+            .compactMap { $0["content"] as? String }
+
+        XCTAssertTrue(systemContents.contains(where: { $0.contains("[前端项目技能]") }))
+    }
+
+    func testBuildRequestDoesNotInjectAdaptiveSkillsWhenDisabled() throws {
+        var config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
+        config.autoSkillActivationEnabled = false
+        let requestMessage = ChatMessage(role: .user, content: "帮我修一下这个 SwiftUI 页面和 Info.plist 配置")
+
+        let request = try ChatRequestBuilder.makeRequest(config: config, history: [], message: requestMessage)
+        let payload = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+        let messages = try XCTUnwrap(json["messages"] as? [[String: Any]])
+        let systemContents = messages
+            .filter { ($0["role"] as? String) == "system" }
+            .compactMap { $0["content"] as? String }
+
+        XCTAssertFalse(systemContents.contains(where: { $0.contains("[iOS 项目技能]") }))
+        XCTAssertFalse(systemContents.contains(where: { $0.contains("[Python 项目技能]") }))
+        XCTAssertFalse(systemContents.contains(where: { $0.contains("[前端项目技能]") }))
+    }
+
     func testBuildRequestInjectsProjectPromptOnlyForProjectIntent() throws {
         var config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
         config.frontendAutoBuildEnabled = true
@@ -397,6 +478,19 @@ final class ChatServiceTests: XCTestCase {
         XCTAssertEqual(request.timeoutInterval, 180)
     }
 
+    func testBuildImagesGenerationRequestUsesB64ForGPTImageModelWithSpaces() throws {
+        var config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "GPT Image 2", timeout: 30, streamEnabled: false)
+        config.imagesGenerationsPath = "/v1/images/generations"
+        config.imageGenerationSize = "1024x1024"
+
+        let request = try ChatRequestBuilder.makeImagesGenerationRequest(config: config, prompt: "a cat")
+        let payload = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+
+        XCTAssertEqual(json["model"] as? String, "GPT Image 2")
+        XCTAssertEqual(json["response_format"] as? String, "b64_json")
+    }
+
     func testBuildImagesGenerationRequestUsesXAIShapeForGrokImagine() throws {
         var config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "grok-imagine-1", timeout: 30, streamEnabled: false)
         config.imagesGenerationsPath = "/v1/images/generations"
@@ -494,6 +588,78 @@ final class ChatServiceTests: XCTestCase {
         XCTAssertEqual(reply.imageAttachments.first?.requestURLString, "https://cdn.example.com/final-polled.png")
         XCTAssertTrue(streamedTexts.contains(where: { $0.contains("图片任务已提交") }))
         XCTAssertTrue(streamedTexts.contains(where: { $0.contains("图片生成完成") }))
+    }
+
+    func testSendChatCompletionsNonStreamingConvertsBareUnsplashURLToImageAttachment() async throws {
+        URLProtocolStub.handler = { request in
+            let body = #"{"choices":[{"message":{"content":"Ferrari 488:\nhttps://images.unsplash.com/photo-1542362567-b07e54358753"}}]}"#
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+            return (response, Data(body.utf8))
+        }
+
+        let service = makeStubbedChatService()
+        let config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: false)
+
+        let reply = try await service.sendMessage(
+            config: config,
+            history: [],
+            message: ChatMessage(role: .user, content: "分享几张跑车图给我"),
+            onEvent: { _ in }
+        )
+
+        XCTAssertEqual(reply.imageAttachments.first?.requestURLString, "https://images.unsplash.com/photo-1542362567-b07e54358753")
+        XCTAssertFalse(reply.text.contains("images.unsplash.com"))
+        XCTAssertTrue(reply.text.contains("Ferrari 488"))
+    }
+
+    func testSendChatCompletionsNonStreamingProbesGenericBareURLImageAttachment() async throws {
+        URLProtocolStub.handler = { request in
+            let url = try XCTUnwrap(request.url).absoluteString
+
+            if url == "https://example.com/v1/chat/completions" {
+                let body = #"{"choices":[{"message":{"content":"Ferrari 488:\nhttps://example.com/ferrari"}}]}"#
+                let response = try XCTUnwrap(
+                    HTTPURLResponse(
+                        url: try XCTUnwrap(request.url),
+                        statusCode: 200,
+                        httpVersion: nil,
+                        headerFields: ["Content-Type": "application/json"]
+                    )
+                )
+                return (response, Data(body.utf8))
+            }
+
+            XCTAssertEqual(request.httpMethod, "HEAD")
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "image/jpeg"]
+                )
+            )
+            return (response, Data())
+        }
+
+        let service = makeStubbedChatService()
+        let config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: false)
+
+        let reply = try await service.sendMessage(
+            config: config,
+            history: [],
+            message: ChatMessage(role: .user, content: "分享几张跑车图给我"),
+            onEvent: { _ in }
+        )
+
+        XCTAssertEqual(reply.imageAttachments.first?.requestURLString, "https://example.com/ferrari")
+        XCTAssertFalse(reply.text.contains("https://example.com/ferrari"))
     }
 
     func testBuildEmbeddingsRequestUsesConfiguredEndpoint() throws {

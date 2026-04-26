@@ -175,6 +175,7 @@ struct ChatRequestBuilder {
         promptProfile: PromptProfile = .full
     ) -> [[String: Any]] {
         buildMessagesWithIdentity(
+            config: config,
             history: history,
             message: message,
             realtimeSystemContext: realtimeSystemContext,
@@ -188,6 +189,7 @@ struct ChatRequestBuilder {
     }
 
     private static func buildMessagesWithIdentity(
+        config: ChatConfig,
         history: [ChatMessage],
         message: ChatMessage,
         realtimeSystemContext: String?,
@@ -238,6 +240,28 @@ struct ChatRequestBuilder {
                 "role": "system",
                 "content": workspaceContinuationSystemPrompt
             ])
+
+            for prompt in AdaptiveSkillRouter.systemPrompts(
+                config: config,
+                message: message,
+                latestProjectContext: latestProjectContext
+            ) {
+                prefix.append([
+                    "role": "system",
+                    "content": prompt
+                ])
+            }
+        } else if promptProfile == .full {
+            for prompt in AdaptiveSkillRouter.systemPrompts(
+                config: config,
+                message: message,
+                latestProjectContext: nil
+            ) {
+                prefix.append([
+                    "role": "system",
+                    "content": prompt
+                ])
+            }
         }
 
         if shouldInjectFrontendAutoBuildPrompt(
@@ -1361,7 +1385,12 @@ struct ChatRequestBuilder {
             "n": 1
         ]
 
-        if loweredModel.contains("gpt-image") || loweredModel.contains("dall-e") {
+        let normalizedImageModelName = loweredModel
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: "_", with: "")
+        if normalizedImageModelName.contains("gptimage")
+            || normalizedImageModelName.contains("dalle")
+            || normalizedImageModelName.contains("gptimage2") {
             payload["response_format"] = "b64_json"
         }
         return payload
@@ -1580,7 +1609,7 @@ final class ChatService {
         let memoryContext: String?
         if config.memoryModeEnabled {
             await memoryStore.remember(message)
-            memoryContext = await memoryStore.buildSystemContext()
+            memoryContext = await memoryStore.buildRelevantSystemContext(for: message.copyableText)
         } else {
             memoryContext = nil
         }
@@ -2093,7 +2122,7 @@ final class ChatService {
         let memoryContext: String?
         if promptProfile == .full, config.memoryModeEnabled {
             await memoryStore.remember(message)
-            memoryContext = await memoryStore.buildSystemContext()
+            memoryContext = await memoryStore.buildRelevantSystemContext(for: message.copyableText)
         } else {
             memoryContext = nil
         }
@@ -2336,11 +2365,27 @@ final class ChatService {
             emitPending(force: true)
 
             let fullReply = fullReplyParts.joined()
-            let cleanedText = ResponseCleaner.cleanAssistantText(fullReply)
-            let mergedText = mergeTextWithCitationURLs(cleanedText, citationURLs: Array(citationURLs))
-            let images = makeImageAttachments(
-                from: Array(structuredImageURLs.isEmpty ? imageURLs : structuredImageURLs),
+            let textImages = makeImageAttachments(
+                from: Array(imageURLs),
                 baseURL: config.normalizedBaseURL
+            )
+            var images = deduplicateImages(
+                makeImageAttachments(
+                    from: Array(structuredImageURLs.isEmpty ? imageURLs : structuredImageURLs),
+                    baseURL: config.normalizedBaseURL
+                ) + textImages
+            )
+            if images.isEmpty {
+                images = await deriveTextImageAttachments(
+                    from: fullReply,
+                    baseURL: config.normalizedBaseURL,
+                    apiKey: config.apiKey
+                )
+            }
+            let cleanedText = ResponseCleaner.cleanAssistantText(fullReply)
+            let mergedText = stripImageAttachmentURLs(
+                from: mergeTextWithCitationURLs(cleanedText, citationURLs: Array(citationURLs)),
+                attachments: images
             )
             let videos = deduplicateVideos(
                 videoURLStrings.map {
@@ -2399,10 +2444,26 @@ final class ChatService {
 
         let parsed = StreamParser.extractPayload(from: object)
         let citationURLs = StreamParser.extractCitationURLs(from: object)
+        let textImages = makeImageAttachments(
+            from: parsed.imageURLs,
+            baseURL: config.normalizedBaseURL
+        )
+        var images = deduplicateImages(
+            extractImageAttachments(from: object, baseURL: config.normalizedBaseURL) + textImages
+        )
+        if images.isEmpty {
+            images = await deriveTextImageAttachments(
+                from: parsed.text,
+                baseURL: config.normalizedBaseURL,
+                apiKey: config.apiKey
+            )
+        }
         let cleanedText = ResponseCleaner.cleanAssistantText(parsed.text)
-        let mergedText = mergeTextWithCitationURLs(cleanedText, citationURLs: citationURLs)
+        let mergedText = stripImageAttachmentURLs(
+            from: mergeTextWithCitationURLs(cleanedText, citationURLs: citationURLs),
+            attachments: images
+        )
         let usage = extractTokenUsage(from: object)
-        let images = extractImageAttachments(from: object, baseURL: config.normalizedBaseURL)
         let videos = deduplicateVideos(extractVideoAttachments(from: object, baseURL: config.normalizedBaseURL))
 
         if mergedText.isEmpty && images.isEmpty && videos.isEmpty {
@@ -2499,7 +2560,7 @@ final class ChatService {
         let memoryContext: String?
         if promptProfile == .full, config.memoryModeEnabled {
             await memoryStore.remember(message)
-            memoryContext = await memoryStore.buildSystemContext()
+            memoryContext = await memoryStore.buildRelevantSystemContext(for: message.copyableText)
         } else {
             memoryContext = nil
         }
@@ -2634,11 +2695,27 @@ final class ChatService {
                 emitPending(force: true)
 
                 let fullReply = fullReplyParts.joined()
-                let cleaned = ResponseCleaner.cleanAssistantText(fullReply)
-                let mergedText = mergeTextWithCitationURLs(cleaned, citationURLs: Array(citationURLs))
-                let images = makeImageAttachments(
-                    from: Array(structuredImageURLs.isEmpty ? imageURLs : structuredImageURLs),
+                let textImages = makeImageAttachments(
+                    from: Array(imageURLs),
                     baseURL: config.normalizedBaseURL
+                )
+                var images = deduplicateImages(
+                    makeImageAttachments(
+                        from: Array(structuredImageURLs.isEmpty ? imageURLs : structuredImageURLs),
+                        baseURL: config.normalizedBaseURL
+                    ) + textImages
+                )
+                if images.isEmpty {
+                    images = await deriveTextImageAttachments(
+                        from: fullReply,
+                        baseURL: config.normalizedBaseURL,
+                        apiKey: config.apiKey
+                    )
+                }
+                let cleaned = ResponseCleaner.cleanAssistantText(fullReply)
+                let mergedText = stripImageAttachmentURLs(
+                    from: mergeTextWithCitationURLs(cleaned, citationURLs: Array(citationURLs)),
+                    attachments: images
                 )
                 if mergedText.isEmpty && images.isEmpty {
                     throw ChatServiceError.noData
@@ -2696,11 +2773,28 @@ final class ChatService {
 
         let parsed = StreamParser.extractPayload(from: object)
         let citationURLs = StreamParser.extractCitationURLs(from: object)
+        let textImages = makeImageAttachments(
+            from: parsed.imageURLs,
+            baseURL: config.normalizedBaseURL
+        )
+        var images = deduplicateImages(
+            extractImageAttachments(from: object, baseURL: config.normalizedBaseURL) + textImages
+        )
+        if images.isEmpty {
+            images = await deriveTextImageAttachments(
+                from: parsed.text,
+                baseURL: config.normalizedBaseURL,
+                apiKey: config.apiKey
+            )
+        }
         let cleanedText = ResponseCleaner.cleanAssistantText(parsed.text)
         let usage = extractTokenUsage(from: object)
         let reply = ChatReply(
-            text: mergeTextWithCitationURLs(cleanedText, citationURLs: citationURLs),
-            imageAttachments: extractImageAttachments(from: object, baseURL: config.normalizedBaseURL),
+            text: stripImageAttachmentURLs(
+                from: mergeTextWithCitationURLs(cleanedText, citationURLs: citationURLs),
+                attachments: images
+            ),
+            imageAttachments: images,
             usage: usage
         )
         if reply.text.isEmpty && reply.imageAttachments.isEmpty {
@@ -2769,7 +2863,21 @@ final class ChatService {
                     throw ChatServiceError.noData
                 }
 
-                let images = extractImageAttachments(from: object, baseURL: attempt.config.normalizedBaseURL)
+                let payload = StreamParser.extractPayload(from: object)
+                let textImages = makeImageAttachments(
+                    from: payload.imageURLs,
+                    baseURL: attempt.config.normalizedBaseURL
+                )
+                var images = deduplicateImages(
+                    extractImageAttachments(from: object, baseURL: attempt.config.normalizedBaseURL) + textImages
+                )
+                if images.isEmpty {
+                    images = await deriveTextImageAttachments(
+                        from: payload.text,
+                        baseURL: attempt.config.normalizedBaseURL,
+                        apiKey: attempt.config.apiKey
+                    )
+                }
                 if images.isEmpty {
                     let taskID = extractImageTaskID(from: object)
                     if let pollURL = resolveImagePollURL(from: object, taskID: taskID, config: attempt.config) {
@@ -2864,7 +2972,21 @@ final class ChatService {
                 throw ChatServiceError.noData
             }
 
-            let images = extractImageAttachments(from: object, baseURL: config.normalizedBaseURL)
+            let payload = StreamParser.extractPayload(from: object)
+            let textImages = makeImageAttachments(
+                from: payload.imageURLs,
+                baseURL: config.normalizedBaseURL
+            )
+            var images = deduplicateImages(
+                extractImageAttachments(from: object, baseURL: config.normalizedBaseURL) + textImages
+            )
+            if images.isEmpty {
+                images = await deriveTextImageAttachments(
+                    from: payload.text,
+                    baseURL: config.normalizedBaseURL,
+                    apiKey: config.apiKey
+                )
+            }
             let status = extractImageTaskStatus(from: object)
             let progress = extractImageProgress(from: object)
             let statusLine = readableImageStatusLine(status: status, progress: progress)
@@ -3312,19 +3434,19 @@ final class ChatService {
     }
 
     private func extractImageTaskID(from object: [String: Any]) -> String? {
-        let keys = ["task_id", "id", "job_id", "generation_id", "request_id", "operation_id"]
+        let keys = ["task_id", "taskId", "id", "job_id", "jobId", "generation_id", "generationId", "request_id", "requestId", "operation_id", "operationId", "prediction_id", "predictionId"]
         return firstStringValue(for: keys, in: object)
     }
 
     private func extractImageTaskStatus(from object: [String: Any]) -> String? {
-        let keys = ["status", "state", "task_status", "job_status", "operation_status"]
+        let keys = ["status", "state", "phase", "task_status", "taskStatus", "job_status", "jobStatus", "operation_status", "operationStatus"]
         return firstStringValue(for: keys, in: object)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
     }
 
     private func extractImageProgress(from object: [String: Any]) -> Int? {
-        let keyCandidates = ["progress", "percent", "percentage"]
+        let keyCandidates = ["progress", "progress_percent", "progressPercent", "percent", "percentage"]
         if let number = firstNumberValue(for: keyCandidates, in: object) {
             if number <= 1 {
                 return max(0, min(100, Int(number * 100)))
@@ -3335,7 +3457,7 @@ final class ChatService {
     }
 
     private func resolveImagePollURL(from object: [String: Any], taskID: String?, config: ChatConfig) -> String? {
-        let keys = ["status_url", "poll_url", "operation_url", "task_url"]
+        let keys = ["status_url", "statusUrl", "poll_url", "pollUrl", "operation_url", "operationUrl", "task_url", "taskUrl", "result_url", "resultUrl"]
         if let direct = firstStringValue(for: keys, in: object),
            let normalized = normalizeImageURL(direct, baseURL: config.normalizedBaseURL) {
             return normalized
@@ -3381,6 +3503,8 @@ final class ChatService {
             || normalized == "done"
             || normalized == "finished"
             || normalized == "ready"
+            || normalized == "processed"
+            || normalized == "fulfilled"
     }
 
     private func isImageTaskFailureStatus(_ status: String) -> Bool {
@@ -3391,6 +3515,7 @@ final class ChatService {
             || normalized == "canceled"
             || normalized == "rejected"
             || normalized == "expired"
+            || normalized == "terminated"
     }
 
     private func extractImageFailureReason(from object: [String: Any]) -> String? {
@@ -3903,6 +4028,134 @@ final class ChatService {
             urls.append(String(text[range]))
         }
         return urls
+    }
+
+    private func deriveTextImageAttachments(
+        from text: String,
+        baseURL: String,
+        apiKey: String
+    ) async -> [ChatImageAttachment] {
+        let explicitImageURLs = MessageContentParser.extractInlineImageURLs(from: text)
+        if !explicitImageURLs.isEmpty {
+            return makeImageAttachments(from: explicitImageURLs, baseURL: baseURL)
+        }
+
+        let urlCandidates = deduplicateTextURLs(
+            extractWebURLs(from: text).compactMap { normalizeImageURL($0, baseURL: baseURL) }
+        )
+        guard !urlCandidates.isEmpty else { return [] }
+
+        var attachments: [ChatImageAttachment] = []
+        for urlString in urlCandidates.prefix(8) {
+            if let attachment = await probeRemoteImageAttachment(
+                urlString: urlString,
+                apiKey: apiKey,
+                timeoutInterval: 25
+            ) {
+                attachments.append(attachment)
+            }
+        }
+        return deduplicateImages(attachments)
+    }
+
+    private func deduplicateTextURLs(_ urls: [String]) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for url in urls {
+            guard !url.isEmpty, seen.insert(url).inserted else { continue }
+            result.append(url)
+        }
+        return result
+    }
+
+    private func probeRemoteImageAttachment(
+        urlString: String,
+        apiKey: String,
+        timeoutInterval: TimeInterval
+    ) async -> ChatImageAttachment? {
+        guard let headRequest = makeAuthorizedImageProbeRequest(
+            urlString: urlString,
+            apiKey: apiKey,
+            timeoutInterval: timeoutInterval,
+            method: "HEAD"
+        ) else {
+            return nil
+        }
+
+        if let attachment = await remoteImageAttachmentIfImageResponse(
+            urlString: urlString,
+            request: headRequest
+        ) {
+            return attachment
+        }
+
+        guard let getRequest = makeAuthorizedImageProbeRequest(
+            urlString: urlString,
+            apiKey: apiKey,
+            timeoutInterval: timeoutInterval,
+            method: "GET"
+        ) else {
+            return nil
+        }
+
+        do {
+            let (data, response) = try await session.data(for: getRequest)
+            if let direct = directImageAttachment(from: data, response: response) {
+                return ChatImageAttachment(
+                    dataURL: urlString,
+                    mimeType: direct.mimeType,
+                    remoteURL: urlString
+                )
+            }
+        } catch {
+            return nil
+        }
+
+        return nil
+    }
+
+    private func remoteImageAttachmentIfImageResponse(
+        urlString: String,
+        request: URLRequest
+    ) async -> ChatImageAttachment? {
+        do {
+            let (_, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse,
+                  (200...299).contains(http.statusCode) else {
+                return nil
+            }
+            let mimeType = ChatImageAttachment.normalizeMIMEType(
+                http.value(forHTTPHeaderField: "Content-Type") ?? ""
+            )
+            guard mimeType.hasPrefix("image/") else { return nil }
+            return ChatImageAttachment(
+                dataURL: urlString,
+                mimeType: mimeType,
+                remoteURL: urlString
+            )
+        } catch {
+            return nil
+        }
+    }
+
+    private func makeAuthorizedImageProbeRequest(
+        urlString: String,
+        apiKey: String,
+        timeoutInterval: TimeInterval,
+        method: String
+    ) -> URLRequest? {
+        guard let url = URL(string: urlString), !urlString.isEmpty else { return nil }
+        var request = URLRequest(url: url, timeoutInterval: timeoutInterval)
+        request.httpMethod = method
+        request.setValue("image/*,*/*;q=0.8", forHTTPHeaderField: "Accept")
+
+        let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedAPIKey.isEmpty {
+            request.setValue("Bearer \(trimmedAPIKey)", forHTTPHeaderField: "Authorization")
+            request.setValue(trimmedAPIKey, forHTTPHeaderField: "x-api-key")
+            request.setValue(trimmedAPIKey, forHTTPHeaderField: "api-key")
+        }
+        return request
     }
 
     private func sendEmbeddings(
@@ -4424,6 +4677,35 @@ final class ChatService {
             return sourceBlock
         }
         return trimmedText + "\n\n" + sourceBlock
+    }
+
+    private func stripImageAttachmentURLs(
+        from text: String,
+        attachments: [ChatImageAttachment]
+    ) -> String {
+        guard !text.isEmpty, !attachments.isEmpty else {
+            return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        var cleaned = text
+        let removableURLs = attachments
+            .map(\.requestURLString)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && ($0.hasPrefix("http://") || $0.hasPrefix("https://")) }
+
+        for url in removableURLs {
+            let escaped = NSRegularExpression.escapedPattern(for: url)
+            cleaned = cleaned.replacingOccurrences(
+                of: "(?m)^[\\t ]*(?:[-*•]\\s+|\\d+[.)、]\\s+)?\(escaped)[\\t ]*$",
+                with: "",
+                options: .regularExpression
+            )
+            cleaned = cleaned.replacingOccurrences(of: url, with: "")
+        }
+
+        cleaned = cleaned.replacingOccurrences(of: "\r\n", with: "\n")
+        cleaned = cleaned.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
+        return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func normalizeCitationURL(_ raw: String) -> String {

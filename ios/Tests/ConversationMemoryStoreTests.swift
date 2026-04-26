@@ -72,4 +72,17 @@ final class ConversationMemoryStoreTests: XCTestCase {
         XCTAssertTrue(context?.contains("请记住我喜欢简洁回答") == true)
         XCTAssertFalse(context?.contains("写一个超高端的官方旗舰网站") == true)
     }
+
+    func testBuildRelevantSystemContextSelectsQueryMatchedMemories() async {
+        let store = ConversationMemoryStore(defaults: defaults, maxEntries: 20, maxEntryLength: 180, maxContextItems: 10)
+        await store.remember(ChatMessage(role: .user, content: "请记住我喜欢简洁回答"))
+        await store.remember(ChatMessage(role: .user, content: "请记住我住在上海"))
+        await store.remember(ChatMessage(role: .user, content: "请记住我喜欢 Swift"))
+
+        let context = await store.buildRelevantSystemContext(for: "之后回答简洁一点，我现在住在哪里来着？")
+
+        XCTAssertTrue(context?.contains("请记住我喜欢简洁回答") == true)
+        XCTAssertTrue(context?.contains("请记住我住在上海") == true)
+        XCTAssertFalse(context?.contains("请记住我喜欢 Swift") == true)
+    }
 }

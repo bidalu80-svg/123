@@ -26,10 +26,28 @@ struct ConversationMemoryItem: Codable, Equatable, Identifiable {
 }
 
 actor ConversationMemoryStore {
+    private enum MemoryCategory: String, CaseIterable {
+        case responseStyle
+        case languagePreference
+        case codingLanguage
+        case platform
+        case location
+        case identity
+        case workflow
+    }
+
     private struct LegacyMemoryEntry: Codable, Equatable {
         var text: String
         var updatedAt: Date
     }
+
+    private static let asciiWordRegex = try? NSRegularExpression(
+        pattern: #"[a-z0-9.+#_-]{2,}"#,
+        options: [.caseInsensitive]
+    )
+    private static let cjkRunRegex = try? NSRegularExpression(
+        pattern: #"[\p{Han}]{2,}"#
+    )
 
     private let defaults: UserDefaults
     private let storeKey: String
@@ -84,16 +102,77 @@ actor ConversationMemoryStore {
     }
 
     func buildSystemContext() -> String? {
+        buildRelevantSystemContext(for: "")
+    }
+
+    func buildRelevantSystemContext(for userQuery: String, maxItems: Int? = nil) -> String? {
         loadIfNeeded()
         let stableEntries = entries.filter { isLongTermPreferenceCandidate($0.text) }
         guard !stableEntries.isEmpty else { return nil }
 
-        let top = Array(stableEntries.sorted { $0.updatedAt > $1.updatedAt }.prefix(maxContextItems))
-        guard !top.isEmpty else { return nil }
+        let sortedEntries = stableEntries.sorted { $0.updatedAt > $1.updatedAt }
+        let clampedLimit = min(maxItems ?? maxContextItems, maxContextItems)
+        let effectiveLimit = max(1, clampedLimit)
+        let normalizedQuery = normalize(userQuery)
 
+        let selected: [ConversationMemoryItem]
+        if normalizedQuery.isEmpty {
+            selected = Array(sortedEntries.prefix(effectiveLimit))
+        } else {
+            let queryCategories = categorizeText(normalizedQuery)
+            let queryKeywords = keywordSet(for: normalizedQuery)
+
+            var chosen: [ConversationMemoryItem] = []
+            var chosenIDs = Set<UUID>()
+
+            let globallyHelpful = sortedEntries.filter { isGloballyHelpfulPreference($0.text) }
+            for item in globallyHelpful.prefix(min(2, effectiveLimit)) {
+                chosen.append(item)
+                chosenIDs.insert(item.id)
+            }
+
+            let rankedMatches = sortedEntries
+                .map { item in
+                    (
+                        item: item,
+                        score: relevanceScore(
+                            for: item.text,
+                            query: normalizedQuery,
+                            queryKeywords: queryKeywords,
+                            queryCategories: queryCategories
+                        )
+                    )
+                }
+                .filter { $0.score > 0 }
+                .sorted {
+                    if $0.score == $1.score {
+                        return $0.item.updatedAt > $1.item.updatedAt
+                    }
+                    return $0.score > $1.score
+                }
+
+            for match in rankedMatches where chosen.count < effectiveLimit {
+                guard !chosenIDs.contains(match.item.id) else { continue }
+                chosen.append(match.item)
+                chosenIDs.insert(match.item.id)
+            }
+
+            if chosen.isEmpty {
+                selected = Array(sortedEntries.prefix(min(2, effectiveLimit)))
+            } else {
+                selected = chosen
+            }
+        }
+
+        guard !selected.isEmpty else { return nil }
+        return renderSystemContext(from: selected)
+    }
+
+    private func renderSystemContext(from items: [ConversationMemoryItem]) -> String? {
+        guard !items.isEmpty else { return nil }
         var lines: [String] = []
         lines.append("以下是用户跨会话偏好记忆（只用于长期偏好与稳定个人信息，不代表上一个任务的上下文）：")
-        for item in top {
+        for item in items {
             lines.append("• \(item.text)")
         }
         lines.append("若用户当前消息与记忆冲突，优先遵循当前消息；不要把这些记忆当成当前项目状态或上一轮任务指令。")
@@ -264,6 +343,156 @@ actor ConversationMemoryStore {
             "write a", "build a", "create a", "delete", "clear", "reset", "fix this", "previous project"
         ]
         return !taskMarkers.contains(where: { normalized.contains($0) })
+    }
+
+    private func isGloballyHelpfulPreference(_ raw: String) -> Bool {
+        let categories = categorizeText(raw)
+        return categories.contains(.responseStyle)
+            || categories.contains(.languagePreference)
+            || categories.contains(.workflow)
+    }
+
+    private func categorizeText(_ raw: String) -> Set<MemoryCategory> {
+        let text = normalize(raw)
+        guard !text.isEmpty else { return [] }
+
+        var result = Set<MemoryCategory>()
+
+        if containsAny(in: text, markers: [
+            "简洁", "详细", "短句", "长一点", "分步骤", "一步一步", "先给结论",
+            "代码块", "表格", "少解释", "多解释", "bullet", "markdown"
+        ]) {
+            result.insert(.responseStyle)
+        }
+
+        if containsAny(in: text, markers: [
+            "中文", "英文", "english", "chinese", "简体", "繁体"
+        ]) {
+            result.insert(.languagePreference)
+        }
+
+        if containsAny(in: text, markers: [
+            "swift", "swiftui", "uikit", "python", "javascript", "typescript",
+            "go", "rust", "java", "kotlin", "php", "ruby", "sql", "bash"
+        ]) {
+            result.insert(.codingLanguage)
+        }
+
+        if containsAny(in: text, markers: [
+            "ios", "android", "xcode", "ipa", "info.plist", "entitlement",
+            "前端", "网站", "网页", "后端", "接口", "api"
+        ]) {
+            result.insert(.platform)
+        }
+
+        if containsAny(in: text, markers: [
+            "我住", "我在", "住在", "located", "live in", "上海", "北京", "深圳",
+            "广州", "杭州", "成都", "东京", "singapore", "new york", "london"
+        ]) {
+            result.insert(.location)
+        }
+
+        if containsAny(in: text, markers: [
+            "我叫", "我的名字", "名字是", "my name", "i am", "i'm", "我是"
+        ]) {
+            result.insert(.identity)
+        }
+
+        if containsAny(in: text, markers: [
+            "默认", "以后都用", "请一直", "尽量用", "prefer", "default to", "always use"
+        ]) {
+            result.insert(.workflow)
+        }
+
+        return result
+    }
+
+    private func relevanceScore(
+        for memory: String,
+        query: String,
+        queryKeywords: Set<String>,
+        queryCategories: Set<MemoryCategory>
+    ) -> Int {
+        let normalizedMemory = normalize(memory)
+        guard !normalizedMemory.isEmpty else { return 0 }
+
+        var score = 0
+        let memoryCategories = categorizeText(normalizedMemory)
+        score += queryCategories.intersection(memoryCategories).count * 5
+
+        let memoryKeywords = keywordSet(for: normalizedMemory)
+        let overlapCount = queryKeywords.intersection(memoryKeywords).count
+        score += min(overlapCount, 5) * 2
+
+        if query.contains(normalizedMemory) || normalizedMemory.contains(query) {
+            score += 8
+        }
+
+        if isGloballyHelpfulPreference(memory),
+           containsAny(in: query, markers: [
+               "回答", "回复", "语气", "风格", "默认", "以后", "中文", "英文", "简洁", "详细",
+               "answer", "reply", "style", "default"
+           ]) {
+            score += 4
+        }
+
+        return score
+    }
+
+    private func keywordSet(for raw: String) -> Set<String> {
+        let text = normalize(raw)
+        guard !text.isEmpty else { return [] }
+
+        var result = Set<String>()
+        let nsText = text as NSString
+        let fullRange = NSRange(location: 0, length: nsText.length)
+
+        if let regex = Self.asciiWordRegex {
+            regex.enumerateMatches(in: text, options: [], range: fullRange) { match, _, _ in
+                guard let match else { return }
+                let token = nsText.substring(with: match.range)
+                if token.count >= 2 {
+                    result.insert(token)
+                }
+            }
+        }
+
+        if let regex = Self.cjkRunRegex {
+            regex.enumerateMatches(in: text, options: [], range: fullRange) { match, _, _ in
+                guard let match else { return }
+                let run = nsText.substring(with: match.range)
+                appendChineseKeywords(from: run, into: &result)
+            }
+        }
+
+        let stopTokens: Set<String> = [
+            "请记", "记住", "住我", "我是", "我的", "以后", "默认", "请一", "一直", "都用",
+            "i am", "i'm", "remember", "default"
+        ]
+        result.subtract(stopTokens)
+        return result
+    }
+
+    private func appendChineseKeywords(from run: String, into result: inout Set<String>) {
+        let characters = Array(run)
+        guard characters.count >= 2 else { return }
+
+        let maxWindow = min(characters.count, 4)
+        for window in 2...maxWindow {
+            guard characters.count >= window else { continue }
+            for start in 0...(characters.count - window) {
+                let token = String(characters[start..<(start + window)])
+                result.insert(token)
+            }
+        }
+
+        if characters.count <= 8 {
+            result.insert(run)
+        }
+    }
+
+    private func containsAny(in text: String, markers: [String]) -> Bool {
+        markers.contains(where: { text.contains($0) })
     }
 
     private func deduplicatedEntries(_ values: [ConversationMemoryItem]) -> [ConversationMemoryItem] {
