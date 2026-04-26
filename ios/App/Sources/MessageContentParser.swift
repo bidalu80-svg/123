@@ -183,19 +183,28 @@ enum MessageContentParser {
 
     private static func trimParseCacheForStreamingPressureIfNeeded(message: ChatMessage) {
         guard message.isStreaming, message.content.count >= mediumStreamingContentThreshold else { return }
-        let targetCacheCount = max(24, maxCacheEntries / 3)
+        let targetCacheCount = message.content.count >= longStreamingContentThreshold
+            ? 0
+            : max(16, maxCacheEntries / 4)
         while parseCacheOrder.count > targetCacheCount {
             let key = parseCacheOrder.removeFirst()
             parseCache.removeValue(forKey: key)
+        }
+        if message.content.count >= longStreamingContentThreshold {
+            streamingSnapshots = streamingSnapshots.filter { $0.key == message.id }
         }
     }
 
     static func extractInlineImageURLs(from text: String) -> [String] {
         var collected: [String] = []
-        collected.append(contentsOf: findMatches(in: text, pattern: markdownImagePattern))
+        collected.append(contentsOf: findMatches(in: text, pattern: markdownImagePattern).compactMap {
+            sanitizedImageURLCandidate($0)
+        })
         collected.append(contentsOf: findMatches(in: text, pattern: dataImagePattern))
-        collected.append(contentsOf: findMatches(in: text, pattern: bareURLPattern).filter {
-            isLikelyImageURL($0) || isStandaloneURLLine(in: text, url: $0)
+        collected.append(contentsOf: findMatches(in: text, pattern: bareURLPattern).compactMap {
+            let candidate = sanitizedImageURLCandidate($0)
+            guard let candidate, isLikelyImageURL(candidate) else { return nil }
+            return candidate
         })
         return dedupe(collected)
     }
@@ -1471,6 +1480,31 @@ enum MessageContentParser {
             "cdn.midjourney.com", "image.pollinations.ai"
         ]
         return indicators.contains(where: { cleaned.contains($0) })
+    }
+
+    private static func sanitizedImageURLCandidate(_ raw: String) -> String? {
+        var cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return nil }
+
+        cleaned = cleaned.trimmingCharacters(in: CharacterSet(charactersIn: "<>\"'"))
+        cleaned = cleaned.replacingOccurrences(of: "&amp;", with: "&")
+
+        if let nextHTTPRange = cleaned.range(
+            of: #"[\s\)\]]+(https?://)"#,
+            options: .regularExpression
+        ) {
+            cleaned = String(cleaned[..<nextHTTPRange.lowerBound])
+        }
+
+        if let whitespaceRange = cleaned.range(of: #"\s+"#, options: .regularExpression) {
+            cleaned = String(cleaned[..<whitespaceRange.lowerBound])
+        }
+
+        cleaned = cleaned.trimmingCharacters(in: CharacterSet(charactersIn: ")]}>.,;:!"))
+        guard cleaned.hasPrefix("http://") || cleaned.hasPrefix("https://") || cleaned.hasPrefix("data:image") else {
+            return nil
+        }
+        return cleaned
     }
 
     private static func isStandaloneURLLine(in text: String, url: String) -> Bool {

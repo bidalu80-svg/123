@@ -72,6 +72,25 @@ final class StreamParserTests: XCTestCase {
         XCTAssertEqual(chunk?.imageURLs, ["https://images.unsplash.com/photo-1542362567-b07e54358753"])
     }
 
+    func testParseTextContentDoesNotTreatUnsplashSourcePageAsImage() {
+        let line = #"{"choices":[{"message":{"content":"来源：\nhttps://unsplash.com/s/photos/sports-car"}}]}"#
+        let chunk = StreamParser.parse(line: line)
+
+        XCTAssertEqual(chunk?.isDone, false)
+        XCTAssertEqual(chunk?.imageURLs, [])
+    }
+
+    func testParseMarkdownImageTrimsTrailingSourceURLNoise() {
+        let line = #"{"choices":[{"message":{"content":"![car](https://images.unsplash.com/photo-1546331-e26879cd4d9b?q=80&w=120&auto=format&fit=crop https://unsplash.com/s/photos/sports-car)"}}]}"#
+        let chunk = StreamParser.parse(line: line)
+
+        XCTAssertEqual(chunk?.isDone, false)
+        XCTAssertEqual(
+            chunk?.imageURLs,
+            ["https://images.unsplash.com/photo-1546331-e26879cd4d9b?q=80&w=120&auto=format&fit=crop"]
+        )
+    }
+
     func testExtractPayloadSupportsImageDataArray() {
         let payload: [String: Any] = [
             "data": [

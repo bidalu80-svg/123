@@ -821,9 +821,12 @@ private struct FrontendProjectBrowserScreen: View {
     let title: String
     let rootURL: URL
 
+    @Environment(\.scenePhase) private var scenePhase
     @State private var files: [FrontendProjectFileEntry] = []
     @State private var loadingError: String?
     @State private var feedbackMessage: String?
+    @State private var directorySignature = ""
+    @State private var autoRefreshTask: Task<Void, Never>?
 
     var body: some View {
         Group {
@@ -861,7 +864,7 @@ private struct FrontendProjectBrowserScreen: View {
                         FrontendProjectFileViewerScreen(
                             entry: entry,
                             onDeleteSuccess: {
-                                loadFiles()
+                                loadFiles(force: true)
                             }
                         )
                     } label: {
@@ -905,6 +908,9 @@ private struct FrontendProjectBrowserScreen: View {
                     }
                 }
                 .listStyle(.insetGrouped)
+                .refreshable {
+                    loadFiles(force: true)
+                }
             }
         }
         .navigationTitle(title)
@@ -921,7 +927,7 @@ private struct FrontendProjectBrowserScreen: View {
                 }
 
                 Button {
-                    loadFiles()
+                    loadFiles(force: true)
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
@@ -935,16 +941,27 @@ private struct FrontendProjectBrowserScreen: View {
             Text(feedbackMessage ?? "")
         }
         .onAppear {
-            loadFiles()
+            loadFiles(force: true)
+            startAutoRefresh()
+        }
+        .onDisappear {
+            autoRefreshTask?.cancel()
+            autoRefreshTask = nil
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .active {
+                loadFiles(force: true)
+            }
         }
     }
 
-    private func loadFiles() {
+    private func loadFiles(force: Bool = false) {
         let fileManager = FileManager.default
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: rootURL.path, isDirectory: &isDirectory), isDirectory.boolValue else {
             files = []
             loadingError = "目录不存在：\(rootURL.path)"
+            directorySignature = ""
             return
         }
 
@@ -978,8 +995,26 @@ private struct FrontendProjectBrowserScreen: View {
         collected.sort { lhs, rhs in
             lhs.relativePath.localizedStandardCompare(rhs.relativePath) == .orderedAscending
         }
+        let newSignature = collected.map { "\($0.relativePath)|\($0.size)" }.joined(separator: "\n")
+        guard force || newSignature != directorySignature || loadingError != nil else {
+            return
+        }
         files = collected
         loadingError = nil
+        directorySignature = newSignature
+    }
+
+    private func startAutoRefresh() {
+        autoRefreshTask?.cancel()
+        autoRefreshTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                guard !Task.isCancelled else { break }
+                await MainActor.run {
+                    loadFiles(force: false)
+                }
+            }
+        }
     }
 
     private func relativePath(_ fileURL: URL) -> String {
@@ -1029,7 +1064,7 @@ private struct FrontendProjectBrowserScreen: View {
         do {
             try removeItemWithinRoot(entry.fileURL)
             pruneEmptyParentDirectories(startingFrom: entry.fileURL.deletingLastPathComponent())
-            loadFiles()
+            loadFiles(force: true)
             feedbackMessage = "已删除 \(entry.relativePath)"
         } catch {
             feedbackMessage = "删除失败：\(error.localizedDescription)"
@@ -1040,7 +1075,7 @@ private struct FrontendProjectBrowserScreen: View {
         let targetURL = rootURL.appendingPathComponent(projectName, isDirectory: true)
         do {
             try removeItemWithinRoot(targetURL)
-            loadFiles()
+            loadFiles(force: true)
             feedbackMessage = "已删除项目 \(projectName)"
         } catch {
             feedbackMessage = "删除项目失败：\(error.localizedDescription)"
@@ -1069,7 +1104,7 @@ private struct FrontendProjectBrowserScreen: View {
                 }
             }
 
-            loadFiles()
+            loadFiles(force: true)
             feedbackMessage = removedCount == 0
                 ? "没有可清理的历史项目。"
                 : "已清理 \(removedCount) 个历史项目。"

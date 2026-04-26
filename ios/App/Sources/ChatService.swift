@@ -1349,9 +1349,7 @@ struct ChatRequestBuilder {
         responseFormatOverride: String?,
         preferAsyncResponse: Bool
     ) -> [String: Any] {
-        let size = config.imageGenerationSize.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? ChatConfig.default.imageGenerationSize
-            : config.imageGenerationSize.trimmingCharacters(in: .whitespacesAndNewlines)
+        let size = preferredImageGenerationSize(prompt: prompt, configuredSize: config.imageGenerationSize)
         let loweredModel = config.model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 
         // xAI grok-imagine uses aspect_ratio / resolution and can fail on OpenAI-only `size`.
@@ -1406,6 +1404,9 @@ struct ChatRequestBuilder {
             payload["async"] = true
             payload["wait_for_generation"] = false
             payload["wait_for_completion"] = false
+        }
+        if let quality = preferredImageGenerationQuality(from: prompt) {
+            payload["quality"] = quality
         }
         return payload
     }
@@ -1462,6 +1463,54 @@ struct ChatRequestBuilder {
             return nil
         }
         return (width, height)
+    }
+
+    private static func preferredImageGenerationSize(prompt: String, configuredSize: String) -> String {
+        let trimmedConfigured = configuredSize.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallback = trimmedConfigured.isEmpty ? ChatConfig.default.imageGenerationSize : trimmedConfigured
+        let normalizedPrompt = prompt.lowercased()
+
+        if let directSize = firstRegexCapture(
+            in: normalizedPrompt,
+            pattern: #"([1-9][0-9]{2,4}\s*[x×*]\s*[1-9][0-9]{2,4})"#
+        ) {
+            let cleaned = directSize
+                .replacingOccurrences(of: "×", with: "x")
+                .replacingOccurrences(of: "*", with: "x")
+                .replacingOccurrences(of: " ", with: "")
+            if parseWidthHeight(from: cleaned) != nil {
+                return cleaned
+            }
+        }
+
+        if normalizedPrompt.contains("9:16") || normalizedPrompt.contains("竖版") || normalizedPrompt.contains("竖图") {
+            return "1080x1920"
+        }
+        if normalizedPrompt.contains("16:9") || normalizedPrompt.contains("横版") || normalizedPrompt.contains("横图") {
+            return "1920x1080"
+        }
+        if normalizedPrompt.contains("1:1") || normalizedPrompt.contains("方图") {
+            return "1024x1024"
+        }
+
+        return fallback
+    }
+
+    private static func preferredImageGenerationQuality(from prompt: String) -> String? {
+        let lowered = prompt.lowercased()
+        if lowered.contains("8k")
+            || lowered.contains("uhd")
+            || lowered.contains("ultra hd")
+            || lowered.contains("超高清")
+            || lowered.contains("高画质")
+            || lowered.contains("高清")
+            || lowered.contains("高质量") {
+            return "high"
+        }
+        if lowered.contains("标准画质") || lowered.contains("普通画质") {
+            return "medium"
+        }
+        return nil
     }
 
     private static func greatestCommonDivisor(_ a: Int, _ b: Int) -> Int {
@@ -2359,20 +2408,19 @@ final class ChatService {
                 throw ChatServiceError.httpError(httpResponse.statusCode)
             }
 
-            var fullReplyParts: [String] = []
             var imageURLs = Set<String>()
             var structuredImageURLs = Set<String>()
             var videoURLStrings = Set<String>()
             var citationURLs = Set<String>()
-            var pendingDeltaParts: [String] = []
+            var pendingDeltaText = ""
             var pendingDeltaCharacters = 0
             var pendingImageURLs = Set<String>()
             var thinkTagFilter = ThinkTagStreamFilter()
             var accumulatedResponseText = ""
             var latestUsage: ChatTokenUsage?
             var lastEmitAt = Date.distantPast
-            let streamEmitInterval: TimeInterval = 0.030
-            let streamForceEmitCharacterThreshold = 96
+            let streamEmitInterval: TimeInterval = 0.050
+            let streamForceEmitCharacterThreshold = 64
 
             func emitPending(force: Bool = false) {
                 guard pendingDeltaCharacters > 0 || !pendingImageURLs.isEmpty else { return }
@@ -2381,7 +2429,6 @@ final class ChatService {
                 if !force && !shouldForceBySize && now.timeIntervalSince(lastEmitAt) < streamEmitInterval {
                     return
                 }
-                let pendingDeltaText = pendingDeltaParts.joined()
                 onEvent(
                     StreamChunk(
                         rawLine: "",
@@ -2390,7 +2437,7 @@ final class ChatService {
                         isDone: false
                     )
                 )
-                pendingDeltaParts.removeAll(keepingCapacity: true)
+                pendingDeltaText.removeAll(keepingCapacity: true)
                 pendingDeltaCharacters = 0
                 pendingImageURLs.removeAll()
                 lastEmitAt = now
@@ -2416,8 +2463,7 @@ final class ChatService {
                         )
                         if !incremental.isEmpty {
                             accumulatedResponseText += incremental
-                            fullReplyParts.append(incremental)
-                            pendingDeltaParts.append(incremental)
+                            pendingDeltaText.append(incremental)
                             pendingDeltaCharacters += incremental.count
                         }
                     }
@@ -2454,14 +2500,13 @@ final class ChatService {
                 )
                 if !incremental.isEmpty {
                     accumulatedResponseText += incremental
-                    fullReplyParts.append(incremental)
-                    pendingDeltaParts.append(incremental)
+                    pendingDeltaText.append(incremental)
                     pendingDeltaCharacters += incremental.count
                 }
             }
             emitPending(force: true)
 
-            let fullReply = fullReplyParts.joined()
+            let fullReply = accumulatedResponseText
             let textImages = makeImageAttachments(
                 from: Array(imageURLs),
                 baseURL: config.normalizedBaseURL
@@ -2694,11 +2739,10 @@ final class ChatService {
                     throw ChatServiceError.httpError(httpResponse.statusCode)
                 }
 
-                var fullReplyParts: [String] = []
                 var imageURLs = Set<String>()
                 var structuredImageURLs = Set<String>()
                 var citationURLs = Set<String>()
-                var pendingDeltaParts: [String] = []
+                var pendingDeltaText = ""
                 var pendingDeltaCharacters = 0
                 var pendingImageURLs = Set<String>()
                 var thinkTagFilter = ThinkTagStreamFilter()
@@ -2706,8 +2750,8 @@ final class ChatService {
                 var latestUsage: ChatTokenUsage?
                 var lastEmitAt = Date.distantPast
                 // Emit moderate batched deltas to balance smoothness and main-thread load.
-                let streamEmitInterval: TimeInterval = 0.030
-                let streamForceEmitCharacterThreshold = 96
+                let streamEmitInterval: TimeInterval = 0.050
+                let streamForceEmitCharacterThreshold = 64
 
                 func emitPending(force: Bool = false) {
                     guard pendingDeltaCharacters > 0 || !pendingImageURLs.isEmpty else { return }
@@ -2716,7 +2760,6 @@ final class ChatService {
                     if !force && !shouldForceBySize && now.timeIntervalSince(lastEmitAt) < streamEmitInterval {
                         return
                     }
-                    let pendingDeltaText = pendingDeltaParts.joined()
                     onEvent(
                         StreamChunk(
                             rawLine: "",
@@ -2725,7 +2768,7 @@ final class ChatService {
                             isDone: false
                         )
                     )
-                    pendingDeltaParts.removeAll(keepingCapacity: true)
+                    pendingDeltaText.removeAll(keepingCapacity: true)
                     pendingDeltaCharacters = 0
                     pendingImageURLs.removeAll()
                     lastEmitAt = now
@@ -2751,8 +2794,7 @@ final class ChatService {
                             )
                             if !incremental.isEmpty {
                                 accumulatedResponseText += incremental
-                                fullReplyParts.append(incremental)
-                                pendingDeltaParts.append(incremental)
+                                pendingDeltaText.append(incremental)
                                 pendingDeltaCharacters += incremental.count
                             }
                         }
@@ -2784,14 +2826,13 @@ final class ChatService {
                     )
                     if !incremental.isEmpty {
                         accumulatedResponseText += incremental
-                        fullReplyParts.append(incremental)
-                        pendingDeltaParts.append(incremental)
+                        pendingDeltaText.append(incremental)
                         pendingDeltaCharacters += incremental.count
                     }
                 }
                 emitPending(force: true)
 
-                let fullReply = fullReplyParts.joined()
+                let fullReply = accumulatedResponseText
                 let textImages = makeImageAttachments(
                     from: Array(imageURLs),
                     baseURL: config.normalizedBaseURL
@@ -3615,6 +3656,17 @@ final class ChatService {
         cleaned = cleaned.replacingOccurrences(of: "\\u003f", with: "?", options: .caseInsensitive)
         cleaned = cleaned.replacingOccurrences(of: "\\u002b", with: "+", options: .caseInsensitive)
         cleaned = cleaned.replacingOccurrences(of: "\\u0025", with: "%", options: .caseInsensitive)
+
+        if let nextHTTPRange = cleaned.range(
+            of: #"[\s\)\]]+(https?://)"#,
+            options: .regularExpression
+        ) {
+            cleaned = String(cleaned[..<nextHTTPRange.lowerBound])
+        }
+        if let whitespaceRange = cleaned.range(of: #"\s+"#, options: .regularExpression) {
+            cleaned = String(cleaned[..<whitespaceRange.lowerBound])
+        }
+        cleaned = cleaned.trimmingCharacters(in: CharacterSet(charactersIn: ")]}>.,;:!"))
 
         if cleaned.hasPrefix("//") {
             return "https:\(cleaned)"
@@ -4906,6 +4958,11 @@ final class ChatService {
 
         for url in removableURLs {
             let escaped = NSRegularExpression.escapedPattern(for: url)
+            cleaned = cleaned.replacingOccurrences(
+                of: #"!\[[^\]]*\]\(\s*\#(escaped)(?:\s+https?://[^)\s]+)?\s*\)"#,
+                with: "",
+                options: .regularExpression
+            )
             cleaned = cleaned.replacingOccurrences(
                 of: "(?m)^[\\t ]*(?:[-*•]\\s+|\\d+[.)、]\\s+)?\(escaped)[\\t ]*$",
                 with: "",

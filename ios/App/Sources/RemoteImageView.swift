@@ -371,6 +371,17 @@ final class RemoteImageLoader: ObservableObject {
         cleaned = cleaned.replacingOccurrences(of: "\\u002b", with: "+", options: .caseInsensitive)
         cleaned = cleaned.replacingOccurrences(of: "\\u0025", with: "%", options: .caseInsensitive)
 
+        if let nextHTTPRange = cleaned.range(
+            of: #"[\s\)\]]+(https?://)"#,
+            options: .regularExpression
+        ) {
+            cleaned = String(cleaned[..<nextHTTPRange.lowerBound])
+        }
+        if let whitespaceRange = cleaned.range(of: #"\s+"#, options: .regularExpression) {
+            cleaned = String(cleaned[..<whitespaceRange.lowerBound])
+        }
+        cleaned = cleaned.trimmingCharacters(in: CharacterSet(charactersIn: ")]}>.,;:!"))
+
         if cleaned.hasPrefix("//") {
             cleaned = "https:\(cleaned)"
         }

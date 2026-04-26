@@ -9,7 +9,7 @@ final class StreamRenderer {
         var maxCharactersFetchedPerTick: Int
 
         static let `default` = Configuration(
-            refreshInterval: 0.033,
+            refreshInterval: 0.05,
             maxCharactersPerFrame: 4,
             maxCharactersFetchedPerTick: 132
         )

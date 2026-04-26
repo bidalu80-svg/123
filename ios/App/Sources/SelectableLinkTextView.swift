@@ -1013,16 +1013,18 @@ struct SelectableLinkTextView: UIViewRepresentable {
 
             // Keep the newest few characters softly faded so the output feels
             // like a living stream instead of a blunt cursor jump.
-            let tailCount = min(3, max(1, storage.length))
+            let tailCount = min(4, max(1, storage.length))
             let tailRange = NSRange(location: storage.length - tailCount, length: tailCount)
             let alphas: [CGFloat]
             switch tailCount {
             case 1:
-                alphas = [0.34]
+                alphas = [0.18]
             case 2:
-                alphas = [0.74, 0.34]
+                alphas = [0.58, 0.18]
+            case 3:
+                alphas = [0.78, 0.44, 0.18]
             default:
-                alphas = [0.92, 0.66, 0.34]
+                alphas = [0.90, 0.64, 0.36, 0.18]
             }
 
             for offset in 0..<tailRange.length {

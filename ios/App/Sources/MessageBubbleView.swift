@@ -565,7 +565,7 @@ struct MessageBubbleView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         if hasStreamingText {
-                            assistantMarkdownContent(displayText, streaming: true)
+                            assistantTextSegmentView(displayText, streamingTextAnimated: true)
                         }
                         ForEach(message.imageAttachments) { attachment in
                             messageImage(attachment)
@@ -910,18 +910,18 @@ struct MessageBubbleView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
         case .code(let language, let content):
-            codeBlock(
-                title: (language ?? "code").uppercased(),
-                content: content,
+            compactCodeCard(
+                title: codeBlockBadgeTitle(title: (language ?? "code").uppercased(), language: language),
                 language: language,
-                followsTailDuringStreaming: false
+                content: content,
+                fileName: nil
             )
         case .file(let name, let language, let content):
-            fileSegmentView(
-                name: name,
+            compactCodeCard(
+                title: name,
                 language: language,
                 content: content,
-                followsTailDuringStreaming: false
+                fileName: name
             )
         case .table(let headers, let rows):
             markdownTableCard(headers: headers, rows: rows)
@@ -940,18 +940,18 @@ struct MessageBubbleView: View {
         case .text(let text):
             assistantTextSegmentView(text, streamingTextAnimated: streamingTextAnimated)
         case .code(let language, let content):
-            codeBlock(
-                title: (language ?? "code").uppercased(),
-                content: content,
+            compactCodeCard(
+                title: codeBlockBadgeTitle(title: (language ?? "code").uppercased(), language: language),
                 language: language,
-                followsTailDuringStreaming: streamingTextAnimated
+                content: content,
+                fileName: nil
             )
         case .file(let name, let language, let content):
-            fileSegmentView(
-                name: name,
+            compactCodeCard(
+                title: name,
                 language: language,
                 content: content,
-                followsTailDuringStreaming: streamingTextAnimated
+                fileName: name
             )
         case .table(let headers, let rows):
             markdownTableCard(headers: headers, rows: rows)
@@ -985,13 +985,73 @@ struct MessageBubbleView: View {
         if isSpreadsheetPreviewFile(name: name), let firstSheet = spreadsheetSheets.first {
             spreadsheetPreviewCard(fileName: name, sheet: firstSheet)
         } else {
-            codeBlock(
-                title: "FILE · \(name)",
-                content: content,
+            compactCodeCard(
+                title: name,
                 language: language,
-                followsTailDuringStreaming: followsTailDuringStreaming
+                content: content,
+                fileName: name
             )
         }
+    }
+
+    private func compactCodeCard(
+        title: String,
+        language: String?,
+        content: String,
+        fileName: String?
+    ) -> some View {
+        let normalized = normalizedCodeViewerContent(content)
+        let lineCount = max(1, normalized.components(separatedBy: "\n").count)
+        let displayTitle = fileName ?? title
+        let badge = (language ?? codeBlockBadgeTitle(title: title, language: language)).uppercased()
+
+        return Button {
+            openCodeViewer(
+                title: fileName.map { "FILE · \($0)" } ?? title,
+                language: language,
+                displayContent: content
+            )
+        } label: {
+            HStack(spacing: 12) {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(MinisTheme.accentBlue.opacity(0.14))
+                    .frame(width: 42, height: 42)
+                    .overlay(
+                        Image(systemName: "chevron.left.forwardslash.chevron.right")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(MinisTheme.accentBlue)
+                    )
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(displayTitle)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text("\(badge) · \(lineCount) 行 · 点击查看代码")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 0)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(MinisTheme.panelBackground)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(MinisTheme.subtleStroke, lineWidth: 0.9)
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     private func isSpreadsheetPreviewFile(name: String) -> Bool {
@@ -1118,8 +1178,24 @@ struct MessageBubbleView: View {
         case generic
     }
 
+    private enum AssistantHeadingKind: Equatable {
+        case summary
+        case reason
+        case steps
+        case caution
+        case suggestion
+        case nextStep
+        case code
+        case result
+        case generic
+    }
+
     private enum AssistantTextBlock: Equatable {
         case plain(String)
+        case heading(
+            title: String,
+            kind: AssistantHeadingKind
+        )
         case step(
             title: String,
             duration: String?,
@@ -1139,6 +1215,8 @@ struct MessageBubbleView: View {
                     switch block {
                     case .plain(let plain):
                         selectableTextContent(plain, streamingTextAnimated: streamingTextAnimated)
+                    case .heading(let title, let kind):
+                        assistantSectionHeader(title: title, kind: kind)
                     case .step(let title, let duration, let status, let kind):
                         assistantStepChip(title: title, duration: duration, status: status, kind: kind)
                     }
@@ -1152,11 +1230,10 @@ struct MessageBubbleView: View {
         guard message.role == .assistant else {
             return [.plain(text)]
         }
-        if streamingTextAnimated || message.isStreaming {
-            return [.plain(text)]
-        }
 
-        let normalized = decoratedAssistantListText(text)
+        let normalized = (streamingTextAnimated || message.isStreaming)
+            ? text
+            : decoratedAssistantListText(text)
         let lines = normalized.components(separatedBy: "\n")
         guard !lines.isEmpty else { return [.plain(text)] }
 
@@ -1168,12 +1245,48 @@ struct MessageBubbleView: View {
             stepMatches.count >= 2
             && stepMatches.count * 2 >= max(nonEmptyLines.count, 1)
 
-        guard shouldUseStepChips else {
-            return [.plain(text)]
+        if shouldUseStepChips {
+            var blocks: [AssistantTextBlock] = []
+            var plainBuffer: [String] = []
+
+            func flushPlainBuffer() {
+                guard !plainBuffer.isEmpty else { return }
+                let merged = plainBuffer.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+                if !merged.isEmpty {
+                    blocks.append(.plain(merged))
+                }
+                plainBuffer.removeAll(keepingCapacity: true)
+            }
+
+            for line in lines {
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.isEmpty {
+                    plainBuffer.append("")
+                    continue
+                }
+
+                if let parsed = parseAssistantStepLine(line) {
+                    flushPlainBuffer()
+                    blocks.append(
+                        .step(
+                            title: parsed.title,
+                            duration: parsed.duration,
+                            status: parsed.status,
+                            kind: parsed.kind
+                        )
+                    )
+                } else {
+                    plainBuffer.append(line)
+                }
+            }
+
+            flushPlainBuffer()
+            return blocks.isEmpty ? [.plain(text)] : blocks
         }
 
         var blocks: [AssistantTextBlock] = []
         var plainBuffer: [String] = []
+        var headingCount = 0
 
         func flushPlainBuffer() {
             guard !plainBuffer.isEmpty else { return }
@@ -1191,22 +1304,24 @@ struct MessageBubbleView: View {
                 continue
             }
 
-            if let parsed = parseAssistantStepLine(line) {
+            if let heading = parseAssistantHeadingLine(line) {
                 flushPlainBuffer()
                 blocks.append(
-                    .step(
-                        title: parsed.title,
-                        duration: parsed.duration,
-                        status: parsed.status,
-                        kind: parsed.kind
+                    .heading(
+                        title: heading.title,
+                        kind: heading.kind
                     )
                 )
+                headingCount += 1
             } else {
                 plainBuffer.append(line)
             }
         }
 
         flushPlainBuffer()
+        if headingCount == 0 {
+            return [.plain(text)]
+        }
         return blocks.isEmpty ? [.plain(text)] : blocks
     }
 
@@ -1406,6 +1521,56 @@ struct MessageBubbleView: View {
         return (normalizedTitle, duration, status, kind)
     }
 
+    private func parseAssistantHeadingLine(
+        _ line: String
+    ) -> (title: String, kind: AssistantHeadingKind)? {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard trimmed.count <= 18 else { return nil }
+        guard trimmed.range(of: #"^(?:[-*•·]|[0-9]+[.)、])\s+"#, options: .regularExpression) == nil else {
+            return nil
+        }
+
+        let normalized = trimmed
+            .replacingOccurrences(of: #"^[#>\s]+"#, with: "", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "：:"))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return nil }
+        guard !normalized.contains("。"),
+              !normalized.contains("，"),
+              !normalized.contains("?"),
+              !normalized.contains("？"),
+              !normalized.contains("!"),
+              !normalized.contains("！") else {
+            return nil
+        }
+
+        let lowered = normalized.lowercased()
+        let mappings: [(keywords: [String], kind: AssistantHeadingKind)] = [
+            (["总结", "结论", "summary", "conclusion"], .summary),
+            (["原因", "分析", "why", "reason"], .reason),
+            (["步骤", "做法", "step", "steps"], .steps),
+            (["注意", "警告", "风险", "caution", "warning", "risk"], .caution),
+            (["建议", "recommendation", "suggestion"], .suggestion),
+            (["下一步", "next step", "next steps"], .nextStep),
+            (["代码", "实现", "code", "implementation"], .code),
+            (["结果", "输出", "result", "output"], .result)
+        ]
+
+        for mapping in mappings {
+            if mapping.keywords.contains(where: { lowered == $0 || lowered.hasPrefix($0 + " ") }) {
+                return (normalized, mapping.kind)
+            }
+        }
+
+        let genericMarkers = ["说明", "背景", "补充", "方案", "排查", "修复", "状态"]
+        if genericMarkers.contains(where: { lowered == $0 }) {
+            return (normalized, .generic)
+        }
+
+        return nil
+    }
+
     private func isLikelyConversationalAssistantLine(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 8 else { return false }
@@ -1478,6 +1643,30 @@ struct MessageBubbleView: View {
         )
         .frame(maxWidth: .infinity, alignment: .leading)
         .shadow(color: Color.black.opacity(0.035), radius: 10, x: 0, y: 4)
+    }
+
+    private func assistantSectionHeader(
+        title: String,
+        kind: AssistantHeadingKind
+    ) -> some View {
+        HStack(spacing: 10) {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(sectionHeaderBadgeFill(kind: kind))
+                .frame(width: 24, height: 24)
+                .overlay(
+                    Image(systemName: sectionHeaderIconName(for: kind))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(sectionHeaderIconColor(kind: kind))
+                )
+
+            Text(title)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 2)
     }
 
     private func stepIconName(for title: String, kind: AssistantStepKind) -> String {
@@ -1556,6 +1745,59 @@ struct MessageBubbleView: View {
             return MinisTheme.accentGreen.opacity(0.34)
         case .error:
             return Color.red.opacity(0.42)
+        }
+    }
+
+    private func sectionHeaderIconName(for kind: AssistantHeadingKind) -> String {
+        switch kind {
+        case .summary:
+            return "checkmark.seal"
+        case .reason:
+            return "questionmark.circle"
+        case .steps:
+            return "list.bullet.rectangle"
+        case .caution:
+            return "exclamationmark.triangle"
+        case .suggestion:
+            return "lightbulb"
+        case .nextStep:
+            return "arrow.right.circle"
+        case .code:
+            return "chevron.left.forwardslash.chevron.right"
+        case .result:
+            return "sparkles.rectangle.stack"
+        case .generic:
+            return "circle.grid.2x2"
+        }
+    }
+
+    private func sectionHeaderIconColor(kind: AssistantHeadingKind) -> Color {
+        switch kind {
+        case .summary, .result:
+            return MinisTheme.accentGreen
+        case .reason, .code:
+            return MinisTheme.accentBlue
+        case .steps, .nextStep:
+            return MinisTheme.accentOrange
+        case .caution:
+            return .red
+        case .suggestion, .generic:
+            return MinisTheme.accentBlue
+        }
+    }
+
+    private func sectionHeaderBadgeFill(kind: AssistantHeadingKind) -> Color {
+        switch kind {
+        case .summary, .result:
+            return MinisTheme.accentGreen.opacity(0.14)
+        case .reason, .code:
+            return MinisTheme.accentBlue.opacity(0.14)
+        case .steps, .nextStep:
+            return MinisTheme.accentOrange.opacity(0.16)
+        case .caution:
+            return Color.red.opacity(0.14)
+        case .suggestion, .generic:
+            return MinisTheme.accentBlue.opacity(0.12)
         }
     }
 
@@ -3278,17 +3520,19 @@ struct MessageBubbleView: View {
         let revealID = attachment.requestURLString.isEmpty
             ? attachment.id.uuidString
             : attachment.requestURLString
-        let previewWidth: CGFloat = message.role == .user ? 96 : 168
-        let previewHeight: CGFloat = message.role == .user ? 96 : 124
+        let previewSize = imagePreviewSize(for: attachment)
+        let previewShape = RoundedRectangle(cornerRadius: 22, style: .continuous)
 
         if let data = attachment.decodedImageData, let uiImage = UIImage(data: data) {
             GeneratedImageRevealCard(revealID: revealID) {
                 Image(uiImage: uiImage)
                     .resizable()
-                    .scaledToFill()
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.black.opacity(colorScheme == .dark ? 0.14 : 0.04))
             }
-                .frame(width: previewWidth, height: previewHeight, alignment: .leading)
-                .clipped()
+                .frame(width: previewSize.width, height: previewSize.height, alignment: .leading)
+                .clipShape(previewShape)
                 .onTapGesture {
                     openImagePreview(attachment)
                 }
@@ -3298,9 +3542,11 @@ struct MessageBubbleView: View {
         } else if let urlString = imageDisplayURLString(for: attachment) {
             GeneratedImageRevealCard(revealID: revealID) {
                 RemoteImageView(urlString: urlString, apiKey: apiKey, baseURL: apiBaseURL)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.black.opacity(colorScheme == .dark ? 0.14 : 0.04))
             }
-                .frame(width: previewWidth, height: previewHeight, alignment: .leading)
-                .clipped()
+                .frame(width: previewSize.width, height: previewSize.height, alignment: .leading)
+                .clipShape(previewShape)
                 .onTapGesture {
                     openImagePreview(attachment)
                 }
@@ -3308,6 +3554,46 @@ struct MessageBubbleView: View {
                     imageContextActions(for: attachment)
                 }
         }
+    }
+
+    private func imagePreviewSize(for attachment: ChatImageAttachment) -> CGSize {
+        if message.role == .user {
+            return CGSize(width: 96, height: 96)
+        }
+
+        let fallback = CGSize(width: 156, height: 188)
+        guard let data = attachment.decodedImageData,
+              let uiImage = UIImage(data: data),
+              uiImage.size.width > 0,
+              uiImage.size.height > 0 else {
+            return fallback
+        }
+
+        let aspect = uiImage.size.width / uiImage.size.height
+        let maxWidth: CGFloat = 168
+        let maxHeight: CGFloat = 220
+        let minWidth: CGFloat = 104
+        let minHeight: CGFloat = 124
+
+        var width = maxWidth
+        var height = width / aspect
+
+        if height > maxHeight {
+            height = maxHeight
+            width = height * aspect
+        }
+
+        if width < minWidth {
+            width = minWidth
+            height = width / aspect
+        }
+
+        if height < minHeight {
+            height = minHeight
+            width = min(maxWidth, height * aspect)
+        }
+
+        return CGSize(width: round(width), height: round(min(height, maxHeight)))
     }
 
     @ViewBuilder
