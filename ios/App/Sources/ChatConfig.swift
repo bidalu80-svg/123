@@ -562,7 +562,7 @@ struct ChatConfig: Codable, Equatable {
     var remotePythonExecutionURLString: String {
         let configuredPath = remotePythonExecutionPath.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !configuredPath.isEmpty else { return "" }
-        ChatConfigStore.endpointURL(
+        return ChatConfigStore.endpointURL(
             apiURL,
             path: configuredPath,
             fallback: ""
