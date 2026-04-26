@@ -437,6 +437,10 @@ struct ChatRequestBuilder {
            looksLikeProjectFollowupEdit(raw) {
             return true
         }
+        if hasPersistedLatestProjectContext(),
+           looksLikeProjectFollowupEdit(raw) {
+            return true
+        }
 
         return false
     }
@@ -445,10 +449,12 @@ struct ChatRequestBuilder {
         let markers = [
             "删除文件", "删除文件夹", "删除目录", "删除项目", "删除所有项目",
             "清空latest", "清空 latest", "清空工作区", "重置latest", "重置 latest",
+            "清空当前项目", "清理工作区", "清理 latest", "删掉文件", "删掉文件夹",
+            "移除文件", "移除文件夹", "去掉文件", "去掉文件夹",
             "创建文件夹", "创建目录", "新建文件夹", "新建目录", "创建空文件夹", "创建空目录",
             "创建空文件", "新建空文件", "建一个空文件", "建一个空目录",
-            "remove file", "remove folder", "delete file", "delete folder", "delete directory",
-            "clear latest", "clear workspace", "reset latest",
+            "remove file", "remove folder", "remove directory", "delete file", "delete folder", "delete directory",
+            "clear latest", "clear workspace", "reset latest", "wipe workspace",
             "create folder", "create directory", "mkdir", "create empty file", "empty file", "touch "
         ]
         if markers.contains(where: { raw.contains($0) }) {
@@ -457,6 +463,13 @@ struct ChatRequestBuilder {
 
         if raw.range(
             of: #"(删除|移除|清空|重置|创建|新建).{0,20}(文件|文件夹|目录|工作区|latest)"#,
+            options: .regularExpression
+        ) != nil {
+            return true
+        }
+
+        if raw.range(
+            of: #"(删除|删掉|移除|去掉|清理).{0,12}[A-Za-z0-9._/\-]+\.[A-Za-z0-9_+\-]{1,12}"#,
             options: .regularExpression
         ) != nil {
             return true
@@ -636,6 +649,11 @@ struct ChatRequestBuilder {
             return true
         }
 
+        if hasPersistedLatestProjectContext(),
+           looksLikeCrossSessionProjectContinuation(raw) {
+            return true
+        }
+
         guard recentConversationContainsProjectContext(history: history) else {
             return false
         }
@@ -670,8 +688,54 @@ struct ChatRequestBuilder {
             return true
         }
 
+        if hasPersistedLatestProjectContext(),
+           looksLikeCrossSessionProjectContinuation(raw) {
+            return true
+        }
+
         return recentConversationContainsProjectContext(history: history)
             && looksLikeProjectFollowupEdit(raw)
+    }
+
+    private static func hasPersistedLatestProjectContext() -> Bool {
+        guard let latest = FrontendProjectBuilder.latestProjectURL() else {
+            return false
+        }
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: latest.path),
+              let enumerator = fileManager.enumerator(
+                at: latest,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+              ) else {
+            return false
+        }
+        var hasRegularFile = false
+        for case let fileURL as URL in enumerator {
+            if ((try? fileURL.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile) == true {
+                hasRegularFile = true
+                break
+            }
+        }
+        guard hasRegularFile else { return false }
+        guard let context = FrontendProjectBuilder.latestProjectConversationContext() else {
+            return false
+        }
+        return !context.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private static func looksLikeCrossSessionProjectContinuation(_ raw: String) -> Bool {
+        let markers = [
+            "继续", "接着", "顺便", "再改", "再修", "继续改", "继续优化",
+            "上一个项目", "上个项目", "刚才的项目", "刚才那个项目",
+            "当前项目", "这个项目", "原来的项目", "旧项目",
+            "继续上一个", "接着刚才", "沿用 latest", "基于 latest",
+            "continue", "keep going", "same project", "previous project", "last project"
+        ]
+        if markers.contains(where: { raw.contains($0) }) {
+            return true
+        }
+        return looksLikeProjectFollowupEdit(raw)
     }
 
     private static func shouldInjectBundledAgentContext(
@@ -750,6 +814,9 @@ struct ChatRequestBuilder {
     private static func compactHistoryMessage(_ message: ChatMessage, allowInlineImageData: Bool) -> ChatMessage {
         var compact = message
         compact.content = compactTextForHistory(compact.content)
+        if compact.role == .assistant {
+            compact.content = sanitizedAssistantHistoryTextForRequest(compact.content)
+        }
 
         if compact.fileAttachments.count > 2 {
             compact.fileAttachments = Array(compact.fileAttachments.prefix(2))
@@ -778,6 +845,34 @@ struct ChatRequestBuilder {
         }
 
         return compact
+    }
+
+    private static func sanitizedAssistantHistoryTextForRequest(_ raw: String) -> String {
+        let normalized = raw.replacingOccurrences(of: "\r\n", with: "\n")
+        guard normalized.range(
+            of: #"\[\[(mkdir|touch|delete|clear):[^\]]*\]\]"#,
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil else {
+            return raw
+        }
+
+        let stripped = normalized
+            .replacingOccurrences(
+                of: #"(?im)^\s*\[\[(?:mkdir|touch|delete|clear):[^\]]*\]\]\s*$"#,
+                with: "",
+                options: .regularExpression
+            )
+            .replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let hint = "[历史工作区操作已在本地执行；不要因为这条历史重复输出同一操作标签，除非用户再次明确要求。]"
+        if stripped.isEmpty {
+            return hint
+        }
+        if stripped.contains(hint) {
+            return stripped
+        }
+        return "\(stripped)\n\n\(hint)"
     }
 
     private static func compactTextForHistory(_ raw: String) -> String {
@@ -892,19 +987,30 @@ struct ChatRequestBuilder {
             .lowercased()
         guard !raw.isEmpty else { return false }
         if looksLikeGeneralChatRequest(raw) { return false }
+        if !FrontendProjectBuilder.inferredWorkspaceOperations(fromUserPrompt: raw).isEmpty {
+            return true
+        }
 
         let explicitMutationMarkers = [
             "创建文件", "创建目录", "创建文件夹", "新建文件", "新建目录", "空文件", "空目录",
-            "删除文件", "删除目录", "删除文件夹", "清空工作区", "clear workspace", "clear latest",
+            "删除文件", "删除目录", "删除文件夹", "删掉文件", "删掉文件夹", "移除文件", "移除文件夹",
+            "清空工作区", "清理工作区", "clear workspace", "clear latest", "wipe workspace",
             "查看目录", "列出目录", "列一下目录", "看看目录", "读取文件", "打开文件",
-            "create file", "create directory", "create folder", "touch ", "mkdir ", "delete file",
+            "create file", "create directory", "create folder", "touch ", "mkdir ", "delete file", "remove file",
             "list files", "list directory", "read file", "open file", "inspect workspace"
         ]
         if explicitMutationMarkers.contains(where: { raw.contains($0) }) {
             return true
         }
+        if raw.range(
+            of: #"(删除|删掉|移除|去掉|清理).{0,24}(文件|文件夹|目录|路径|工作区|latest)"#,
+            options: .regularExpression
+        ) != nil {
+            return true
+        }
 
         let hasProjectContext = recentConversationContainsProjectContext(history: history)
+            || hasPersistedLatestProjectContext()
         if hasProjectContext && looksLikeProjectFollowupEdit(raw) {
             return true
         }

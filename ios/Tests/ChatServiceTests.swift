@@ -60,6 +60,27 @@ final class ChatServiceTests: XCTestCase {
         XCTAssertTrue(firstSystem.contains("不要把“我是 IEXA”当作默认开场"))
     }
 
+    func testBuildRequestSanitizesExecutedWorkspaceOperationHistory() throws {
+        let config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
+        let history = [
+            ChatMessage(role: .user, content: "清空 latest"),
+            ChatMessage(role: .assistant, content: "[[clear:latest]]")
+        ]
+        let requestMessage = ChatMessage(role: .user, content: "说说原因")
+
+        let request = try ChatRequestBuilder.makeRequest(config: config, history: history, message: requestMessage)
+        let payload = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+        let messages = try XCTUnwrap(json["messages"] as? [[String: Any]])
+        let assistantHistory = messages
+            .filter { ($0["role"] as? String) == "assistant" }
+            .compactMap { $0["content"] as? String }
+            .joined(separator: "\n")
+
+        XCTAssertFalse(assistantHistory.contains("[[clear:latest]]"))
+        XCTAssertTrue(assistantHistory.contains("历史工作区操作已在本地执行"))
+    }
+
     func testBuildRequestSupportsMultipleImageAttachments() throws {
         let config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: false)
         let attachments = [
@@ -814,6 +835,49 @@ final class ChatServiceTests: XCTestCase {
         )
 
         XCTAssertTrue(shouldUse)
+    }
+
+    func testNaturalWorkspaceDeleteUsesAgentToolLoop() {
+        let config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
+        let message = ChatMessage(role: .user, content: "把 notes/todo.txt 删除")
+
+        let shouldUse = ChatRequestBuilder.shouldUseAgentToolLoop(
+            config: config,
+            history: [],
+            message: message
+        )
+
+        XCTAssertTrue(shouldUse)
+    }
+
+    func testFolderContentsDeleteUsesAgentToolLoopWithoutDirectInference() {
+        let config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
+        let message = ChatMessage(role: .user, content: "删除 docs 文件夹里的文件")
+
+        let shouldUse = ChatRequestBuilder.shouldUseAgentToolLoop(
+            config: config,
+            history: [],
+            message: message
+        )
+
+        XCTAssertTrue(shouldUse)
+    }
+
+    func testCasualFollowupDoesNotUseAgentToolLoopAfterWorkspaceCommandHistory() {
+        let config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
+        let history = [
+            ChatMessage(role: .user, content: "清空 latest"),
+            ChatMessage(role: .assistant, content: "[[clear:latest]]")
+        ]
+        let message = ChatMessage(role: .user, content: "说说原因")
+
+        let shouldUse = ChatRequestBuilder.shouldUseAgentToolLoop(
+            config: config,
+            history: history,
+            message: message
+        )
+
+        XCTAssertFalse(shouldUse)
     }
 
     func testQwenProjectRequestDoesNotUseAgentToolLoop() {

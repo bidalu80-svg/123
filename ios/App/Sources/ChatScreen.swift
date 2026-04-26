@@ -4556,9 +4556,9 @@ struct ChatScreen: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
             issueTranscriptCommand(.scrollToBottom(animated: false))
         }
-        viewModel.statusMessage = "当前会话已达到长会话阈值，已切换到新会话；请再次点击发送。"
+        viewModel.statusMessage = "当前会话已达到长会话阈值，已切换到新会话并继续发送。本次请求会优先读取 latest 项目上下文。"
         presentSessionRotateToast()
-        return true
+        return false
     }
 
     private func viewportOverflowState(

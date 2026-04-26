@@ -557,6 +557,29 @@ final class FrontendProjectBuilderTests: XCTestCase {
             FrontendProjectBuilder.inferredWorkspaceOperations(fromUserPrompt: "删除这个网站项目"),
             [.clearLatest]
         )
+        XCTAssertEqual(
+            FrontendProjectBuilder.inferredWorkspaceOperations(fromUserPrompt: "清空当前项目"),
+            [.clearLatest]
+        )
+    }
+
+    func testInferredWorkspaceOperationsDetectNaturalDeletePaths() {
+        XCTAssertEqual(
+            FrontendProjectBuilder.inferredWorkspaceOperations(fromUserPrompt: "把 notes/todo.txt 删除"),
+            [.delete(path: "notes/todo.txt")]
+        )
+        XCTAssertEqual(
+            FrontendProjectBuilder.inferredWorkspaceOperations(fromUserPrompt: "删除 latest 里的 assets/logo.png 文件"),
+            [.delete(path: "assets/logo.png")]
+        )
+        XCTAssertEqual(
+            FrontendProjectBuilder.inferredWorkspaceOperations(fromUserPrompt: "删掉 temp/sub 文件夹"),
+            [.delete(path: "temp/sub")]
+        )
+        XCTAssertEqual(
+            FrontendProjectBuilder.inferredWorkspaceOperations(fromUserPrompt: "删除 docs 文件夹里的文件"),
+            []
+        )
     }
 
     func testPythonProjectValidationPlanInstallsRequirementsAndRunsMainFile() throws {

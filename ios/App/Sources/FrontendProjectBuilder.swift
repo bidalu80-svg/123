@@ -711,13 +711,21 @@ enum FrontendProjectBuilder {
             || lowered.contains("清空latest")
             || lowered.contains("清空 latest")
             || lowered.contains("清空工作区")
+            || lowered.contains("清空当前项目")
+            || lowered.contains("清空这个项目")
+            || lowered.contains("清理工作区")
+            || lowered.contains("清理 latest")
             || lowered.contains("clear latest")
             || lowered.contains("clear workspace")
             || lowered.contains("reset latest")
+            || lowered.contains("wipe workspace")
             || lowered.contains("删除这个项目")
             || lowered.contains("删除当前项目")
+            || lowered.contains("删除当前工作区")
             || lowered.contains("删除这个网站项目")
             || lowered.contains("删除网站项目")
+            || lowered.contains("删掉当前项目")
+            || lowered.contains("移除当前项目")
             || lowered.contains("delete this project")
             || lowered.contains("delete current project") {
             return [.clearLatest]
@@ -745,9 +753,25 @@ enum FrontendProjectBuilder {
             return [.createEmptyFile(path: path)]
         }
 
+        if looksLikeFolderContentsDeletion(lowered) {
+            return []
+        }
+
+        if let path = inferredDeletePath(in: normalized) {
+            return [.delete(path: path)]
+        }
+
         if let path = inferredPath(
             in: normalized,
-            prefixes: ["删除文件夹", "删除目录", "删除文件", "删除 ", "移除文件夹", "移除目录", "remove folder ", "remove directory ", "remove file ", "delete folder ", "delete directory ", "delete file "]
+            prefixes: [
+                "删除文件夹", "删除目录", "删除文件", "删除 ",
+                "删掉文件夹", "删掉目录", "删掉文件", "删掉 ",
+                "移除文件夹", "移除目录", "移除文件", "移除 ",
+                "去掉文件夹", "去掉目录", "去掉文件", "去掉 ",
+                "remove folder ", "remove directory ", "remove file ", "remove ",
+                "delete folder ", "delete directory ", "delete file ", "delete ",
+                "rm "
+            ]
         ) {
             return [.delete(path: path)]
         }
@@ -781,6 +805,38 @@ enum FrontendProjectBuilder {
             }
         }
         return nil
+    }
+
+    private static func inferredDeletePath(in text: String) -> String? {
+        let patterns = [
+            #"(?i)(?:删除|删掉|移除|去掉|清理)\s*(?:latest\s*(?:里|中|下|里面|中的|里的)?的?\s*)?(?:当前\s*)?(?:这个\s*)?(?:文件夹|目录|文件|路径)?\s*[`"'“”‘’]?([A-Za-z0-9._/\-]+)[`"'“”‘’]?\s*(?:文件夹|目录|文件|路径)?"#,
+            #"(?i)[`"'“”‘’]?([A-Za-z0-9._/\-]+)[`"'“”‘’]?\s*(?:这个|此)?(?:文件夹|目录|文件|路径)?\s*(?:删除|删掉|移除|去掉)"#,
+            #"(?i)(?:delete|remove|rm)\s+(?:the\s+)?(?:file|folder|directory|path)?\s*[`"']?([A-Za-z0-9._/\-]+)[`"']?"#,
+            #"(?i)[`"']?([A-Za-z0-9._/\-]+)[`"']?\s+(?:file|folder|directory|path)?\s*(?:delete|remove)"#
+        ]
+        for pattern in patterns {
+            if let path = firstRegexCapture(in: text, pattern: pattern),
+               let normalized = sanitizeRelativePath(path) {
+                return normalized
+            }
+        }
+        return nil
+    }
+
+    private static func looksLikeFolderContentsDeletion(_ lowered: String) -> Bool {
+        let markers = [
+            "文件夹里的文件", "文件夹中的文件", "文件夹内的文件",
+            "目录里的文件", "目录中的文件", "目录内的文件",
+            "folder contents", "files in folder", "files inside folder",
+            "directory contents", "files in directory", "files inside directory"
+        ]
+        if markers.contains(where: { lowered.contains($0) }) {
+            return true
+        }
+        return lowered.range(
+            of: #"(文件夹|目录).{0,4}(里|中|内).{0,4}(文件|内容|东西)"#,
+            options: .regularExpression
+        ) != nil
     }
 
     static func buildProject(

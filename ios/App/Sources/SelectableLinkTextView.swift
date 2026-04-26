@@ -715,8 +715,6 @@ struct SelectableLinkTextView: UIViewRepresentable {
         private var streamPrimaryColor: UIColor = .label
         private var lastStreamingTailRange: NSRange?
         private var lastStreamingCursorRange: NSRange?
-        private var cursorBlinkAccumulator: CFTimeInterval = 0
-        private var isCursorVisible = true
         private var streamCharacterBudget: Double = 0
         private var lastMeasuredWidth: CGFloat = 0
         private var lastMeasuredHeight: CGFloat = 0
@@ -778,8 +776,6 @@ struct SelectableLinkTextView: UIViewRepresentable {
             streamTimer = nil
             streamLastTimestamp = 0
             streamCharacterBudget = 0
-            cursorBlinkAccumulator = 0
-            isCursorVisible = true
             if clearPending {
                 pendingStreamingSuffix.removeAll(keepingCapacity: false)
             }
@@ -814,10 +810,11 @@ struct SelectableLinkTextView: UIViewRepresentable {
             streamLastTimestamp = timer.timestamp
 
             guard !pendingStreamingSuffix.isEmpty else {
-                autoreleasepool {
-                    let storage = textView.textStorage
-                    updateStreamingCursor(in: storage, elapsed: elapsed)
-                }
+                normalizeStreamingTailAppearance()
+                streamTimer?.invalidate()
+                streamTimer = nil
+                streamLastTimestamp = 0
+                streamCharacterBudget = 0
                 return
             }
 
@@ -835,7 +832,6 @@ struct SelectableLinkTextView: UIViewRepresentable {
                 storage.beginEditing()
                 storage.append(appended)
                 applyStreamingTailFade(in: storage)
-                updateStreamingCursor(in: storage, elapsed: elapsed, forceVisible: true)
                 storage.endEditing()
             }
         }
@@ -923,18 +919,16 @@ struct SelectableLinkTextView: UIViewRepresentable {
                 return
             }
 
-            // Use a tiny trailing window so the newest character looks subtly lighter
-            // without repainting a large range each frame (which can look like flicker).
-            let tailCount = min(3, max(1, storage.length))
+            // Keep the newest two characters slightly hidden; each tick reveals
+            // the previous tail and makes the stream feel less cursor-driven.
+            let tailCount = min(2, max(1, storage.length))
             let tailRange = NSRange(location: storage.length - tailCount, length: tailCount)
             let alphas: [CGFloat]
             switch tailCount {
             case 1:
-                alphas = [0.58]
-            case 2:
-                alphas = [0.82, 0.58]
+                alphas = [0.42]
             default:
-                alphas = [0.92, 0.78, 0.58]
+                alphas = [0.78, 0.42]
             }
 
             for offset in 0..<tailRange.length {
@@ -968,35 +962,6 @@ struct SelectableLinkTextView: UIViewRepresentable {
             textView.textStorage.addAttribute(.foregroundColor, value: streamPrimaryColor, range: tailRange)
             textView.textStorage.endEditing()
             lastStreamingTailRange = nil
-        }
-
-        private func updateStreamingCursor(
-            in storage: NSTextStorage,
-            elapsed: CFTimeInterval,
-            forceVisible: Bool = false
-        ) {
-            cursorBlinkAccumulator += elapsed
-            if forceVisible {
-                isCursorVisible = true
-                cursorBlinkAccumulator = 0
-            } else if cursorBlinkAccumulator >= 0.46 {
-                isCursorVisible.toggle()
-                cursorBlinkAccumulator = 0
-            }
-
-            removeStreamingCursorIfNeeded(in: storage)
-            guard isCursorVisible else { return }
-
-            let cursorFont = (streamAttributes[.font] as? UIFont) ?? MinisTheme.assistantStrongUIFont
-            let cursor = NSAttributedString(
-                string: "▍",
-                attributes: [
-                    .font: cursorFont,
-                    .foregroundColor: streamPrimaryColor.withAlphaComponent(0.92)
-                ]
-            )
-            storage.append(cursor)
-            lastStreamingCursorRange = NSRange(location: max(0, storage.length - 1), length: 1)
         }
 
         private func removeStreamingCursorIfNeeded(in storage: NSTextStorage) {
