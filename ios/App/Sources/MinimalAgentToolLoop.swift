@@ -632,7 +632,7 @@ final class MinimalAgentToolRuntime {
         case "clear_workspace":
             return executeClearWorkspace()
         case "run_python_file":
-            return await executeRunPythonFile(arguments: call.arguments)
+            return await executeRunPythonFile(arguments: call.arguments, config: config)
         default:
             return MinimalAgentToolExecution(
                 renderedLog: "工具 `\(call.name)` 不可用",
@@ -937,7 +937,10 @@ final class MinimalAgentToolRuntime {
         }
     }
 
-    private func executeRunPythonFile(arguments: [String: Any]) async -> MinimalAgentToolExecution {
+    private func executeRunPythonFile(
+        arguments: [String: Any],
+        config: ChatConfig
+    ) async -> MinimalAgentToolExecution {
         let rawPath = stringValue(arguments["path"]) ?? ""
         let stdin = stringValue(arguments["stdin"])
         do {
