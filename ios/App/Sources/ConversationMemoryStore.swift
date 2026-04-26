@@ -85,17 +85,18 @@ actor ConversationMemoryStore {
 
     func buildSystemContext() -> String? {
         loadIfNeeded()
-        guard !entries.isEmpty else { return nil }
+        let stableEntries = entries.filter { isLongTermPreferenceCandidate($0.text) }
+        guard !stableEntries.isEmpty else { return nil }
 
-        let top = Array(entries.sorted { $0.updatedAt > $1.updatedAt }.prefix(maxContextItems))
+        let top = Array(stableEntries.sorted { $0.updatedAt > $1.updatedAt }.prefix(maxContextItems))
         guard !top.isEmpty else { return nil }
 
         var lines: [String] = []
-        lines.append("以下是用户跨会话记忆（来自历史聊天，可能会过时）：")
+        lines.append("以下是用户跨会话偏好记忆（只用于长期偏好与稳定个人信息，不代表上一个任务的上下文）：")
         for item in top {
             lines.append("• \(item.text)")
         }
-        lines.append("若用户当前消息与记忆冲突，优先遵循当前消息。")
+        lines.append("若用户当前消息与记忆冲突，优先遵循当前消息；不要把这些记忆当成当前项目状态或上一轮任务指令。")
         return lines.joined(separator: "\n")
     }
 
@@ -139,13 +140,17 @@ actor ConversationMemoryStore {
         }
 
         if let decoded = try? JSONDecoder().decode([ConversationMemoryItem].self, from: data) {
-            entries = deduplicatedEntries(decoded).sorted { $0.updatedAt > $1.updatedAt }
+            entries = deduplicatedEntries(decoded)
+                .filter { isLongTermPreferenceCandidate($0.text) }
+                .sorted { $0.updatedAt > $1.updatedAt }
+            persist()
             return
         }
 
         // Backward compatibility for historical storage format without stable IDs.
         if let legacy = try? JSONDecoder().decode([LegacyMemoryEntry].self, from: data) {
             entries = deduplicatedEntries(legacy.map { ConversationMemoryItem(text: $0.text, updatedAt: $0.updatedAt) })
+                .filter { isLongTermPreferenceCandidate($0.text) }
                 .sorted { $0.updatedAt > $1.updatedAt }
             persist()
             return
@@ -167,15 +172,6 @@ actor ConversationMemoryStore {
             let memoryLines = extractMemoryFocusedLines(from: text)
             if !memoryLines.isEmpty {
                 result.append(contentsOf: memoryLines)
-            } else if let fallback = clipForMemory(text) {
-                result.append(fallback)
-            }
-        }
-
-        if let file = message.fileAttachments.first {
-            let fileHint = "用户上传了文件：\(file.fileName)"
-            if let clipped = clipForMemory(fileHint) {
-                result.append(clipped)
             }
         }
 
@@ -198,7 +194,8 @@ actor ConversationMemoryStore {
 
         let markers = [
             "请记住", "记住我", "我叫", "我是", "我的", "我住", "我在", "我喜欢", "我不喜欢",
-            "我希望", "我想", "我的偏好", "my name", "i am", "i'm", "i live", "i like", "i prefer", "remember"
+            "我希望", "我想", "我的偏好", "以后默认", "默认用", "尽量用", "请一直", "以后都用",
+            "my name", "i am", "i'm", "i live", "i like", "i prefer", "remember", "default to", "always use"
         ]
 
         var focused: [String] = []
@@ -242,6 +239,31 @@ actor ConversationMemoryStore {
             result.append(value)
         }
         return result
+    }
+
+    private func isLongTermPreferenceCandidate(_ raw: String) -> Bool {
+        let normalized = raw
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+
+        guard !normalized.isEmpty else { return false }
+
+        let stableMarkers = [
+            "请记住", "记住我", "我的偏好", "我喜欢", "我不喜欢", "我希望",
+            "以后默认", "默认用", "尽量用", "请一直", "以后都用",
+            "我叫", "我是", "我住", "我在",
+            "remember", "my name", "i am", "i'm", "i live", "i like", "i prefer", "default to", "always use"
+        ]
+        guard stableMarkers.contains(where: { normalized.contains($0) }) else { return false }
+
+        let taskMarkers = [
+            "写一个", "做一个", "生成一个", "创建一个", "删掉", "删除", "清空", "重置",
+            "继续改", "接着改", "修一下", "看下报错", "这个项目", "上一个项目",
+            "write a", "build a", "create a", "delete", "clear", "reset", "fix this", "previous project"
+        ]
+        return !taskMarkers.contains(where: { normalized.contains($0) })
     }
 
     private func deduplicatedEntries(_ values: [ConversationMemoryItem]) -> [ConversationMemoryItem] {

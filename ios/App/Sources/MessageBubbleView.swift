@@ -1153,6 +1153,9 @@ struct MessageBubbleView: View {
         guard message.role == .assistant else {
             return [.plain(text)]
         }
+        if streamingTextAnimated {
+            return [.plain(text)]
+        }
         // Avoid expensive per-line step parsing for very long responses.
         if text.count > 9_000 {
             return [.plain(text)]
@@ -3110,7 +3113,24 @@ struct MessageBubbleView: View {
         }
 
         guard start <= end else { return "" }
-        return Array(lines[start...end]).joined(separator: "\n")
+        let trimmedLines = Array(lines[start...end])
+        let nonEmptyLines = trimmedLines.filter {
+            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+
+        let sharedIndent = nonEmptyLines
+            .map { $0.prefix { ch in ch == " " || ch == "\t" }.count }
+            .min() ?? 0
+        guard sharedIndent > 0 else {
+            return trimmedLines.joined(separator: "\n")
+        }
+
+        return trimmedLines.map { line in
+            let leading = line.prefix { ch in ch == " " || ch == "\t" }.count
+            guard leading >= sharedIndent else { return line }
+            return String(line.dropFirst(sharedIndent))
+        }
+        .joined(separator: "\n")
     }
 
     private func fileName(fromCodeTitle title: String) -> String? {

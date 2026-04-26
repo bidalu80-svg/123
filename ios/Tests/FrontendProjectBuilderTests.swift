@@ -593,6 +593,18 @@ final class FrontendProjectBuilderTests: XCTestCase {
             FrontendProjectBuilder.inferredWorkspaceOperations(fromUserPrompt: "清空当前项目"),
             [.clearLatest]
         )
+        XCTAssertEqual(
+            FrontendProjectBuilder.inferredWorkspaceOperations(fromUserPrompt: "删除这个脚本项目"),
+            [.clearLatest]
+        )
+        XCTAssertEqual(
+            FrontendProjectBuilder.inferredWorkspaceOperations(fromUserPrompt: "删除这个 Go 项目"),
+            [.clearLatest]
+        )
+        XCTAssertEqual(
+            FrontendProjectBuilder.inferredWorkspaceOperations(fromUserPrompt: "删除这个前端项目"),
+            [.clearLatest]
+        )
     }
 
     func testInferredWorkspaceOperationsDetectNaturalDeletePaths() {

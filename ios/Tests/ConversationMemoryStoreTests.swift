@@ -46,4 +46,30 @@ final class ConversationMemoryStoreTests: XCTestCase {
         XCTAssertTrue(items.isEmpty)
         XCTAssertNil(await store.buildSystemContext())
     }
+
+    func testRememberDoesNotStoreOrdinaryTaskRequestsAsMemory() async {
+        let store = ConversationMemoryStore(defaults: defaults)
+        await store.remember(ChatMessage(role: .user, content: "写一个超高端的官方旗舰网站"))
+
+        let items = await store.listEntries()
+        XCTAssertTrue(items.isEmpty)
+        XCTAssertNil(await store.buildSystemContext())
+    }
+
+    func testBuildSystemContextFiltersTaskLikeLegacyEntries() async throws {
+        let legacyEntries = [
+            ConversationMemoryItem(text: "写一个超高端的官方旗舰网站", updatedAt: Date()),
+            ConversationMemoryItem(text: "请记住我喜欢简洁回答", updatedAt: Date().addingTimeInterval(1))
+        ]
+        let data = try JSONEncoder().encode(legacyEntries)
+        defaults.set(data, forKey: "chatapp.chat.memory.entries")
+
+        let store = ConversationMemoryStore(defaults: defaults)
+        let context = await store.buildSystemContext()
+        let items = await store.listEntries()
+
+        XCTAssertEqual(items.count, 1)
+        XCTAssertTrue(context?.contains("请记住我喜欢简洁回答") == true)
+        XCTAssertFalse(context?.contains("写一个超高端的官方旗舰网站") == true)
+    }
 }

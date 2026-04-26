@@ -720,14 +720,30 @@ enum FrontendProjectBuilder {
             || lowered.contains("reset latest")
             || lowered.contains("wipe workspace")
             || lowered.contains("删除这个项目")
+            || lowered.contains("删除这个脚本项目")
+            || lowered.contains("删除这个python项目")
+            || lowered.contains("删除这个 python 项目")
             || lowered.contains("删除当前项目")
             || lowered.contains("删除当前工作区")
             || lowered.contains("删除这个网站项目")
             || lowered.contains("删除网站项目")
             || lowered.contains("删掉当前项目")
+            || lowered.contains("删掉这个脚本项目")
+            || lowered.contains("移除这个脚本项目")
             || lowered.contains("移除当前项目")
             || lowered.contains("delete this project")
             || lowered.contains("delete current project") {
+            return [.clearLatest]
+        }
+
+        if lowered.range(
+            of: #"(删除|删掉|移除|清空).{0,8}(脚本|python|py|应用|项目).{0,4}项目"#,
+            options: .regularExpression
+        ) != nil {
+            return [.clearLatest]
+        }
+
+        if looksLikeWholeProjectDeletion(normalized) {
             return [.clearLatest]
         }
 
@@ -837,6 +853,30 @@ enum FrontendProjectBuilder {
             of: #"(文件夹|目录).{0,4}(里|中|内).{0,4}(文件|内容|东西)"#,
             options: .regularExpression
         ) != nil
+    }
+
+    private static func looksLikeWholeProjectDeletion(_ text: String) -> Bool {
+        let lowered = text.lowercased()
+        guard lowered.contains("项目") else { return false }
+        let destructiveVerbs = ["删除", "删掉", "移除", "清空", "重置", "clear", "reset", "delete", "remove", "wipe"]
+        guard destructiveVerbs.contains(where: { lowered.contains($0) }) else { return false }
+
+        if lowered.contains("项目里的文件")
+            || lowered.contains("项目中的文件")
+            || lowered.contains("项目内的文件")
+            || lowered.contains("project file")
+            || lowered.contains("files in project") {
+            return false
+        }
+
+        return lowered.range(
+            of: #"(删除|删掉|移除|清空|重置).{0,16}(这个|当前|整个|整个的)?[^\n]{0,16}项目"#,
+            options: .regularExpression
+        ) != nil
+            || lowered.range(
+                of: #"(delete|remove|clear|reset|wipe).{0,18}(this|current|whole)?\s*(?:[a-z0-9._/\-]+\s+)?project"#,
+                options: .regularExpression
+            ) != nil
     }
 
     static func buildProject(
@@ -2553,7 +2593,24 @@ enum FrontendProjectBuilder {
         }
 
         guard start <= end else { return "" }
-        return Array(lines[start...end]).joined(separator: "\n")
+        let trimmedLines = Array(lines[start...end])
+        let nonEmptyLines = trimmedLines.filter {
+            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+
+        let sharedIndent = nonEmptyLines
+            .map { $0.prefix { ch in ch == " " || ch == "\t" }.count }
+            .min() ?? 0
+        guard sharedIndent > 0 else {
+            return trimmedLines.joined(separator: "\n")
+        }
+
+        return trimmedLines.map { line in
+            let leading = line.prefix { ch in ch == " " || ch == "\t" }.count
+            guard leading >= sharedIndent else { return line }
+            return String(line.dropFirst(sharedIndent))
+        }
+        .joined(separator: "\n")
     }
 
     private static func prepareProjectDirectory(mode: BuildMode) throws -> URL {

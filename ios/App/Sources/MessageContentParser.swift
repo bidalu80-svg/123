@@ -1759,7 +1759,25 @@ enum MessageContentParser {
         }
 
         guard start <= end else { return "" }
-        return Array(lines[start...end]).joined(separator: "\n")
+        let trimmedLines = Array(lines[start...end])
+        let nonEmptyLines = trimmedLines.filter {
+            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+
+        let leadingCounts = nonEmptyLines.map { line in
+            line.prefix { $0 == " " || $0 == "\t" }.count
+        }
+        let sharedIndent = leadingCounts.min() ?? 0
+        guard sharedIndent > 0 else {
+            return trimmedLines.joined(separator: "\n")
+        }
+
+        let dedented = trimmedLines.map { line -> String in
+            let leading = line.prefix { $0 == " " || $0 == "\t" }.count
+            guard leading >= sharedIndent else { return line }
+            return String(line.dropFirst(sharedIndent))
+        }
+        return dedented.joined(separator: "\n")
     }
 
     private static func cacheSignature(for message: ChatMessage) -> String {

@@ -171,7 +171,7 @@ final class PythonExecutionService {
         stdin: String? = nil,
         waitForEmbeddedRuntimeRecovery: Bool = false
     ) async throws -> PythonExecutionResult {
-        let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = normalizedRunnableCode(code)
         guard !trimmed.isEmpty else { throw PythonExecutionError.emptyCode }
         guard trimmed.count <= maxCodeLength else {
             return PythonExecutionResult(output: "代码过长（最多 \(maxCodeLength) 字符）", exitCode: 1)
@@ -282,7 +282,7 @@ final class PythonExecutionService {
     }
 
     func startInteractiveSession(code: String) async throws -> PythonInteractiveSessionSnapshot {
-        let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = normalizedRunnableCode(code)
         guard !trimmed.isEmpty else { throw PythonExecutionError.emptyCode }
         guard trimmed.count <= maxCodeLength else {
             throw PythonExecutionError.runtime("代码过长（最多 \(maxCodeLength) 字符）")
@@ -357,8 +357,6 @@ final class PythonExecutionService {
     private func requiresEmbeddedRuntime(for code: String) -> Bool {
         let lowered = code.lowercased()
         let markers = [
-            "import ",
-            "from ",
             "def ",
             "class ",
             "try:",
@@ -373,7 +371,55 @@ final class PythonExecutionService {
             "await ",
             "__name__"
         ]
-        return markers.contains { lowered.contains($0) }
+        if markers.contains(where: { lowered.contains($0) }) {
+            return true
+        }
+        return containsAnyImportStatement(in: code)
+    }
+
+    private func normalizedRunnableCode(_ raw: String) -> String {
+        let normalized = raw.replacingOccurrences(of: "\r\n", with: "\n")
+        let lines = normalized.components(separatedBy: "\n")
+        guard !lines.isEmpty else { return "" }
+
+        var start = 0
+        var end = lines.count - 1
+        while start <= end && lines[start].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            start += 1
+        }
+        while end >= start && lines[end].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            end -= 1
+        }
+        guard start <= end else { return "" }
+
+        let trimmedLines = Array(lines[start...end])
+        let nonEmptyLines = trimmedLines.filter {
+            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        let sharedIndent = nonEmptyLines
+            .map { $0.prefix { ch in ch == " " || ch == "\t" }.count }
+            .min() ?? 0
+        guard sharedIndent > 0 else {
+            return trimmedLines.joined(separator: "\n")
+        }
+
+        return trimmedLines.map { line in
+            let leading = line.prefix { ch in ch == " " || ch == "\t" }.count
+            guard leading >= sharedIndent else { return line }
+            return String(line.dropFirst(sharedIndent))
+        }
+        .joined(separator: "\n")
+    }
+
+    private func containsAnyImportStatement(in code: String) -> Bool {
+        let normalized = code.replacingOccurrences(of: "\r\n", with: "\n")
+        for line in normalized.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if trimmed.hasPrefix("import ") || trimmed.hasPrefix("from ") {
+                return true
+            }
+        }
+        return false
     }
 
     private func isLikelyInteractiveLoopScript(_ code: String) -> Bool {

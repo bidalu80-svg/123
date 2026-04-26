@@ -1226,9 +1226,37 @@ struct ChatScreen: View {
         let inferredWorkspaceOperations = latestUser.map {
             FrontendProjectBuilder.inferredWorkspaceOperations(fromUserPrompt: $0.content)
         } ?? []
-        let assistantHasExplicitWorkspaceOperations = FrontendProjectBuilder.hasExplicitWorkspaceOperationPayload(from: latestAssistant)
+        let assistantExplicitWorkspaceOperations = FrontendProjectBuilder.explicitWorkspaceOperations(from: latestAssistant)
+        let assistantHasExplicitWorkspaceOperations = !assistantExplicitWorkspaceOperations.isEmpty
+        let userRequestedFreshProjectBuild = latestUser.map { containsProjectBuildIntent($0.content) } ?? false
+        let inferredDestructiveOperations = inferredWorkspaceOperations.filter(isDestructiveWorkspaceOperation)
+        let assistantOnlyDestructiveMutation = assistantHasExplicitWorkspaceOperations
+            && !FrontendProjectBuilder.hasExplicitProjectFilePayload(from: latestAssistant)
+            && assistantExplicitWorkspaceOperations.allSatisfy(isDestructiveWorkspaceOperation)
 
-        if !inferredWorkspaceOperations.isEmpty && !assistantHasExplicitWorkspaceOperations {
+        if userRequestedFreshProjectBuild && assistantOnlyDestructiveMutation {
+            autoBuildEligibleAssistantIDs.remove(latestAssistant.id)
+            latestProjectValidationState = nil
+            cancelPendingAutoProjectBuild(for: latestAssistant.id)
+            if let latestUserID = latestUserMessageID(before: latestAssistant, in: newMessages),
+               !projectFormatRetryAttemptedUserIDs.contains(latestUserID) {
+                projectFormatRetryAttemptedUserIDs.insert(latestUserID)
+                viewModel.statusMessage = "检测到模型把建站请求误判成删除操作，正在自动纠正重试…"
+                Task {
+                    var spinCount = 0
+                    while viewModel.isSending && spinCount < 120 {
+                        try? await Task.sleep(nanoseconds: 100_000_000)
+                        spinCount += 1
+                    }
+                    await viewModel.regenerateLastAssistantReply(forceProjectFileFormat: true)
+                }
+            }
+            return
+        }
+
+        if !inferredWorkspaceOperations.isEmpty
+            && !assistantHasExplicitWorkspaceOperations
+            && !(userRequestedFreshProjectBuild && !inferredDestructiveOperations.isEmpty) {
             enqueueDirectWorkspaceMutation(inferredWorkspaceOperations, assistant: latestAssistant)
             return
         }
@@ -1894,6 +1922,15 @@ struct ChatScreen: View {
         }
 
         return false
+    }
+
+    private func isDestructiveWorkspaceOperation(_ operation: FrontendProjectBuilder.WorkspaceOperation) -> Bool {
+        switch operation {
+        case .clearLatest, .delete:
+            return true
+        case .createDirectory, .createEmptyFile:
+            return false
+        }
     }
 
     private func recentConversationContainsProjectContext(in messages: ArraySlice<ChatMessage>) -> Bool {
