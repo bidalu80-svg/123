@@ -1706,7 +1706,7 @@ final class ChatService {
                     toolSpecs: toolSpecs,
                     toolChoice: toolChoice
                 )
-            )
+            }
             aggregatedUsage = mergeTokenUsage(aggregatedUsage, extractTokenUsage(from: object))
 
             let parsed = MinimalAgentToolResponseParser.parseChatCompletionsResponse(object)
@@ -1828,7 +1828,7 @@ final class ChatService {
                     previousResponseID: previousResponseID,
                     toolChoice: toolChoice
                 )
-            )
+            }
             aggregatedUsage = mergeTokenUsage(aggregatedUsage, extractTokenUsage(from: object))
 
             let parsed = MinimalAgentToolResponseParser.parseResponsesResponse(object)
