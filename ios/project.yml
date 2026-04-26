@@ -21,6 +21,9 @@ settings:
     CODE_SIGN_STYLE: Manual
     CHAT_API_URL: "http://8.218.177.114"
     CHAT_MODEL: "astron-code-latest"
+    IEXA_BUILD_GIT_SHA: "local-dev"
+    IEXA_BUILD_RUN_ID: "local"
+    IEXA_BUILD_TIME: "local-build"
     GOOGLE_CLIENT_ID: ""
     GOOGLE_REVERSED_CLIENT_ID: ""
     GENERATE_INFOPLIST_FILE: NO

@@ -2,15 +2,22 @@ import SwiftUI
 
 struct AboutScreen: View {
     private var appVersionText: String {
-        "v2.0"
+        AppBuildInfo.versionLine
     }
 
     var body: some View {
         Form {
             Section("应用信息") {
-                LabeledContent("应用名称", value: "IEXA")
+                LabeledContent("应用名称", value: AppBuildInfo.appName)
                 LabeledContent("作者", value: "blank")
                 LabeledContent("版本", value: appVersionText)
+            }
+
+            Section("构建信息") {
+                buildInfoRow("构建签名", value: AppBuildInfo.buildSignature)
+                buildInfoRow("完整提交", value: AppBuildInfo.gitSHA)
+                buildInfoRow("Actions Run", value: AppBuildInfo.runID)
+                buildInfoRow("构建时间", value: AppBuildInfo.buildTimeDisplay)
             }
 
             Section("功能特点") {
@@ -37,6 +44,18 @@ struct AboutScreen: View {
             Text(detail)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func buildInfoRow(_ title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+            Text(value)
+                .font(.footnote.monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
         }
         .padding(.vertical, 2)
     }

@@ -24,6 +24,12 @@
     <string>$(CHAT_API_URL)</string>
     <key>CHAT_MODEL</key>
     <string>$(CHAT_MODEL)</string>
+    <key>IEXA_BUILD_GIT_SHA</key>
+    <string>$(IEXA_BUILD_GIT_SHA)</string>
+    <key>IEXA_BUILD_RUN_ID</key>
+    <string>$(IEXA_BUILD_RUN_ID)</string>
+    <key>IEXA_BUILD_TIME</key>
+    <string>$(IEXA_BUILD_TIME)</string>
     <key>GOOGLE_CLIENT_ID</key>
     <string>$(GOOGLE_CLIENT_ID)</string>
     <key>AUTH_API_URL</key>

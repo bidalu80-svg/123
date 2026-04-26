@@ -429,6 +429,13 @@ struct SettingsScreen: View {
                 }
                 statusRow("内置技能", value: "\(viewModel.config.enabledBuiltinSkillIDs.count) 个已启用")
             }
+
+            Section("构建信息") {
+                buildInfoRow("版本", value: AppBuildInfo.versionLine)
+                buildInfoRow("构建签名", value: AppBuildInfo.buildSignature)
+                buildInfoRow("完整提交", value: AppBuildInfo.gitSHA)
+                buildInfoRow("构建时间", value: AppBuildInfo.buildTimeDisplay)
+            }
         }
         .navigationTitle("配置")
         .toolbar {
@@ -493,6 +500,17 @@ struct SettingsScreen: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
+    }
+
+    private func buildInfoRow(_ title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+            Text(value)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        }
+        .padding(.vertical, 2)
     }
 
     private func isBuiltinSkillEnabled(_ skill: BuiltinAISkill) -> Bool {
