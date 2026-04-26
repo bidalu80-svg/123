@@ -716,6 +716,7 @@ struct SelectableLinkTextView: UIViewRepresentable {
         private var lastStreamingTailRange: NSRange?
         private var lastStreamingCursorRange: NSRange?
         private var streamCharacterBudget: Double = 0
+        private var streamPauseRemaining: CFTimeInterval = 0
         private var lastMeasuredWidth: CGFloat = 0
         private var lastMeasuredHeight: CGFloat = 0
         private var lastMeasuredTextCount: Int = 0
@@ -776,6 +777,7 @@ struct SelectableLinkTextView: UIViewRepresentable {
             streamTimer = nil
             streamLastTimestamp = 0
             streamCharacterBudget = 0
+            streamPauseRemaining = 0
             if clearPending {
                 pendingStreamingSuffix.removeAll(keepingCapacity: false)
             }
@@ -809,6 +811,13 @@ struct SelectableLinkTextView: UIViewRepresentable {
                 : (1.0 / 30.0)
             streamLastTimestamp = timer.timestamp
 
+            if streamPauseRemaining > 0 {
+                streamPauseRemaining = max(0, streamPauseRemaining - elapsed)
+                if streamPauseRemaining > 0 {
+                    return
+                }
+            }
+
             guard !pendingStreamingSuffix.isEmpty else {
                 normalizeStreamingTailAppearance()
                 streamTimer?.invalidate()
@@ -818,9 +827,17 @@ struct SelectableLinkTextView: UIViewRepresentable {
                 return
             }
 
-            streamCharacterBudget += elapsed * streamingCharactersPerSecond(for: pendingStreamingSuffix.count)
+            let renderedCharacters = textView.textStorage.length
+            streamCharacterBudget += elapsed * streamingCharactersPerSecond(
+                for: pendingStreamingSuffix.count,
+                renderedCharacters: renderedCharacters
+            )
             let budgetStep = Int(streamCharacterBudget.rounded(.down))
-            let step = max(1, min(3, budgetStep))
+            let step = adaptiveStreamingStep(
+                budgetStep: budgetStep,
+                pendingCharacters: pendingStreamingSuffix.count,
+                renderedCharacters: renderedCharacters
+            )
             streamCharacterBudget = max(0, streamCharacterBudget - Double(step))
             let chunk = consumeStreamingPrefix(maxCharacters: step)
             guard !chunk.isEmpty else { return }
@@ -834,6 +851,10 @@ struct SelectableLinkTextView: UIViewRepresentable {
                 applyStreamingTailFade(in: storage)
                 storage.endEditing()
             }
+            streamPauseRemaining = punctuationPauseDuration(
+                after: chunk,
+                renderedCharacters: renderedCharacters + chunk.count
+            )
         }
 
         private func consumeStreamingPrefix(maxCharacters: Int) -> String {
@@ -888,22 +909,69 @@ struct SelectableLinkTextView: UIViewRepresentable {
             return prefix
         }
 
-        private func streamingCharactersPerSecond(for pendingCharacters: Int) -> Double {
+        private func adaptiveStreamingStep(
+            budgetStep: Int,
+            pendingCharacters: Int,
+            renderedCharacters: Int
+        ) -> Int {
+            let maximum: Int
+            if renderedCharacters < 18 {
+                maximum = 10
+            } else {
+                switch pendingCharacters {
+                case 4_000...:
+                    maximum = 12
+                case 1_200...:
+                    maximum = 10
+                case 320...:
+                    maximum = 8
+                default:
+                    maximum = 6
+                }
+            }
+
+            let minimum = renderedCharacters < 18 ? 2 : 1
+            return max(minimum, min(maximum, max(1, budgetStep)))
+        }
+
+        private func streamingCharactersPerSecond(for pendingCharacters: Int, renderedCharacters: Int) -> Double {
+            if renderedCharacters < 18 {
+                return 138
+            }
+            if renderedCharacters < 48 {
+                return 104
+            }
+
             switch pendingCharacters {
             case 6_000...:
-                return 68
+                return 82
             case 3_000...:
-                return 58
+                return 72
             case 1_600...:
-                return 50
+                return 62
             case 800...:
-                return 44
+                return 54
             case 320...:
-                return 38
+                return 46
             case 120...:
-                return 32
+                return 38
             default:
-                return 28
+                return 32
+            }
+        }
+
+        private func punctuationPauseDuration(after chunk: String, renderedCharacters: Int) -> CFTimeInterval {
+            let trimmed = chunk.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let tail = trimmed.last else { return 0 }
+
+            let inFastStart = renderedCharacters < 24
+            switch tail {
+            case "。", "！", "？", ".", "!", "?":
+                return inFastStart ? 0.03 : 0.11
+            case "，", ",", "；", ";", "：", ":", "、":
+                return inFastStart ? 0.015 : 0.07
+            default:
+                return 0
             }
         }
 

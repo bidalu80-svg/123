@@ -2463,8 +2463,8 @@ enum FrontendProjectBuilder {
     private static func normalizeFileContent(_ raw: String) -> String {
         let normalized = raw
             .replacingOccurrences(of: "\r\n", with: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return removeLeakedTaggedFileMarkers(from: normalized)
+        let prepared = trimCodeBoundaryBlankLines(normalized)
+        return removeLeakedTaggedFileMarkers(from: prepared)
     }
 
     private static func containsTaggedFileMarker(_ text: String) -> Bool {
@@ -2490,7 +2490,7 @@ enum FrontendProjectBuilder {
             with: "\n\n",
             options: .regularExpression
         )
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimCodeBoundaryBlankLines(text)
     }
 
     private static func pruneEmptyParentDirectories(startingFrom folderURL: URL, root: URL) {
@@ -2535,6 +2535,25 @@ enum FrontendProjectBuilder {
             ? body
             : normalizedInner
         return content.isEmpty ? normalized : content
+    }
+
+    private static func trimCodeBoundaryBlankLines(_ raw: String) -> String {
+        let normalized = raw.replacingOccurrences(of: "\r\n", with: "\n")
+        let lines = normalized.components(separatedBy: "\n")
+        guard !lines.isEmpty else { return "" }
+
+        var start = 0
+        var end = lines.count - 1
+
+        while start <= end && lines[start].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            start += 1
+        }
+        while end >= start && lines[end].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            end -= 1
+        }
+
+        guard start <= end else { return "" }
+        return Array(lines[start...end]).joined(separator: "\n")
     }
 
     private static func prepareProjectDirectory(mode: BuildMode) throws -> URL {

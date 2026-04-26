@@ -4,6 +4,7 @@ import XCTest
 final class ChatServiceTests: XCTestCase {
     override func tearDown() {
         URLProtocolStub.handler = nil
+        LocalMCPActionMemory.reset()
         super.tearDown()
     }
 
@@ -303,6 +304,25 @@ final class ChatServiceTests: XCTestCase {
         XCTAssertTrue(systemContents.contains(where: { $0.contains("[当前工作区上下文]") }))
         XCTAssertTrue(systemContents.contains(where: { $0.contains("当前任务更接近 agent 执行") }))
         XCTAssertTrue(systemContents.contains(where: { $0.contains("MCP 风格意图路由智能体") }))
+    }
+
+    func testBuildRequestInjectsRecentLocalMCPContextForNaturalLanguageFollowup() throws {
+        LocalMCPActionMemory.record(summary: "读取文件", path: "src/main.swift")
+        LocalMCPActionMemory.record(summary: "编辑文件", path: "src/main.swift")
+
+        let config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
+        let requestMessage = ChatMessage(role: .user, content: "把这个再改一下")
+
+        let request = try ChatRequestBuilder.makeRequest(config: config, history: [], message: requestMessage)
+        let payload = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+        let messages = try XCTUnwrap(json["messages"] as? [[String: Any]])
+        let systemContents = messages
+            .filter { ($0["role"] as? String) == "system" }
+            .compactMap { $0["content"] as? String }
+
+        XCTAssertTrue(systemContents.contains(where: { $0.contains("最近免费本地 MCP 上下文") }))
+        XCTAssertTrue(systemContents.contains(where: { $0.contains("src/main.swift") }))
     }
 
     func testBuildImagesGenerationRequestUsesConfiguredEndpoint() throws {

@@ -24,6 +24,54 @@ struct MinimalAgentToolExecution {
     let output: String
 }
 
+enum LocalMCPActionMemory {
+    struct Entry: Equatable {
+        let summary: String
+        let path: String?
+    }
+
+    private static let queue = DispatchQueue(label: "chatapp.local-mcp-action-memory", qos: .utility)
+    private static let maxEntries = 8
+    private static var entries: [Entry] = []
+
+    static func record(summary: String, path: String? = nil) {
+        let trimmedSummary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedPath = path?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedSummary.isEmpty else { return }
+
+        queue.sync {
+            let normalizedPath = trimmedPath?.isEmpty == true ? nil : trimmedPath
+            let entry = Entry(summary: trimmedSummary, path: normalizedPath)
+            if entries.last == entry {
+                return
+            }
+            entries.append(entry)
+            if entries.count > maxEntries {
+                entries.removeFirst(entries.count - maxEntries)
+            }
+        }
+    }
+
+    static func recentActionContext() -> String? {
+        queue.sync {
+            guard !entries.isEmpty else { return nil }
+            let lines = entries.suffix(6).map { entry in
+                if let path = entry.path, !path.isEmpty {
+                    return "- \(entry.summary)：`\(path)`"
+                }
+                return "- \(entry.summary)"
+            }
+            return "[最近免费本地 MCP 上下文]\n" + lines.joined(separator: "\n")
+        }
+    }
+
+    static func reset() {
+        queue.sync {
+            entries.removeAll(keepingCapacity: false)
+        }
+    }
+}
+
 enum MinimalAgentToolResponseParser {
     static func parseChatCompletionsResponse(_ object: [String: Any]) -> MinimalAgentToolTurnResponse {
         let text = normalizedAssistantText(StreamParser.extractPayload(from: object).text)
@@ -358,6 +406,7 @@ final class MinimalAgentToolRuntime {
                 }
 
             let text = rendered.isEmpty ? "[empty]" : rendered.joined(separator: "\n")
+            LocalMCPActionMemory.record(summary: "查看目录", path: displayPath)
             return MinimalAgentToolExecution(
                 renderedLog: renderedLog,
                 output: clippedOutput(text, limit: 6_000)
@@ -396,6 +445,7 @@ final class MinimalAgentToolRuntime {
                 return "\(lineNumber)\t\(line)"
             }
             let text = slice.joined(separator: "\n")
+            LocalMCPActionMemory.record(summary: "读取文件", path: resolved.path)
             return MinimalAgentToolExecution(
                 renderedLog: "读取 `\(resolved.path)`",
                 output: clippedOutput(text.isEmpty ? "[empty file]" : text, limit: maxCharacters)
@@ -415,6 +465,7 @@ final class MinimalAgentToolRuntime {
             let resolved = try resolveWorkspaceURL(for: rawPath, createWorkspaceIfMissing: true)
             try fileManager.createDirectory(at: resolved.url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try content.write(to: resolved.url, atomically: true, encoding: .utf8)
+            LocalMCPActionMemory.record(summary: "写入文件", path: resolved.path)
             return MinimalAgentToolExecution(
                 renderedLog: "写入 `\(resolved.path)`",
                 output: "已写入 `\(resolved.path)`（\(content.count) 字符）。"
@@ -444,6 +495,7 @@ final class MinimalAgentToolRuntime {
             var updated = content
             updated.replaceSubrange(range, with: newText)
             try updated.write(to: resolved.url, atomically: true, encoding: .utf8)
+            LocalMCPActionMemory.record(summary: "编辑文件", path: resolved.path)
             return MinimalAgentToolExecution(
                 renderedLog: "编辑 `\(resolved.path)`",
                 output: "已编辑 `\(resolved.path)`。"
@@ -499,6 +551,7 @@ final class MinimalAgentToolRuntime {
             }
 
             let output = matches.isEmpty ? "未找到匹配项。" : matches.joined(separator: "\n")
+            LocalMCPActionMemory.record(summary: "搜索文本 `\(displayQuery)`", path: displayPath)
             return MinimalAgentToolExecution(
                 renderedLog: "搜索 `\(displayQuery)`",
                 output: clippedOutput(output, limit: 8_000)
@@ -527,6 +580,7 @@ final class MinimalAgentToolRuntime {
                 startingFrom: resolved.url.deletingLastPathComponent(),
                 root: rootURL
             )
+            LocalMCPActionMemory.record(summary: "删除路径", path: resolved.path)
             return MinimalAgentToolExecution(
                 renderedLog: "删除 `\(resolved.path)`",
                 output: "已删除 `\(resolved.path)`。"
@@ -542,6 +596,7 @@ final class MinimalAgentToolRuntime {
     private func executeClearWorkspace() -> MinimalAgentToolExecution {
         do {
             try FrontendProjectBuilder.clearLatestProject()
+            LocalMCPActionMemory.record(summary: "清空 latest 工作区")
             return MinimalAgentToolExecution(
                 renderedLog: "清空 latest 工作区",
                 output: "latest 工作区已清空。"
@@ -577,6 +632,7 @@ final class MinimalAgentToolRuntime {
                 projectURL: rootURL,
                 stdin: stdin
             )
+            LocalMCPActionMemory.record(summary: "运行 Python 文件", path: resolved.path)
             let suffix = result.exitCode == 0 ? "" : "\n\n[exit code \(result.exitCode)]"
             return MinimalAgentToolExecution(
                 renderedLog: "运行 `\(resolved.path)`",

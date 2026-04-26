@@ -261,6 +261,13 @@ struct ChatRequestBuilder {
                 "role": "system",
                 "content": mcpIntentRouterSystemPrompt
             ])
+            if let recentLocalMCPContext = LocalMCPActionMemory.recentActionContext(),
+               !recentLocalMCPContext.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                prefix.append([
+                    "role": "system",
+                    "content": recentLocalMCPContext
+                ])
+            }
         }
 
         if promptProfile == .full,

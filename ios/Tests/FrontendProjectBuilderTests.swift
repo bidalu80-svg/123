@@ -141,6 +141,38 @@ final class FrontendProjectBuilderTests: XCTestCase {
         XCTAssertEqual(selected.standardizedFileURL, result.entryFileURL.standardizedFileURL)
     }
 
+    func testBuildProjectPreservesLeadingIndentationForCodeFiles() throws {
+        let message = ChatMessage(
+            role: .assistant,
+            content: """
+            [[file:script.py]]
+                if True:
+                    print("ok")
+            [[endfile]]
+
+            [[file:config.yaml]]
+              service:
+                host: localhost
+            [[endfile]]
+            """
+        )
+
+        let result = try FrontendProjectBuilder.buildProject(from: message, mode: .createNewProject)
+        let python = try String(
+            contentsOf: result.projectDirectoryURL.appendingPathComponent("script.py"),
+            encoding: .utf8
+        )
+        let yaml = try String(
+            contentsOf: result.projectDirectoryURL.appendingPathComponent("config.yaml"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(python.hasPrefix("    if True:"))
+        XCTAssertTrue(python.contains("\n        print(\"ok\")"))
+        XCTAssertTrue(yaml.hasPrefix("  service:"))
+        XCTAssertTrue(yaml.contains("\n    host: localhost"))
+    }
+
     func testLatestEntryFileURLReturnsIndexPHPForPHPOnlyProject() throws {
         try FrontendProjectBuilder.clearLatestProject()
         let latest = try XCTUnwrap(FrontendProjectBuilder.latestProjectURL())

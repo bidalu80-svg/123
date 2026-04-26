@@ -254,30 +254,49 @@ struct ChatFileAttachment: Identifiable, Codable, Equatable {
     private func unwrapSingleFencedCodeBlockIfNeeded(_ raw: String) -> String {
         let normalized = raw
             .replacingOccurrences(of: "\r\n", with: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard normalized.hasPrefix("```"), normalized.hasSuffix("```") else {
-            return normalized
+        let prepared = trimCodeBoundaryBlankLines(normalized)
+        guard prepared.hasPrefix("```"), prepared.hasSuffix("```") else {
+            return prepared
         }
 
-        var inner = String(normalized.dropFirst(3))
-        guard inner.count >= 3 else { return normalized }
+        var inner = String(prepared.dropFirst(3))
+        guard inner.count >= 3 else { return prepared }
         inner.removeLast(3)
 
-        let trimmedInner = inner.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedInner = trimCodeBoundaryBlankLines(inner)
         guard let newlineIndex = trimmedInner.firstIndex(of: "\n") else {
             return trimmedInner
         }
 
         let header = trimmedInner[..<newlineIndex].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let bodyStart = trimmedInner.index(after: newlineIndex)
-        let body = trimmedInner[bodyStart...].trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = trimCodeBoundaryBlankLines(String(trimmedInner[bodyStart...]))
 
         let expectedLanguage = (codeLanguageHint ?? "").lowercased()
         if !header.isEmpty && !body.isEmpty && (header == expectedLanguage || header.range(of: #"^[a-z0-9.+#_-]+$"#, options: .regularExpression) != nil) {
-            return String(body)
+            return body
         }
 
         return trimmedInner
+    }
+
+    private func trimCodeBoundaryBlankLines(_ raw: String) -> String {
+        let normalized = raw.replacingOccurrences(of: "\r\n", with: "\n")
+        let lines = normalized.components(separatedBy: "\n")
+        guard !lines.isEmpty else { return "" }
+
+        var start = 0
+        var end = lines.count - 1
+
+        while start <= end && lines[start].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            start += 1
+        }
+        while end >= start && lines[end].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            end -= 1
+        }
+
+        guard start <= end else { return "" }
+        return Array(lines[start...end]).joined(separator: "\n")
     }
 }
 

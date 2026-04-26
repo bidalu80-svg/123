@@ -319,8 +319,8 @@ enum MessageContentParser {
         let rawContent = String(raw[contentStart..<contentEnd])
         let normalizedRawContent = rawContent
             .replacingOccurrences(of: "\r\n", with: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let content = unwrapSingleFencedTaggedFileContent(normalizedRawContent)
+        let preparedRawContent = trimCodeBoundaryBlankLines(normalizedRawContent)
+        let content = unwrapSingleFencedTaggedFileContent(preparedRawContent)
 
         if content.isEmpty && endTagRange == nil {
             return nil
@@ -351,7 +351,7 @@ enum MessageContentParser {
     }
 
     private static func unwrapSingleFencedTaggedFileContent(_ raw: String) -> String {
-        let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = trimCodeBoundaryBlankLines(raw)
         guard normalized.hasPrefix("```"), normalized.hasSuffix("```") else {
             return normalized
         }
@@ -360,7 +360,7 @@ enum MessageContentParser {
         guard inner.count >= 3 else { return normalized }
         inner.removeLast(3)
         let parsed = parseCodeBlock(inner)
-        let content = parsed.1.trimmingCharacters(in: .whitespacesAndNewlines)
+        let content = trimCodeBoundaryBlankLines(parsed.1)
         return content.isEmpty ? normalized : content
     }
 
@@ -563,9 +563,9 @@ enum MessageContentParser {
             return nil
         }
 
-        let content = collected
-            .joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let content = trimCodeBoundaryBlankLines(
+            collected.joined(separator: "\n")
+        )
         guard !content.isEmpty else { return nil }
         guard isLikelyStructuredCodeContent(languageHint: language, content: content) else { return nil }
 
@@ -1014,9 +1014,7 @@ enum MessageContentParser {
             return ("", normalized.trimmingCharacters(in: .whitespacesAndNewlines))
         }
 
-        let code = codeLines
-            .joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let code = trimCodeBoundaryBlankLines(codeLines.joined(separator: "\n"))
         let remainder = lines.dropFirst(cursor)
             .joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1028,7 +1026,7 @@ enum MessageContentParser {
         languageHint: String?
     ) -> (code: String, remainder: String)? {
         let split = splitLikelyCodePrefix(from: raw, languageHint: languageHint)
-        let code = split.code.trimmingCharacters(in: .whitespacesAndNewlines)
+        let code = trimCodeBoundaryBlankLines(split.code)
         let remainder = split.remainder.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !code.isEmpty, !remainder.isEmpty else { return nil }
         guard isLikelyStructuredCodeContent(languageHint: languageHint, content: code) else { return nil }
@@ -1187,7 +1185,7 @@ enum MessageContentParser {
                 return true
             }
             .joined(separator: "\n")
-        return filtered.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimCodeBoundaryBlankLines(filtered)
     }
 
     private static func inferCodeLanguage(language: String?, content: String) -> String? {
@@ -1618,8 +1616,8 @@ enum MessageContentParser {
                     if !split.code.isEmpty,
                        isLikelyStructuredCodeContent(languageHint: language, content: split.code) {
                         merged.removeLast()
-                        let combined = content.trimmingCharacters(in: .whitespacesAndNewlines) + "\n" + split.code.trimmingCharacters(in: .whitespacesAndNewlines)
-                        merged.append(.code(language: language, content: combined.trimmingCharacters(in: .whitespacesAndNewlines)))
+                        let combined = trimCodeBoundaryBlankLines(content) + "\n" + trimCodeBoundaryBlankLines(split.code)
+                        merged.append(.code(language: language, content: trimCodeBoundaryBlankLines(combined)))
                         if !split.remainder.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                             merged.append(.text(split.remainder))
                         }
@@ -1632,8 +1630,8 @@ enum MessageContentParser {
                     if !split.code.isEmpty,
                        isLikelyStructuredCodeContent(languageHint: language, content: split.code) {
                         merged.removeLast()
-                        let combined = content.trimmingCharacters(in: .whitespacesAndNewlines) + "\n" + split.code.trimmingCharacters(in: .whitespacesAndNewlines)
-                        merged.append(.file(name: name, language: language, content: combined.trimmingCharacters(in: .whitespacesAndNewlines)))
+                        let combined = trimCodeBoundaryBlankLines(content) + "\n" + trimCodeBoundaryBlankLines(split.code)
+                        merged.append(.file(name: name, language: language, content: trimCodeBoundaryBlankLines(combined)))
                         if !split.remainder.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                             merged.append(.text(split.remainder))
                         }
@@ -1743,6 +1741,25 @@ enum MessageContentParser {
             return true
         }
         return false
+    }
+
+    private static func trimCodeBoundaryBlankLines(_ raw: String) -> String {
+        let normalized = raw.replacingOccurrences(of: "\r\n", with: "\n")
+        let lines = normalized.components(separatedBy: "\n")
+        guard !lines.isEmpty else { return "" }
+
+        var start = 0
+        var end = lines.count - 1
+
+        while start <= end && lines[start].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            start += 1
+        }
+        while end >= start && lines[end].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            end -= 1
+        }
+
+        guard start <= end else { return "" }
+        return Array(lines[start...end]).joined(separator: "\n")
     }
 
     private static func cacheSignature(for message: ChatMessage) -> String {

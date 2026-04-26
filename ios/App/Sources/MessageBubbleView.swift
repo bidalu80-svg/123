@@ -555,12 +555,16 @@ struct MessageBubbleView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         if hasStreamingText {
-                            let segments = parsedStreamingSegments(for: displayText)
-                            if segments.isEmpty {
+                            if shouldRenderStreamingTextDirectly(displayText) {
                                 assistantTextSegmentView(displayText, streamingTextAnimated: true)
                             } else {
-                                ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
-                                    segmentView(segment, streamingTextAnimated: true)
+                                let segments = parsedStreamingSegments(for: displayText)
+                                if segments.isEmpty {
+                                    assistantTextSegmentView(displayText, streamingTextAnimated: true)
+                                } else {
+                                    ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                                        segmentView(segment, streamingTextAnimated: true)
+                                    }
                                 }
                             }
                         }
@@ -3052,9 +3056,9 @@ struct MessageBubbleView: View {
     }
 
     private func unwrapSingleFencedCodeContentIfNeeded(_ raw: String) -> String {
-        let normalized = raw
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = trimCodeBoundaryBlankLines(
+            raw.replacingOccurrences(of: "\r\n", with: "\n")
+        )
         guard !normalized.isEmpty else { return "" }
 
         let lines = normalized.components(separatedBy: "\n")
@@ -3086,10 +3090,27 @@ struct MessageBubbleView: View {
             contentLines = Array(lines.dropFirst())
         }
 
-        let content = contentLines
-            .joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let content = trimCodeBoundaryBlankLines(contentLines.joined(separator: "\n"))
         return content.isEmpty ? normalized : content
+    }
+
+    private func trimCodeBoundaryBlankLines(_ raw: String) -> String {
+        let normalized = raw.replacingOccurrences(of: "\r\n", with: "\n")
+        let lines = normalized.components(separatedBy: "\n")
+        guard !lines.isEmpty else { return "" }
+
+        var start = 0
+        var end = lines.count - 1
+
+        while start <= end && lines[start].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            start += 1
+        }
+        while end >= start && lines[end].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            end -= 1
+        }
+
+        guard start <= end else { return "" }
+        return Array(lines[start...end]).joined(separator: "\n")
     }
 
     private func fileName(fromCodeTitle title: String) -> String? {
@@ -3131,7 +3152,7 @@ struct MessageBubbleView: View {
             options: .regularExpression
         )
 
-        return normalized.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimCodeBoundaryBlankLines(normalized)
     }
 
     private func hasPreviewTruncationMarker(in text: String) -> Bool {

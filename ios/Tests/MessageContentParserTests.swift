@@ -2,6 +2,69 @@ import XCTest
 @testable import ChatApp
 
 final class MessageContentParserTests: XCTestCase {
+    func testParsePreservesLeadingIndentationInsideFencedPythonCodeBlock() {
+        let message = ChatMessage(
+            role: .assistant,
+            content: """
+            ```python
+                result = do_work()
+                print(result)
+            ```
+            """
+        )
+
+        let segments = MessageContentParser.parse(message)
+        guard case let .code(language, content)? = segments.first else {
+            return XCTFail("Expected code segment")
+        }
+
+        XCTAssertEqual(language, "python")
+        XCTAssertTrue(content.hasPrefix("    result = do_work()"))
+        XCTAssertTrue(content.contains("\n    print(result)"))
+    }
+
+    func testParsePreservesLeadingIndentationInsideTaggedYamlFile() {
+        let message = ChatMessage(
+            role: .assistant,
+            content: """
+            [[file:config.yaml]]
+              service:
+                port: 8080
+                host: localhost
+            [[endfile]]
+            """
+        )
+
+        let segments = MessageContentParser.parse(message)
+        guard case let .file(name, language, content)? = segments.first(where: {
+            if case .file = $0 { return true }
+            return false
+        }) else {
+            return XCTFail("Expected file segment")
+        }
+
+        XCTAssertEqual(name, "config.yaml")
+        XCTAssertEqual(language, "yaml")
+        XCTAssertTrue(content.hasPrefix("  service:"))
+        XCTAssertTrue(content.contains("\n    port: 8080"))
+    }
+
+    func testFileAttachmentPreviewTextPreservesLeadingIndentationInsideFencedCode() {
+        let attachment = ChatFileAttachment(
+            fileName: "script.py",
+            mimeType: "text/x-python",
+            textContent: """
+            ```python
+                if True:
+                    print("ok")
+            ```
+            """
+        )
+
+        XCTAssertTrue(attachment.previewText.hasPrefix("    if True:"))
+        XCTAssertTrue(attachment.previewText.contains("\n        print(\"ok\")"))
+    }
+
     func testParseRendersTaggedFileBlockAsFileSegment() {
         let message = ChatMessage(
             role: .assistant,
