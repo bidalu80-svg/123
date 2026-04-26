@@ -163,15 +163,39 @@ struct SettingsScreen: View {
 
                 if viewModel.config.remotePythonExecutionEnabled {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("内置远端执行入口")
+                        Text("远端 Python 执行入口")
                             .font(.caption)
                             .foregroundStyle(.secondary)
 
-                        Text(viewModel.config.remotePythonExecutionURLString)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        TextField("完整 URL 或相对路径，例如 https://runner.example.com/v1/python/execute", text: $viewModel.config.remotePythonExecutionPath)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+
+                        HStack(spacing: 10) {
+                            Button("粘贴") {
+                                viewModel.config.remotePythonExecutionPath = UIPasteboard.general.string ?? ""
+                            }
+                            .buttonStyle(.bordered)
+
+                            Button("清空", role: .destructive) {
+                                viewModel.config.remotePythonExecutionPath = ""
+                            }
+                            .buttonStyle(.bordered)
+                        }
+
+                        if !viewModel.config.effectiveRemotePythonExecutionURLString.isEmpty {
+                            Text(viewModel.config.effectiveRemotePythonExecutionURLString)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            Text("当前还没有可用的远端 Python 地址。")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        SecureField("可选：单独的远端 Python API Key", text: $viewModel.config.remotePythonExecutionAPIKey)
 
                         HStack {
                             Text("远端 Python 超时")
@@ -181,7 +205,7 @@ struct SettingsScreen: View {
                         }
                         Slider(value: $viewModel.config.remotePythonExecutionTimeout, in: 30...900, step: 15)
 
-                        Text("不需要单独填写额外地址。App 会默认使用当前主站地址下的 `/v1/python/execute`，并优先复用主 API Key。适合把远端 Python 挂到你现有主服务后面。")
+                        Text("留空时，App 会直接走内置的阿里云远端执行入口：`\(ChatConfig.defaultBuiltInRemotePythonShellExecuteURL)`。只有当你的主站本身已经代理了远端 Python，才填相对路径；如果是独立 runner，请直接填完整 URL。远端 Python Key 只对直连 runner 生效；内置阿里云兜底会沿用 Shell 执行链的鉴权。")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
@@ -425,17 +449,11 @@ struct SettingsScreen: View {
                 statusRow("自动项目技能", value: viewModel.config.autoSkillActivationEnabled ? "开启" : "关闭")
                 statusRow("远端 Python", value: viewModel.config.remotePythonExecutionEnabled ? "开启" : "关闭")
                 if viewModel.config.remotePythonExecutionEnabled {
-                    statusRow("远端 Python 入口", value: viewModel.config.remotePythonExecutionURLString)
+                    statusRow("远端 Python 入口", value: viewModel.config.effectiveRemotePythonExecutionURLString)
                 }
                 statusRow("内置技能", value: "\(viewModel.config.enabledBuiltinSkillIDs.count) 个已启用")
             }
 
-            Section("构建信息") {
-                buildInfoRow("版本", value: AppBuildInfo.versionLine)
-                buildInfoRow("构建签名", value: AppBuildInfo.buildSignature)
-                buildInfoRow("完整提交", value: AppBuildInfo.gitSHA)
-                buildInfoRow("构建时间", value: AppBuildInfo.buildTimeDisplay)
-            }
         }
         .navigationTitle("配置")
         .toolbar {
@@ -500,17 +518,6 @@ struct SettingsScreen: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
-    }
-
-    private func buildInfoRow(_ title: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-            Text(value)
-                .font(.caption.monospaced())
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-        }
-        .padding(.vertical, 2)
     }
 
     private func isBuiltinSkillEnabled(_ skill: BuiltinAISkill) -> Bool {

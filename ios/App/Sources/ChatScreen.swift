@@ -2257,6 +2257,7 @@ struct ChatScreen: View {
                                     .font(.system(size: 30, weight: .regular))
                                     .foregroundStyle(.secondary)
                             }
+                            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                         }
                         .buttonStyle(.plain)
 
@@ -2279,6 +2280,7 @@ struct ChatScreen: View {
                                         }
                                 }
                             }
+                            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                             .buttonStyle(.plain)
                         }
                     }
@@ -4828,17 +4830,33 @@ struct ChatScreen: View {
     }
 
     private func requestImageData(for asset: PHAsset) async -> (data: Data, mimeType: String)? {
+        let resources = PHAssetResource.assetResources(for: asset)
+        let resource = resources.first(where: {
+            $0.type == .photo || $0.type == .fullSizePhoto
+        }) ?? resources.first
+        let fileName = resource?.originalFilename ?? ""
+        let fileExtension = (fileName as NSString).pathExtension
+        let extensionMime = UTType(filenameExtension: fileExtension)?.preferredMIMEType ?? "image/*"
+
+        if let payload = await requestImageDataViaImageManager(for: asset, fallbackMimeType: extensionMime) {
+            return payload
+        }
+
+        guard let resource else { return nil }
+        return await requestImageDataViaAssetResource(resource, fallbackMimeType: extensionMime)
+    }
+
+    private func requestImageDataViaImageManager(
+        for asset: PHAsset,
+        fallbackMimeType: String
+    ) async -> (data: Data, mimeType: String)? {
         await withCheckedContinuation { continuation in
             let options = PHImageRequestOptions()
             options.deliveryMode = .highQualityFormat
             options.resizeMode = .none
             options.isNetworkAccessAllowed = true
             options.isSynchronous = false
-
-            let resource = PHAssetResource.assetResources(for: asset).first
-            let fileName = resource?.originalFilename ?? ""
-            let fileExtension = (fileName as NSString).pathExtension
-            let extensionMime = UTType(filenameExtension: fileExtension)?.preferredMIMEType ?? "image/*"
+            options.version = .current
 
             PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { data, _, _, _ in
                 guard let data else {
@@ -4848,10 +4866,41 @@ struct ChatScreen: View {
 
                 let resolvedMime = ChatImageAttachment.preferredImageMIMEType(
                     data: data,
-                    fallback: extensionMime
+                    fallback: fallbackMimeType
                 )
                 continuation.resume(returning: (data, resolvedMime))
             }
+        }
+    }
+
+    private func requestImageDataViaAssetResource(
+        _ resource: PHAssetResource,
+        fallbackMimeType: String
+    ) async -> (data: Data, mimeType: String)? {
+        await withCheckedContinuation { continuation in
+            var collected = Data()
+            let options = PHAssetResourceRequestOptions()
+            options.isNetworkAccessAllowed = true
+
+            PHAssetResourceManager.default().requestData(
+                for: resource,
+                options: options,
+                dataReceivedHandler: { chunk in
+                    collected.append(chunk)
+                },
+                completionHandler: { error in
+                    guard error == nil, !collected.isEmpty else {
+                        continuation.resume(returning: nil)
+                        return
+                    }
+
+                    let resolvedMime = ChatImageAttachment.preferredImageMIMEType(
+                        data: collected,
+                        fallback: fallbackMimeType
+                    )
+                    continuation.resume(returning: (collected, resolvedMime))
+                }
+            )
         }
     }
 

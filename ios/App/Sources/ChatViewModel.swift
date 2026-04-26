@@ -23,10 +23,10 @@ final class ChatViewModel: ObservableObject {
     }
 
     private final class ActiveStreamState {
-        private static let maxCharactersPerCommit = 32
-        private static let minimumCommitInterval: TimeInterval = 0.05
-        private static let minimumNaturalBreakCharacters = 6
-        private static let maxNaturalBreakLookahead = 12
+        private static let maxCharactersPerCommit = 14
+        private static let minimumCommitInterval: TimeInterval = 0.03
+        private static let minimumNaturalBreakCharacters = 4
+        private static let maxNaturalBreakLookahead = 8
 
         let messageID: UUID
         let target: StreamTargetContext
@@ -931,9 +931,9 @@ final class ChatViewModel: ObservableObject {
         let buffer = StreamBuffer(maxBufferedCharacters: 120_000)
         let state = ActiveStreamState(messageID: messageID, target: target, buffer: buffer)
         let isLowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
-        let refreshInterval: TimeInterval = isLowPowerMode ? 0.06 : 0.05
-        let maxCharactersPerFrame = isLowPowerMode ? 12 : 10
-        let maxCharactersFetchedPerTick = isLowPowerMode ? 260 : 220
+        let refreshInterval: TimeInterval = isLowPowerMode ? 0.045 : 0.033
+        let maxCharactersPerFrame = isLowPowerMode ? 6 : 4
+        let maxCharactersFetchedPerTick = isLowPowerMode ? 176 : 132
 
         let renderer = StreamRenderer(
             buffer: buffer,
@@ -1295,10 +1295,26 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func finalizedAssistantContent(existingContent: String, fallbackReplyText: String) -> String {
+        let existing = existingContent.replacingOccurrences(of: "\r\n", with: "\n")
         let fallback = fallbackReplyText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !fallback.isEmpty {
+        if existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return fallbackReplyText
         }
+        guard !fallback.isEmpty else { return existingContent }
+
+        let normalizedFallback = fallbackReplyText.replacingOccurrences(of: "\r\n", with: "\n")
+        if normalizedFallback == existing {
+            return existingContent
+        }
+        if normalizedFallback.hasPrefix(existing) {
+            let suffix = String(normalizedFallback.dropFirst(existing.count))
+            return existingContent + suffix
+        }
+        if existing.hasPrefix(normalizedFallback) {
+            return existingContent
+        }
+        // Prefer the already streamed text to avoid the finished message
+        // snapping into a different layout or wording after completion.
         return existingContent
     }
 

@@ -254,7 +254,9 @@ struct ChatConfig: Codable, Equatable {
     static let defaultEmbeddingsPath = "/v1/embeddings"
     static let defaultModelsPath = "/v1/models"
     static let defaultShellExecutionPath = "/v1/mcp/call_tool"
-    static let defaultRemotePythonExecutionPath = "/v1/python/execute"
+    static let defaultRemotePythonExecutionPath = ""
+    static let defaultBuiltInRemotePythonShellExecuteURL = "http://8.218.177.114/v1/shell/execute"
+    static let legacyAutoRemotePythonExecutionPath = "/v1/python/execute"
 
     var apiURL: String
     var apiKey: String
@@ -558,16 +560,31 @@ struct ChatConfig: Codable, Equatable {
     }
 
     var remotePythonExecutionURLString: String {
+        let configuredPath = remotePythonExecutionPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !configuredPath.isEmpty else { return "" }
         ChatConfigStore.endpointURL(
             apiURL,
-            path: ChatConfig.defaultRemotePythonExecutionPath,
-            fallback: ChatConfig.defaultRemotePythonExecutionPath
+            path: configuredPath,
+            fallback: ""
         )
     }
 
     var resolvedRemotePythonExecutionAPIKey: String {
         guard !remotePythonExecutionURLString.isEmpty else { return "" }
+        let remoteKey = remotePythonExecutionAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !remoteKey.isEmpty {
+            return remoteKey
+        }
         return apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var effectiveRemotePythonExecutionURLString: String {
+        let direct = remotePythonExecutionURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !direct.isEmpty {
+            return direct
+        }
+        guard remotePythonExecutionEnabled else { return "" }
+        return ChatConfig.defaultBuiltInRemotePythonShellExecuteURL
     }
 
     var activeEndpointURLString: String {
@@ -822,11 +839,8 @@ enum ChatConfigStore {
             shellExecutionWorkingDirectory: config.shellExecutionWorkingDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ? ChatConfig.default.shellExecutionWorkingDirectory
                 : config.shellExecutionWorkingDirectory.trimmingCharacters(in: .whitespacesAndNewlines),
-            remotePythonExecutionEnabled: config.remotePythonExecutionEnabled,
-            remotePythonExecutionPath: ChatConfigStore.normalizeEndpointPath(
-                config.remotePythonExecutionPath,
-                fallback: ChatConfig.defaultRemotePythonExecutionPath
-            ),
+            remotePythonExecutionEnabled: normalizedRemotePythonExecutionEnabled(config),
+            remotePythonExecutionPath: normalizedRemotePythonExecutionPath(config),
             remotePythonExecutionAPIKey: config.remotePythonExecutionAPIKey.trimmingCharacters(in: .whitespacesAndNewlines),
             remotePythonExecutionTimeout: min(max(config.remotePythonExecutionTimeout, 10), 900),
             themeMode: config.themeMode,
@@ -857,5 +871,27 @@ enum ChatConfigStore {
             return ChatConfig.default.model
         }
         return trimmed
+    }
+
+    private static func normalizedRemotePythonExecutionEnabled(_ config: ChatConfig) -> Bool {
+        return config.remotePythonExecutionEnabled
+    }
+
+    private static func normalizedRemotePythonExecutionPath(_ config: ChatConfig) -> String {
+        let configuredPath = config.remotePythonExecutionPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedDefaultBase = normalizedBaseURL(ChatConfig.default.apiURL)
+        let normalizedCurrentBase = normalizedBaseURL(config.apiURL)
+        let remoteKey = config.remotePythonExecutionAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if configuredPath == ChatConfig.legacyAutoRemotePythonExecutionPath,
+           normalizedCurrentBase != normalizedDefaultBase,
+           remoteKey.isEmpty {
+            return ""
+        }
+
+        return normalizeEndpointPath(
+            configuredPath,
+            fallback: ChatConfig.defaultRemotePythonExecutionPath
+        )
     }
 }

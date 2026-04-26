@@ -809,9 +809,9 @@ struct SelectableLinkTextView: UIViewRepresentable {
             guard streamTimer == nil else { return }
             let timer = CADisplayLink(target: self, selector: #selector(handleStreamAnimationTick(_:)))
             if #available(iOS 15.0, *) {
-                timer.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 30, preferred: 30)
+                timer.preferredFrameRateRange = CAFrameRateRange(minimum: 45, maximum: 60, preferred: 60)
             } else {
-                timer.preferredFramesPerSecond = 30
+                timer.preferredFramesPerSecond = 60
             }
             timer.add(to: .main, forMode: .common)
             streamTimer = timer
@@ -937,17 +937,17 @@ struct SelectableLinkTextView: UIViewRepresentable {
         ) -> Int {
             let maximum: Int
             if renderedCharacters < 18 {
-                maximum = 10
+                maximum = 7
             } else {
                 switch pendingCharacters {
                 case 4_000...:
-                    maximum = 12
-                case 1_200...:
-                    maximum = 10
-                case 320...:
                     maximum = 8
-                default:
+                case 1_200...:
+                    maximum = 7
+                case 320...:
                     maximum = 6
+                default:
+                    maximum = 5
                 }
             }
 
@@ -956,28 +956,31 @@ struct SelectableLinkTextView: UIViewRepresentable {
         }
 
         private func streamingCharactersPerSecond(for pendingCharacters: Int, renderedCharacters: Int) -> Double {
-            if renderedCharacters < 18 {
-                return 138
+            if renderedCharacters < 14 {
+                return 148
             }
-            if renderedCharacters < 48 {
-                return 104
+            if renderedCharacters < 36 {
+                return 118
+            }
+            if renderedCharacters < 72 {
+                return 96
             }
 
             switch pendingCharacters {
             case 6_000...:
-                return 82
+                return 68
             case 3_000...:
-                return 72
+                return 60
             case 1_600...:
-                return 62
-            case 800...:
                 return 54
+            case 800...:
+                return 48
             case 320...:
-                return 46
+                return 42
             case 120...:
-                return 38
+                return 36
             default:
-                return 32
+                return 30
             }
         }
 
@@ -988,9 +991,9 @@ struct SelectableLinkTextView: UIViewRepresentable {
             let inFastStart = renderedCharacters < 24
             switch tail {
             case "。", "！", "？", ".", "!", "?":
-                return inFastStart ? 0.03 : 0.11
+                return inFastStart ? 0.02 : 0.095
             case "，", ",", "；", ";", "：", ":", "、":
-                return inFastStart ? 0.015 : 0.07
+                return inFastStart ? 0.01 : 0.055
             default:
                 return 0
             }
@@ -1008,16 +1011,18 @@ struct SelectableLinkTextView: UIViewRepresentable {
                 return
             }
 
-            // Keep the newest two characters slightly hidden; each tick reveals
-            // the previous tail and makes the stream feel less cursor-driven.
-            let tailCount = min(2, max(1, storage.length))
+            // Keep the newest few characters softly faded so the output feels
+            // like a living stream instead of a blunt cursor jump.
+            let tailCount = min(3, max(1, storage.length))
             let tailRange = NSRange(location: storage.length - tailCount, length: tailCount)
             let alphas: [CGFloat]
             switch tailCount {
             case 1:
-                alphas = [0.42]
+                alphas = [0.34]
+            case 2:
+                alphas = [0.74, 0.34]
             default:
-                alphas = [0.78, 0.42]
+                alphas = [0.92, 0.66, 0.34]
             }
 
             for offset in 0..<tailRange.length {

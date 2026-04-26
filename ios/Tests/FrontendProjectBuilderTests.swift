@@ -173,6 +173,13 @@ final class FrontendProjectBuilderTests: XCTestCase {
         XCTAssertTrue(yaml.contains("\n    host: localhost"))
     }
 
+    func testInferredWorkspaceOperationsTreatsClearRootDirectoryAsClearLatest() {
+        XCTAssertEqual(
+            FrontendProjectBuilder.inferredWorkspaceOperations(fromUserPrompt: "清除根目录所有文件"),
+            [.clearLatest]
+        )
+    }
+
     func testLatestEntryFileURLReturnsIndexPHPForPHPOnlyProject() throws {
         try FrontendProjectBuilder.clearLatestProject()
         let latest = try XCTUnwrap(FrontendProjectBuilder.latestProjectURL())

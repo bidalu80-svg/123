@@ -13,13 +13,6 @@ struct AboutScreen: View {
                 LabeledContent("版本", value: appVersionText)
             }
 
-            Section("构建信息") {
-                buildInfoRow("构建签名", value: AppBuildInfo.buildSignature)
-                buildInfoRow("完整提交", value: AppBuildInfo.gitSHA)
-                buildInfoRow("Actions Run", value: AppBuildInfo.runID)
-                buildInfoRow("构建时间", value: AppBuildInfo.buildTimeDisplay)
-            }
-
             Section("功能特点") {
                 featureRow("多接口模式", detail: "统一支持聊天、生图、语音转写、向量与模型列表测试。")
                 featureRow("会话管理", detail: "支持多会话、私密聊天、会话切换与历史持久化。")
@@ -44,18 +37,6 @@ struct AboutScreen: View {
             Text(detail)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
-        }
-        .padding(.vertical, 2)
-    }
-
-    private func buildInfoRow(_ title: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-            Text(value)
-                .font(.footnote.monospaced())
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
         }
         .padding(.vertical, 2)
     }

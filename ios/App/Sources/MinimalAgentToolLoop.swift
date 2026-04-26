@@ -248,10 +248,19 @@ enum MinimalAgentToolResponseParser {
         let text = normalizedAssistantText(StreamParser.extractPayload(from: object).text)
         let choice = (object["choices"] as? [[String: Any]])?.first
         let message = choice?["message"] as? [String: Any] ?? [:]
+        let nativeCalls = parseChatToolCalls(from: message)
+        if !nativeCalls.isEmpty {
+            return MinimalAgentToolTurnResponse(
+                responseID: nil,
+                assistantText: text,
+                toolCalls: nativeCalls
+            )
+        }
+        let inline = parseInlineToolCalls(from: text)
         return MinimalAgentToolTurnResponse(
             responseID: nil,
-            assistantText: text,
-            toolCalls: parseChatToolCalls(from: message)
+            assistantText: inline.assistantText,
+            toolCalls: inline.toolCalls
         )
     }
 
@@ -259,10 +268,19 @@ enum MinimalAgentToolResponseParser {
         let root = (object["response"] as? [String: Any]) ?? object
         let text = normalizedAssistantText(StreamParser.extractPayload(from: root).text)
         let output = root["output"] as? [[String: Any]] ?? []
+        let nativeCalls = parseResponsesToolCalls(from: output)
+        if !nativeCalls.isEmpty {
+            return MinimalAgentToolTurnResponse(
+                responseID: firstNonEmptyString(root["id"], object["id"]),
+                assistantText: text,
+                toolCalls: nativeCalls
+            )
+        }
+        let inline = parseInlineToolCalls(from: text)
         return MinimalAgentToolTurnResponse(
             responseID: firstNonEmptyString(root["id"], object["id"]),
-            assistantText: text,
-            toolCalls: parseResponsesToolCalls(from: output)
+            assistantText: inline.assistantText,
+            toolCalls: inline.toolCalls
         )
     }
 
@@ -320,6 +338,85 @@ enum MinimalAgentToolResponseParser {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private static func parseInlineToolCalls(from raw: String) -> (assistantText: String, toolCalls: [MinimalAgentToolCall]) {
+        let normalized = raw.replacingOccurrences(of: "\r\n", with: "\n")
+        guard !normalized.isEmpty else { return ("", []) }
+
+        var parsedCalls: [MinimalAgentToolCall] = []
+        var removableRanges: [Range<String.Index>] = []
+        var inlineCallIndex = 0
+
+        if let regex = try? NSRegularExpression(pattern: #"(?s)```(?:[^\n`]*)\n(.*?)```"#) {
+            let nsRange = NSRange(normalized.startIndex..<normalized.endIndex, in: normalized)
+            let matches = regex.matches(in: normalized, range: nsRange)
+            for match in matches {
+                guard let blockRange = Range(match.range, in: normalized),
+                      let payloadRange = Range(match.range(at: 1), in: normalized) else {
+                    continue
+                }
+                let payload = String(normalized[payloadRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+                let calls = decodeInlineToolCalls(from: payload, startingAt: inlineCallIndex)
+                guard !calls.isEmpty else { continue }
+                parsedCalls.append(contentsOf: calls)
+                inlineCallIndex += calls.count
+                removableRanges.append(blockRange)
+            }
+        }
+
+        if parsedCalls.isEmpty {
+            let trimmed = normalized.trimmingCharacters(in: .whitespacesAndNewlines)
+            let calls = decodeInlineToolCalls(from: trimmed, startingAt: 0)
+            if !calls.isEmpty {
+                return ("", calls)
+            }
+            return (normalizedAssistantText(normalized), [])
+        }
+
+        var cleaned = normalized
+        for range in removableRanges.reversed() {
+            cleaned.replaceSubrange(range, with: "")
+        }
+        cleaned = cleaned.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
+        return (normalizedAssistantText(cleaned), parsedCalls)
+    }
+
+    private static func decodeInlineToolCalls(from raw: String, startingAt offset: Int) -> [MinimalAgentToolCall] {
+        guard let data = raw.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) else {
+            return []
+        }
+
+        if let dictionary = object as? [String: Any] {
+            return makeInlineToolCalls(from: [dictionary], startingAt: offset)
+        }
+        if let rows = object as? [[String: Any]] {
+            return makeInlineToolCalls(from: rows, startingAt: offset)
+        }
+        return []
+    }
+
+    private static func makeInlineToolCalls(from rows: [[String: Any]], startingAt offset: Int) -> [MinimalAgentToolCall] {
+        var calls: [MinimalAgentToolCall] = []
+        for (index, row) in rows.enumerated() {
+            let name = firstNonEmptyString(
+                row["name"],
+                row["tool"],
+                row["tool_name"],
+                row["toolName"]
+            ) ?? ""
+            let arguments = row["arguments"] ?? row["args"] ?? row["input"] ?? row["parameters"]
+            guard let call = makeToolCall(
+                id: "inline-tool-\(offset + index + 1)",
+                name: name,
+                rawArguments: arguments
+            ) else {
+                continue
+            }
+            calls.append(call)
+        }
+        return calls
+    }
+
     private static func firstNonEmptyString(_ candidates: Any?...) -> String? {
         for candidate in candidates {
             if let text = candidate as? String {
@@ -357,6 +454,14 @@ final class MinimalAgentToolRuntime {
     - 不要把 `[[file:...]]`、`[[mkdir:...]]`、`touch`、`mkdir` 之类文本当成主要执行方式；能用工具就直接用工具。
     - `write_file` 会自动创建父目录，因此缺少目录时无需先输出伪指令。
     - 如果工具返回错误，必须基于错误继续处理或明确说明，不要假装成功。
+    - 如果当前模型不会原生返回 `tool_calls`，你必须只输出 JSON 工具调用，不要写解释文字。格式如下：
+      ```json
+      {"name":"list_dir","arguments":{"path":"."}}
+      ```
+      如果需要连续调用多个工具，可以输出 JSON 数组：
+      ```json
+      [{"name":"read_file","arguments":{"path":"main.py"}},{"name":"run_python_file","arguments":{"path":"main.py"}}]
+      ```
     - 完成后用简短自然语言汇报结果。
     """
 

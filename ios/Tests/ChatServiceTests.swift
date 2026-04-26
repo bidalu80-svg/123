@@ -237,6 +237,49 @@ final class ChatServiceTests: XCTestCase {
         XCTAssertEqual(messages[1]["content"] as? String, "当前日期时间：2026-04-13 18:20:00")
     }
 
+    func testMinimalAgentToolResponseParserSupportsInlineJSONToolCallBlock() {
+        let object: [String: Any] = [
+            "choices": [[
+                "message": [
+                    "content": """
+                    ```json
+                    {"name":"clear_workspace","arguments":{}}
+                    ```
+                    """
+                ]
+            ]]
+        ]
+
+        let parsed = MinimalAgentToolResponseParser.parseChatCompletionsResponse(object)
+
+        XCTAssertEqual(parsed.assistantText, "")
+        XCTAssertEqual(parsed.toolCalls.count, 1)
+        XCTAssertEqual(parsed.toolCalls.first?.name, "clear_workspace")
+    }
+
+    func testMinimalAgentToolResponseParserStripsInlineToolBlockAndKeepsNarration() {
+        let object: [String: Any] = [
+            "choices": [[
+                "message": [
+                    "content": """
+                    先检查一下目录。
+
+                    ```json
+                    {"name":"list_dir","arguments":{"path":"."}}
+                    ```
+                    """
+                ]
+            ]]
+        ]
+
+        let parsed = MinimalAgentToolResponseParser.parseChatCompletionsResponse(object)
+
+        XCTAssertEqual(parsed.assistantText, "先检查一下目录。")
+        XCTAssertEqual(parsed.toolCalls.count, 1)
+        XCTAssertEqual(parsed.toolCalls.first?.name, "list_dir")
+        XCTAssertEqual(parsed.toolCalls.first?.arguments["path"] as? String, ".")
+    }
+
     func testBuildRequestIncludesCrossSessionMemoryContext() throws {
         let config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
         let requestMessage = ChatMessage(role: .user, content: "你好")
@@ -1357,6 +1400,19 @@ final class ChatServiceTests: XCTestCase {
     func testNaturalWorkspaceDeleteUsesAgentToolLoop() {
         let config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
         let message = ChatMessage(role: .user, content: "把 notes/todo.txt 删除")
+
+        let shouldUse = ChatRequestBuilder.shouldUseAgentToolLoop(
+            config: config,
+            history: [],
+            message: message
+        )
+
+        XCTAssertTrue(shouldUse)
+    }
+
+    func testClearRootDirectoryUsesAgentToolLoop() {
+        let config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
+        let message = ChatMessage(role: .user, content: "清除根目录所有文件")
 
         let shouldUse = ChatRequestBuilder.shouldUseAgentToolLoop(
             config: config,

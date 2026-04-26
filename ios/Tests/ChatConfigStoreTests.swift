@@ -2,6 +2,11 @@ import XCTest
 @testable import ChatApp
 
 final class ChatConfigStoreTests: XCTestCase {
+    override func tearDown() {
+        ChatConfigStore.reset()
+        super.tearDown()
+    }
+
     func testNormalizeBaseURLAddsSchemeAndRemovesCompletionPath() {
         XCTAssertEqual(
             ChatConfigStore.normalizedBaseURL("example.com/v1/chat/completions"),
@@ -50,21 +55,63 @@ final class ChatConfigStoreTests: XCTestCase {
         XCTAssertEqual(config.resolvedShellExecutionAPIKey, "shell-token")
     }
 
-    func testRemotePythonExecutionURLUsesMainSiteDefaultPath() {
-        let config = ChatConfig(apiURL: "https://chat.example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
+    func testRemotePythonExecutionURLUsesExplicitFullURLWhenConfigured() {
+        var config = ChatConfig(apiURL: "https://chat.example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
+        config.remotePythonExecutionEnabled = true
+        config.remotePythonExecutionPath = "https://runner.example.com/v1/python/execute"
 
         XCTAssertEqual(
             config.remotePythonExecutionURLString,
-            "https://chat.example.com/v1/python/execute"
+            "https://runner.example.com/v1/python/execute"
         )
     }
 
-    func testResolvedRemotePythonExecutionAPIKeyUsesMainAPIKey() {
-        var config = ChatConfig(apiURL: "https://example.com", apiKey: "chat-token", model: "gpt-test", timeout: 30, streamEnabled: true)
-        XCTAssertEqual(config.resolvedRemotePythonExecutionAPIKey, "chat-token")
+    func testRemotePythonExecutionURLIsEmptyWhenNotConfigured() {
+        let config = ChatConfig(apiURL: "https://chat.example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
 
-        config.remotePythonExecutionAPIKey = "remote-token"
+        XCTAssertEqual(config.remotePythonExecutionURLString, "")
+    }
+
+    func testEffectiveRemotePythonExecutionURLFallsBackToBuiltInShellRunner() {
+        let config = ChatConfig(apiURL: "https://chat.example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
+
+        XCTAssertEqual(
+            config.effectiveRemotePythonExecutionURLString,
+            ChatConfig.defaultBuiltInRemotePythonShellExecuteURL
+        )
+    }
+
+    func testResolvedRemotePythonExecutionAPIKeyPrefersDedicatedKey() {
+        var config = ChatConfig(apiURL: "https://example.com", apiKey: "chat-token", model: "gpt-test", timeout: 30, streamEnabled: true)
+        XCTAssertEqual(config.resolvedRemotePythonExecutionAPIKey, "")
+
+        config.remotePythonExecutionPath = "https://runner.example.com/v1/python/execute"
         XCTAssertEqual(config.resolvedRemotePythonExecutionAPIKey, "chat-token")
+        config.remotePythonExecutionAPIKey = "remote-token"
+        XCTAssertEqual(config.resolvedRemotePythonExecutionAPIKey, "remote-token")
+    }
+
+    func testNormalizeConfigDisablesLegacyAutoRemotePythonPathOnCustomChatHost() {
+        let legacy = ChatConfig(
+            apiURL: "https://cdn.mynav.website",
+            apiKey: "chat-token",
+            model: "gpt-test",
+            timeout: 30,
+            streamEnabled: true,
+            remotePythonExecutionEnabled: true,
+            remotePythonExecutionPath: ChatConfig.legacyAutoRemotePythonExecutionPath
+        )
+
+        ChatConfigStore.save(legacy)
+        let normalized = ChatConfigStore.load()
+
+        XCTAssertTrue(normalized.remotePythonExecutionEnabled)
+        XCTAssertEqual(normalized.remotePythonExecutionPath, "")
+        XCTAssertEqual(normalized.remotePythonExecutionURLString, "")
+        XCTAssertEqual(
+            normalized.effectiveRemotePythonExecutionURLString,
+            ChatConfig.defaultBuiltInRemotePythonShellExecuteURL
+        )
     }
 
     func testDecodeLegacyConfigDefaultsRealtimeFields() throws {

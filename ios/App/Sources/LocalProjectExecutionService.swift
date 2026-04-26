@@ -193,7 +193,6 @@ raise SystemExit(0 if ok else 1)
     private func shouldUseRemotePythonExecution(config: ChatConfig?) -> Bool {
         guard let config else { return false }
         return config.remotePythonExecutionEnabled
-            && !config.remotePythonExecutionURLString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func shouldFallbackToRemotePython(

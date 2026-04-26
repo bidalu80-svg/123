@@ -519,8 +519,12 @@ struct ChatRequestBuilder {
     private static func containsWorkspaceMutationIntent(_ raw: String) -> Bool {
         let markers = [
             "删除文件", "删除文件夹", "删除目录", "删除项目", "删除所有项目",
-            "清空latest", "清空 latest", "清空工作区", "重置latest", "重置 latest",
-            "清空当前项目", "清理工作区", "清理 latest", "删掉文件", "删掉文件夹",
+            "清空latest", "清空 latest", "清除latest", "清除 latest",
+            "清空工作区", "清除工作区", "重置latest", "重置 latest",
+            "清空当前项目", "清除当前项目", "清理工作区", "清理 latest",
+            "清除根目录所有文件", "删除根目录所有文件", "清空根目录所有文件",
+            "清除当前目录所有文件", "删除当前目录所有文件",
+            "删掉文件", "删掉文件夹",
             "移除文件", "移除文件夹", "去掉文件", "去掉文件夹",
             "创建文件夹", "创建目录", "新建文件夹", "新建目录", "创建空文件夹", "创建空目录",
             "创建空文件", "新建空文件", "建一个空文件", "建一个空目录",
@@ -533,7 +537,7 @@ struct ChatRequestBuilder {
         }
 
         if raw.range(
-            of: #"(删除|移除|清空|重置|创建|新建).{0,20}(文件|文件夹|目录|工作区|latest)"#,
+            of: #"(删除|移除|清空|清除|重置|创建|新建).{0,20}(文件|文件夹|目录|工作区|latest|根目录|当前目录)"#,
             options: .regularExpression
         ) != nil {
             return true
@@ -1145,18 +1149,6 @@ struct ChatRequestBuilder {
     }
 
     private static func isLikelyToolLoopIncompatibleProvider(config: ChatConfig) -> Bool {
-        let loweredModel = config.model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let loweredBase = config.normalizedBaseURL.lowercased()
-
-        if loweredModel.contains("qwen") {
-            return true
-        }
-        if loweredBase.contains("dashscope")
-            || loweredBase.contains("aliyun")
-            || loweredBase.contains("alibaba")
-            || loweredBase.contains("qwen") {
-            return true
-        }
         return false
     }
 
@@ -1704,15 +1696,17 @@ final class ChatService {
 
         for turn in 0..<Self.agentToolLoopTurnLimit {
             let toolSpecs = await toolRuntime.availableToolSpecs(config: config)
-            let request = try makeChatCompletionsAgentToolRequest(
-                config: config,
-                messages: messages,
-                toolSpecs: toolSpecs
+            let object = try await fetchAgentLoopJSONObject(
+                preferredToolChoice: turn == 0 ? "required" : "auto",
+                allowAutoFallback: turn == 0
+            ) { toolChoice in
+                try makeChatCompletionsAgentToolRequest(
+                    config: config,
+                    messages: messages,
+                    toolSpecs: toolSpecs,
+                    toolChoice: toolChoice
+                )
             )
-            let (data, response) = try await withRetry { [self] in
-                try await session.data(for: request)
-            }
-            let object = try parseAgentLoopJSONObject(data: data, response: response)
             aggregatedUsage = mergeTokenUsage(aggregatedUsage, extractTokenUsage(from: object))
 
             let parsed = MinimalAgentToolResponseParser.parseChatCompletionsResponse(object)
@@ -1723,6 +1717,15 @@ final class ChatService {
                     messages.append([
                         "role": "system",
                         "content": pendingRepairInstruction
+                    ])
+                    continue
+                }
+                if let forcedToolInstruction = forcedToolCallRepairInstruction(for: parsed.assistantText),
+                   forcedRepairCount < 2 {
+                    forcedRepairCount += 1
+                    messages.append([
+                        "role": "system",
+                        "content": forcedToolInstruction
                     ])
                     continue
                 }
@@ -1814,16 +1817,18 @@ final class ChatService {
 
         for turn in 0..<Self.agentToolLoopTurnLimit {
             let toolSpecs = await toolRuntime.availableToolSpecs(config: config)
-            let request = try makeResponsesAgentToolRequest(
-                config: config,
-                input: input,
-                toolSpecs: toolSpecs,
-                previousResponseID: previousResponseID
+            let object = try await fetchAgentLoopJSONObject(
+                preferredToolChoice: turn == 0 ? "required" : "auto",
+                allowAutoFallback: turn == 0
+            ) { toolChoice in
+                try makeResponsesAgentToolRequest(
+                    config: config,
+                    input: input,
+                    toolSpecs: toolSpecs,
+                    previousResponseID: previousResponseID,
+                    toolChoice: toolChoice
+                )
             )
-            let (data, response) = try await withRetry { [self] in
-                try await session.data(for: request)
-            }
-            let object = try parseAgentLoopJSONObject(data: data, response: response)
             aggregatedUsage = mergeTokenUsage(aggregatedUsage, extractTokenUsage(from: object))
 
             let parsed = MinimalAgentToolResponseParser.parseResponsesResponse(object)
@@ -1837,6 +1842,18 @@ final class ChatService {
                         "content": [[
                             "type": "input_text",
                             "text": pendingRepairInstruction
+                        ]]
+                    ]]
+                    continue
+                }
+                if let forcedToolInstruction = forcedToolCallRepairInstruction(for: parsed.assistantText),
+                   forcedRepairCount < 2 {
+                    forcedRepairCount += 1
+                    input = [[
+                        "role": "developer",
+                        "content": [[
+                            "type": "input_text",
+                            "text": forcedToolInstruction
                         ]]
                     ]]
                     continue
@@ -1965,7 +1982,8 @@ final class ChatService {
     private func makeChatCompletionsAgentToolRequest(
         config: ChatConfig,
         messages: [[String: Any]],
-        toolSpecs: [MinimalAgentToolSpec]
+        toolSpecs: [MinimalAgentToolSpec],
+        toolChoice: String
     ) throws -> URLRequest {
         let endpoint = config.chatCompletionsURLString
         guard let url = URL(string: endpoint), !endpoint.isEmpty else {
@@ -1985,7 +2003,7 @@ final class ChatService {
             "model": config.model,
             "messages": messages,
             "stream": false,
-            "tool_choice": "auto",
+            "tool_choice": toolChoice,
             "tools": toolSpecs.map { spec in
                 [
                     "type": "function",
@@ -2005,7 +2023,8 @@ final class ChatService {
         config: ChatConfig,
         input: [[String: Any]],
         toolSpecs: [MinimalAgentToolSpec],
-        previousResponseID: String?
+        previousResponseID: String?,
+        toolChoice: String
     ) throws -> URLRequest {
         let endpoint = config.responsesURLString
         guard let url = URL(string: endpoint), !endpoint.isEmpty else {
@@ -2025,7 +2044,7 @@ final class ChatService {
             "model": config.model,
             "input": input,
             "stream": false,
-            "tool_choice": "auto",
+            "tool_choice": toolChoice,
             "tools": toolSpecs.map { spec in
                 [
                     "type": "function",
@@ -2053,6 +2072,29 @@ final class ChatService {
             throw ChatServiceError.noData
         }
         return object
+    }
+
+    private func fetchAgentLoopJSONObject(
+        preferredToolChoice: String,
+        allowAutoFallback: Bool,
+        requestBuilder: (String) throws -> URLRequest
+    ) async throws -> [String: Any] {
+        do {
+            let request = try requestBuilder(preferredToolChoice)
+            let (data, response) = try await withRetry { [self] in
+                try await session.data(for: request)
+            }
+            return try parseAgentLoopJSONObject(data: data, response: response)
+        } catch {
+            guard allowAutoFallback, preferredToolChoice != "auto" else {
+                throw error
+            }
+            let fallbackRequest = try requestBuilder("auto")
+            let (data, response) = try await withRetry { [self] in
+                try await session.data(for: fallbackRequest)
+            }
+            return try parseAgentLoopJSONObject(data: data, response: response)
+        }
     }
 
     private func makeChatCompletionsAssistantToolMessage(_ parsed: MinimalAgentToolTurnResponse) -> [String: Any] {
@@ -2094,16 +2136,47 @@ final class ChatService {
     private func finalAssistantDelta(text: String, hasLogs: Bool) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
-        return hasLogs ? "\n\(trimmed)" : trimmed
+        return hasLogs ? "\n\n\(trimmed)" : trimmed
+    }
+
+    private func forcedToolCallRepairInstruction(for assistantText: String) -> String? {
+        let trimmed = assistantText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let lowered = trimmed.lowercased()
+        let refusalMarkers = [
+            "无法直接执行", "不能直接执行", "请手动执行", "手动执行",
+            "安全限制", "沙箱限制", "防误删", "本地终端手动执行",
+            "cannot execute", "unable to execute", "run manually", "manual execution",
+            "sandbox", "safety restriction"
+        ]
+        let commandMarkers = ["rm -rf", "mkdir ", "touch ", "python ", "python3 ", "pip install", "npm install"]
+
+        let looksLikeRefusal = refusalMarkers.contains(where: { lowered.contains($0.lowercased()) })
+        let looksLikeCommandDump = commandMarkers.contains(where: { lowered.contains($0) })
+
+        guard looksLikeRefusal || looksLikeCommandDump else { return nil }
+
+        return """
+        你刚才没有真正调用工具，而是在解释限制或输出命令文本。现在必须改为真正的工具执行模式：
+        1) 不要解释，不要道歉，不要给手动命令；
+        2) 如果需要删除/清空/读取/写入/运行，请直接返回工具调用；
+        3) 如果当前模型不支持原生 tool_calls，就只输出 JSON 工具调用，不要带任何其它文字。
+        单个工具示例：
+        {"name":"clear_workspace","arguments":{}}
+        多个工具示例：
+        [{"name":"list_dir","arguments":{"path":"."}},{"name":"delete_path","arguments":{"path":"temp.txt"}}]
+        """
     }
 
     private func deduplicatedAgentLog(_ raw: String, existing: [String]) -> String? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        if existing.last?.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed {
+        let formatted = trimmed.hasPrefix("• ") ? trimmed : "• \(trimmed)"
+        if existing.last?.trimmingCharacters(in: .whitespacesAndNewlines) == formatted {
             return nil
         }
-        return trimmed
+        return formatted
     }
 
     private func mergeTokenUsage(_ lhs: ChatTokenUsage?, _ rhs: ChatTokenUsage?) -> ChatTokenUsage? {

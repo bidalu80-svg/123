@@ -498,7 +498,7 @@ struct MessageBubbleView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     if let fallback = fallbackPlainText {
                         if renderDirectMarkdown {
-                            assistantMarkdownContent(message.content, streaming: false)
+                            assistantTextSegmentView(message.content, streamingTextAnimated: false)
                         } else {
                             selectableTextContent(fallback)
                         }
@@ -519,7 +519,7 @@ struct MessageBubbleView: View {
             } else {
                 VStack(alignment: .leading, spacing: 10) {
                     if renderDirectMarkdown {
-                        assistantMarkdownContent(message.content, streaming: false)
+                        assistantTextSegmentView(message.content, streamingTextAnimated: false)
                     } else {
                         ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
                             segmentView(segment, streamingTextAnimated: false)
@@ -1152,18 +1152,76 @@ struct MessageBubbleView: View {
         guard message.role == .assistant else {
             return [.plain(text)]
         }
-        return [.plain(text)]
+        if streamingTextAnimated || message.isStreaming {
+            return [.plain(text)]
+        }
+
+        let normalized = decoratedAssistantListText(text)
+        let lines = normalized.components(separatedBy: "\n")
+        guard !lines.isEmpty else { return [.plain(text)] }
+
+        let nonEmptyLines = lines.filter {
+            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        let stepMatches = nonEmptyLines.compactMap { parseAssistantStepLine($0) }
+        let shouldUseStepChips =
+            stepMatches.count >= 2
+            && stepMatches.count * 2 >= max(nonEmptyLines.count, 1)
+
+        guard shouldUseStepChips else {
+            return [.plain(text)]
+        }
+
+        var blocks: [AssistantTextBlock] = []
+        var plainBuffer: [String] = []
+
+        func flushPlainBuffer() {
+            guard !plainBuffer.isEmpty else { return }
+            let merged = plainBuffer.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !merged.isEmpty {
+                blocks.append(.plain(merged))
+            }
+            plainBuffer.removeAll(keepingCapacity: true)
+        }
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                plainBuffer.append("")
+                continue
+            }
+
+            if let parsed = parseAssistantStepLine(line) {
+                flushPlainBuffer()
+                blocks.append(
+                    .step(
+                        title: parsed.title,
+                        duration: parsed.duration,
+                        status: parsed.status,
+                        kind: parsed.kind
+                    )
+                )
+            } else {
+                plainBuffer.append(line)
+            }
+        }
+
+        flushPlainBuffer()
+        return blocks.isEmpty ? [.plain(text)] : blocks
     }
 
     @ViewBuilder
     private func assistantMarkdownContent(_ text: String, streaming: Bool) -> some View {
         let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
         if streaming {
-            StreamingMarkdownTextView(
+            SelectableLinkTextView(
                 text: normalized,
-                textColor: .label,
+                textColor: UIColor.label,
                 linkColor: MinisTheme.accentBlueUIColor,
-                font: chatUIFont
+                font: chatUIFont,
+                renderMarkdown: false,
+                streamingAnimated: true,
+                onFileLinkTap: nil
             )
             .frame(maxWidth: .infinity, alignment: .leading)
         } else {
@@ -3772,9 +3830,9 @@ private struct GeneratedImageRevealCard<Content: View>: View {
                 .blendMode(colorScheme == .dark ? .screen : .plusLighter)
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(Color.black.opacity(colorScheme == .dark ? 0.14 : 0.08), lineWidth: 1)
         )
         .onAppear {

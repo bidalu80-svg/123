@@ -1,7 +1,7 @@
 import Foundation
 
 /// Timer-driven renderer scheduler.
-/// Pulls batch data from StreamBuffer every 50ms and only renders incremental delta.
+/// Pulls batch data from StreamBuffer at a ChatGPT-like steady cadence and only renders incremental delta.
 final class StreamRenderer {
     struct Configuration {
         var refreshInterval: TimeInterval
@@ -9,9 +9,9 @@ final class StreamRenderer {
         var maxCharactersFetchedPerTick: Int
 
         static let `default` = Configuration(
-            refreshInterval: 0.05,
-            maxCharactersPerFrame: 6,
-            maxCharactersFetchedPerTick: 180
+            refreshInterval: 0.033,
+            maxCharactersPerFrame: 4,
+            maxCharactersFetchedPerTick: 132
         )
     }
 
@@ -134,11 +134,11 @@ final class StreamRenderer {
         let base = max(1, configuration.maxCharactersPerFrame)
         switch stagedCharacters {
         case 3_000...:
-            return min(12, base * 2)
+            return min(8, base + 3)
         case 900...:
-            return min(10, base * 2)
+            return min(7, base + 2)
         case 240...:
-            return min(8, base + 2)
+            return min(6, base + 1)
         default:
             return base
         }

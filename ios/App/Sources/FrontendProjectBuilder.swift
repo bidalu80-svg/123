@@ -710,11 +710,21 @@ enum FrontendProjectBuilder {
         if lowered.contains("删除所有项目")
             || lowered.contains("清空latest")
             || lowered.contains("清空 latest")
+            || lowered.contains("清除latest")
+            || lowered.contains("清除 latest")
             || lowered.contains("清空工作区")
+            || lowered.contains("清除工作区")
             || lowered.contains("清空当前项目")
+            || lowered.contains("清除当前项目")
             || lowered.contains("清空这个项目")
+            || lowered.contains("清除这个项目")
             || lowered.contains("清理工作区")
             || lowered.contains("清理 latest")
+            || lowered.contains("清除根目录所有文件")
+            || lowered.contains("删除根目录所有文件")
+            || lowered.contains("清空根目录所有文件")
+            || lowered.contains("清除当前目录所有文件")
+            || lowered.contains("删除当前目录所有文件")
             || lowered.contains("clear latest")
             || lowered.contains("clear workspace")
             || lowered.contains("reset latest")
@@ -737,7 +747,14 @@ enum FrontendProjectBuilder {
         }
 
         if lowered.range(
-            of: #"(删除|删掉|移除|清空).{0,8}(脚本|python|py|应用|项目).{0,4}项目"#,
+            of: #"(删除|删掉|移除|清空|清除).{0,8}(脚本|python|py|应用|项目).{0,4}项目"#,
+            options: .regularExpression
+        ) != nil {
+            return [.clearLatest]
+        }
+
+        if lowered.range(
+            of: #"(删除|删掉|移除|清空|清除).{0,10}(根目录|当前目录).{0,8}(所有文件|全部文件|所有内容)"#,
             options: .regularExpression
         ) != nil {
             return [.clearLatest]
@@ -2590,24 +2607,7 @@ enum FrontendProjectBuilder {
         }
 
         guard start <= end else { return "" }
-        let trimmedLines = Array(lines[start...end])
-        let nonEmptyLines = trimmedLines.filter {
-            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }
-
-        let sharedIndent = nonEmptyLines
-            .map { $0.prefix { ch in ch == " " || ch == "\t" }.count }
-            .min() ?? 0
-        guard sharedIndent > 0 else {
-            return trimmedLines.joined(separator: "\n")
-        }
-
-        return trimmedLines.map { line in
-            let leading = line.prefix { ch in ch == " " || ch == "\t" }.count
-            guard leading >= sharedIndent else { return line }
-            return String(line.dropFirst(sharedIndent))
-        }
-        .joined(separator: "\n")
+        return Array(lines[start...end]).joined(separator: "\n")
     }
 
     private static func prepareProjectDirectory(mode: BuildMode) throws -> URL {
