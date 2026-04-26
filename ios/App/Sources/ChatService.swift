@@ -104,9 +104,11 @@ struct ChatRequestBuilder {
     - 如果用户说“无依赖”，优先只使用 Python 标准库。
     - 如果脚本涉及网页请求、爬取网页、HTTP 接口或 URL：
       1) 必须显式输出状态码，例如 `print(f"status_code={...}")`。
-      2) 必须处理编码，优先按响应头或页面声明解码；若不可靠，回退尝试 `utf-8`、`gb18030`，避免中文乱码。
-      3) 输出正文时先做摘要或截断，避免整页内容刷屏。
-      4) 要设置超时，不要无限等待。
+      2) 必须处理编码，优先按响应头或页面声明解码；若不可靠，回退尝试 `utf-8`、`gb18030`、`big5`，避免中文乱码。
+      3) 抓网页正文时，优先基于 `response.content` / 原始字节自己解码；不要直接盲信 `requests.text`，否则中文站点很容易乱码。
+      4) 若使用 requests/httpx，优先显式写出“先取 bytes，再按声明编码或候选编码依次 decode”的逻辑。
+      5) 输出正文时先做摘要或截断，避免整页内容刷屏。
+      6) 要设置超时，不要无限等待。
     - 若用户只要单文件脚本，就不要顺手创建 README、requirements 说明或多余文件。
     """
     private static let strictCodeOnlySystemPrompt = """

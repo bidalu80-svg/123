@@ -23,7 +23,7 @@ enum AdaptiveSkillRouter {
                 当任务明显属于 Python 脚本或 Python 项目时：
                 - 优先保留现有项目结构与依赖约束，能用标准库就不要额外加依赖。
                 - 修复或新增代码时，优先补齐最小必要测试、运行入口或验证命令。
-                - 涉及抓取、HTTP、编码、状态码时，要显式处理超时、编码和错误输出。
+                - 涉及抓取、HTTP、编码、状态码时，要显式处理超时、编码和错误输出；抓中文网页时优先基于原始 bytes 自己 decode，不要直接盲信 requests.text。
                 - 如果已有 requirements.txt / pyproject.toml / unittest 结构，优先顺着现有约定继续修改。
                 """
             case .frontend:

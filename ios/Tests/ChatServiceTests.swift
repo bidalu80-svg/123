@@ -457,6 +457,8 @@ final class ChatServiceTests: XCTestCase {
 
         XCTAssertTrue(systemContents.contains(where: { $0.contains("必须显式输出状态码") }))
         XCTAssertTrue(systemContents.contains(where: { $0.contains("避免中文乱码") }))
+        XCTAssertTrue(systemContents.contains(where: { $0.contains("response.content") }))
+        XCTAssertTrue(systemContents.contains(where: { $0.contains("gb18030") }))
     }
 
     func testBuildImagesGenerationRequestUsesConfiguredEndpoint() throws {
