@@ -2,8 +2,21 @@ import SwiftUI
 import UIKit
 
 final class NoCaretTextView: UITextView {
+    override var canBecomeFirstResponder: Bool {
+        false
+    }
+
+    override var selectedTextRange: UITextRange? {
+        get { nil }
+        set {}
+    }
+
     override func caretRect(for position: UITextPosition) -> CGRect {
         .zero
+    }
+
+    override func selectionRects(for range: UITextRange) -> [UITextSelectionRect] {
+        []
     }
 }
 

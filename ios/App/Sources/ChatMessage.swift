@@ -456,10 +456,11 @@ struct ChatMessage: Identifiable, Codable, Equatable {
 
         var segments: [[String: Any]] = []
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty {
+        let multimodalPrelude = imageContextPreludeText(mainText: trimmed)
+        if !multimodalPrelude.isEmpty {
             segments.append([
                 "type": "text",
-                "text": trimmed
+                "text": multimodalPrelude
             ])
         }
 
@@ -470,7 +471,13 @@ struct ChatMessage: Identifiable, Codable, Equatable {
             ])
         }
 
-        for attachment in imageAttachments {
+        for (index, attachment) in imageAttachments.enumerated() {
+            if let marker = imageMarkerText(index: index, total: imageAttachments.count) {
+                segments.append([
+                    "type": "text",
+                    "text": marker
+                ])
+            }
             segments.append([
                 "type": "image_url",
                 "image_url": [
@@ -487,5 +494,28 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         }
 
         return segments
+    }
+
+    private func imageContextPreludeText(mainText: String) -> String {
+        guard !imageAttachments.isEmpty else { return mainText }
+
+        let imageCount = imageAttachments.count
+        let prelude = """
+        [图片理解上下文]
+        - 共 \(imageCount) 张图片，顺序以发送顺序为准。
+        - 请逐张分析，不要忽略任意一张。
+        - 如果图片中有文字，优先提取关键文字并保持原文。
+        - 如果用户是在比较图片差异，请按图片编号引用。
+        """
+
+        if mainText.isEmpty {
+            return prelude
+        }
+        return mainText + "\n\n" + prelude
+    }
+
+    private func imageMarkerText(index: Int, total: Int) -> String? {
+        guard total > 1 else { return nil }
+        return "[图片 \(index + 1)/\(total)]"
     }
 }

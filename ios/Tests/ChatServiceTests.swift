@@ -97,13 +97,39 @@ final class ChatServiceTests: XCTestCase {
         let first = try XCTUnwrap(messages.first)
         let content = try XCTUnwrap(first["content"] as? [[String: Any]])
 
-        XCTAssertEqual(content.count, 3)
+        XCTAssertEqual(content.count, 5)
         XCTAssertEqual(content[0]["type"] as? String, "text")
-        XCTAssertEqual(content[0]["text"] as? String, "describe these")
-        XCTAssertEqual(content[1]["type"] as? String, "image_url")
-        XCTAssertEqual((content[1]["image_url"] as? [String: String])?["url"], attachments[0].requestURLString)
+        let prelude = try XCTUnwrap(content[0]["text"] as? String)
+        XCTAssertTrue(prelude.contains("describe these"))
+        XCTAssertTrue(prelude.contains("共 2 张图片"))
+        XCTAssertEqual(content[1]["type"] as? String, "text")
+        XCTAssertEqual(content[1]["text"] as? String, "[图片 1/2]")
         XCTAssertEqual(content[2]["type"] as? String, "image_url")
-        XCTAssertEqual((content[2]["image_url"] as? [String: String])?["url"], attachments[1].requestURLString)
+        XCTAssertEqual((content[2]["image_url"] as? [String: String])?["url"], attachments[0].requestURLString)
+        XCTAssertEqual(content[3]["type"] as? String, "text")
+        XCTAssertEqual(content[3]["text"] as? String, "[图片 2/2]")
+        XCTAssertEqual(content[4]["type"] as? String, "image_url")
+        XCTAssertEqual((content[4]["image_url"] as? [String: String])?["url"], attachments[1].requestURLString)
+    }
+
+    func testBuildRequestAddsImageContextPreludeForImageOnlyPrompt() throws {
+        let config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: false)
+        let attachment = ChatImageAttachment(dataURL: "data:image/png;base64,abcd", mimeType: "image/png")
+        let requestMessage = ChatMessage(role: .user, content: "", imageAttachments: [attachment])
+
+        let request = try ChatRequestBuilder.makeRequest(config: config, history: [], message: requestMessage)
+        let payload = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+        let messages = try XCTUnwrap(json["messages"] as? [[String: Any]])
+        let first = try XCTUnwrap(messages.first)
+        let content = try XCTUnwrap(first["content"] as? [[String: Any]])
+
+        XCTAssertEqual(content.count, 2)
+        XCTAssertEqual(content[0]["type"] as? String, "text")
+        let prelude = try XCTUnwrap(content[0]["text"] as? String)
+        XCTAssertTrue(prelude.contains("[图片理解上下文]"))
+        XCTAssertTrue(prelude.contains("共 1 张图片"))
+        XCTAssertEqual(content[1]["type"] as? String, "image_url")
     }
 
     func testBuildRequestTrimsLongHistoryToKeepPayloadResponsive() throws {
