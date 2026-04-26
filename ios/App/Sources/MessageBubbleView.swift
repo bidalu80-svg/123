@@ -3,6 +3,7 @@ import UIKit
 import Photos
 import AVKit
 import QuickLook
+import UniformTypeIdentifiers
 
 struct MessageBubbleView: View {
     let message: ChatMessage
@@ -3219,8 +3220,8 @@ struct MessageBubbleView: View {
         let revealID = attachment.requestURLString.isEmpty
             ? attachment.id.uuidString
             : attachment.requestURLString
-        let previewMaxWidth: CGFloat = message.role == .user ? 124 : 300
-        let previewMaxHeight: CGFloat = message.role == .user ? 124 : 900
+        let previewMaxWidth: CGFloat = message.role == .user ? 104 : 220
+        let previewMaxHeight: CGFloat = message.role == .user ? 104 : 180
 
         if let data = attachment.decodedImageData, let uiImage = UIImage(data: data) {
             GeneratedImageRevealCard(revealID: revealID) {
@@ -3235,7 +3236,7 @@ struct MessageBubbleView: View {
                 .contextMenu {
                     imageContextActions(for: attachment)
                 }
-        } else if let urlString = attachment.renderURLString {
+        } else if let urlString = imageDisplayURLString(for: attachment) {
             GeneratedImageRevealCard(revealID: revealID) {
                 RemoteImageView(urlString: urlString, apiKey: apiKey, baseURL: apiBaseURL)
             }
@@ -3296,9 +3297,10 @@ struct MessageBubbleView: View {
 
     @ViewBuilder
     private func imageContextActions(for attachment: ChatImageAttachment) -> some View {
-        if !attachment.requestURLString.isEmpty {
+        if let remote = attachment.renderURLString,
+           let normalized = normalizedRemoteURLString(remote) {
             Button("复制图片链接") {
-                UIPasteboard.general.string = attachment.requestURLString
+                UIPasteboard.general.string = normalized
             }
         }
         Button("保存到相册") {
@@ -3351,30 +3353,53 @@ struct MessageBubbleView: View {
         )
     }
 
+    private func imageDisplayURLString(for attachment: ChatImageAttachment) -> String? {
+        let request = attachment.requestURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !request.isEmpty else { return nil }
+        if request.hasPrefix("data:") {
+            return request
+        }
+        return normalizedRemoteURLString(request)
+    }
+
     private func saveImageAttachment(_ attachment: ChatImageAttachment) {
-        if let data = attachment.decodedImageData, let image = UIImage(data: data) {
-            writeImageToPhotos(image)
+        if let data = attachment.decodedImageData {
+            writeImageDataToPhotos(data, mimeType: attachment.mimeType)
             return
         }
 
-        guard let urlString = attachment.renderURLString,
-              let resolved = normalizedRemoteURLString(urlString),
-              let url = URL(string: resolved) else {
+        guard let urlString = imageDisplayURLString(for: attachment),
+              !urlString.hasPrefix("data:"),
+              let url = URL(string: urlString) else {
             saveFeedback = "当前图片无法保存。"
             return
         }
 
         Task {
             do {
-                let (data, _) = try await URLSession.shared.data(from: url)
-                guard let image = UIImage(data: data) else {
+                var request = URLRequest(url: url, timeoutInterval: 90)
+                request.setValue("image/*,*/*;q=0.8", forHTTPHeaderField: "Accept")
+
+                let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmedAPIKey.isEmpty {
+                    request.setValue("Bearer \(trimmedAPIKey)", forHTTPHeaderField: "Authorization")
+                    request.setValue(trimmedAPIKey, forHTTPHeaderField: "x-api-key")
+                    request.setValue(trimmedAPIKey, forHTTPHeaderField: "api-key")
+                }
+
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse,
+                      (200...299).contains(http.statusCode) else {
                     await MainActor.run {
                         saveFeedback = "图片保存失败。"
                     }
                     return
                 }
+
+                let responseMimeType = (http.value(forHTTPHeaderField: "Content-Type") ?? attachment.mimeType)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
                 await MainActor.run {
-                    writeImageToPhotos(image)
+                    writeImageDataToPhotos(data, mimeType: responseMimeType)
                 }
             } catch {
                 await MainActor.run {
@@ -3385,18 +3410,22 @@ struct MessageBubbleView: View {
     }
 
     private func writeImageToPhotos(_ image: UIImage) {
+        UIImageWriteToSavedPhotosAlbum(image, ImageSaveCoordinator.shared, #selector(ImageSaveCoordinator.handleSaveResult(_:didFinishSavingWithError:contextInfo:)), nil)
+        ImageSaveCoordinator.shared.onComplete = { error in
+            saveFeedback = error == nil ? "已保存到相册。" : "图片保存失败：\(error?.localizedDescription ?? "未知错误")"
+        }
+    }
+
+    private func writeImageDataToPhotos(_ data: Data, mimeType: String) {
         let current = PHPhotoLibrary.authorizationStatus(for: .addOnly)
         switch current {
         case .authorized, .limited:
-            UIImageWriteToSavedPhotosAlbum(image, ImageSaveCoordinator.shared, #selector(ImageSaveCoordinator.handleSaveResult(_:didFinishSavingWithError:contextInfo:)), nil)
-            ImageSaveCoordinator.shared.onComplete = { error in
-                saveFeedback = error == nil ? "已保存到相册。" : "图片保存失败：\(error?.localizedDescription ?? "未知错误")"
-            }
+            persistImageDataToPhotos(data, mimeType: mimeType)
         case .notDetermined:
             PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
                 Task { @MainActor in
                     if status == .authorized || status == .limited {
-                        writeImageToPhotos(image)
+                        persistImageDataToPhotos(data, mimeType: mimeType)
                     } else {
                         saveFeedback = "没有相册写入权限。"
                     }
@@ -3404,6 +3433,58 @@ struct MessageBubbleView: View {
             }
         default:
             saveFeedback = "没有相册写入权限。"
+        }
+    }
+
+    private func persistImageDataToPhotos(_ data: Data, mimeType: String) {
+        if let image = UIImage(data: data) {
+            writeImageToPhotos(image)
+            return
+        }
+
+        let normalizedMime = ChatImageAttachment.normalizeMIMEType(mimeType)
+        PHPhotoLibrary.shared().performChanges({
+            let request = PHAssetCreationRequest.forAsset()
+            let options = PHAssetResourceCreationOptions()
+            options.uniformTypeIdentifier = uniformTypeIdentifier(for: normalizedMime)
+            request.addResource(with: .photo, data: data, options: options)
+        }) { success, error in
+            Task { @MainActor in
+                if success {
+                    saveFeedback = "已保存到相册。"
+                } else {
+                    saveFeedback = "图片保存失败：\(error?.localizedDescription ?? "未知错误")"
+                }
+            }
+        }
+    }
+
+    private func uniformTypeIdentifier(for mimeType: String) -> String? {
+        switch ChatImageAttachment.normalizeMIMEType(mimeType) {
+        case "image/png":
+            return UTType.png.identifier
+        case "image/jpeg":
+            return UTType.jpeg.identifier
+        case "image/gif":
+            return UTType.gif.identifier
+        case "image/tiff":
+            return UTType.tiff.identifier
+        case "image/bmp":
+            return "com.microsoft.bmp"
+        case "image/webp":
+            return "org.webmproject.webp"
+        case "image/heic":
+            return "public.heic"
+        case "image/heif":
+            return "public.heif"
+        case "image/svg+xml":
+            return "public.svg-image"
+        case "image/x-icon":
+            return "com.microsoft.ico"
+        case "image/avif":
+            return "public.avif"
+        default:
+            return nil
         }
     }
 
@@ -3441,9 +3522,8 @@ struct MessageBubbleView: View {
             return
         }
 
-        if let remote = attachment.renderURLString,
-           let normalized = normalizedRemoteURLString(remote) {
-            activeImagePreview = ImagePreviewPayload(source: .remote(urlString: normalized))
+        if let displayURL = imageDisplayURLString(for: attachment) {
+            activeImagePreview = ImagePreviewPayload(source: .remote(urlString: displayURL))
         }
     }
 

@@ -1354,12 +1354,17 @@ struct ChatRequestBuilder {
             ]
         }
 
-        return [
+        var payload: [String: Any] = [
             "model": config.model,
             "prompt": prompt,
             "size": size,
             "n": 1
         ]
+
+        if loweredModel.contains("gpt-image") || loweredModel.contains("dall-e") {
+            payload["response_format"] = "b64_json"
+        }
+        return payload
     }
 
     private static func makeVideoGenerationPayload(config: ChatConfig, prompt: String) -> [String: Any] {
@@ -1594,6 +1599,7 @@ final class ChatService {
             extraSystemPrompts: [MinimalAgentToolRuntime.systemPrompt]
         )
         let toolRuntime = MinimalAgentToolRuntime()
+        let toolOrchestrator = AgentToolOrchestrator()
         let progress = AgentToolLoopProgress()
 
         do {
@@ -1604,6 +1610,7 @@ final class ChatService {
                     config: config,
                     initialMessages: normalizedMessages,
                     toolRuntime: toolRuntime,
+                    toolOrchestrator: toolOrchestrator,
                     onEvent: onEvent,
                     progress: progress
                 )
@@ -1612,6 +1619,7 @@ final class ChatService {
                     config: config,
                     initialMessages: normalizedMessages,
                     toolRuntime: toolRuntime,
+                    toolOrchestrator: toolOrchestrator,
                     onEvent: onEvent,
                     progress: progress
                 )
@@ -1631,6 +1639,7 @@ final class ChatService {
         config: ChatConfig,
         initialMessages: [[String: Any]],
         toolRuntime: MinimalAgentToolRuntime,
+        toolOrchestrator: AgentToolOrchestrator,
         onEvent: @escaping @Sendable (StreamChunk) -> Void,
         progress: AgentToolLoopProgress
     ) async throws -> AgentToolLoopOutcome {
@@ -1641,10 +1650,11 @@ final class ChatService {
         var forcedRepairCount = 0
 
         for turn in 0..<8 {
+            let toolSpecs = await toolRuntime.availableToolSpecs(config: config)
             let request = try makeChatCompletionsAgentToolRequest(
                 config: config,
                 messages: messages,
-                toolSpecs: toolRuntime.toolSpecs
+                toolSpecs: toolSpecs
             )
             let (data, response) = try await withRetry { [self] in
                 try await session.data(for: request)
@@ -1684,10 +1694,13 @@ final class ChatService {
 
             messages.append(makeChatCompletionsAssistantToolMessage(parsed))
 
-            for call in parsed.toolCalls {
-                let execution = await toolRuntime.execute(call: call, config: config)
+            let executionResults = await toolOrchestrator.execute(
+                calls: parsed.toolCalls,
+                runtime: toolRuntime,
+                config: config
+            ) { result in
                 progress.didExecuteTool = true
-                if let renderedLog = deduplicatedAgentLog(execution.renderedLog, existing: renderedLogs) {
+                if let renderedLog = deduplicatedAgentLog(result.execution.renderedLog, existing: renderedLogs) {
                     renderedLogs.append(renderedLog)
                     onEvent(
                         StreamChunk(
@@ -1698,6 +1711,11 @@ final class ChatService {
                         )
                     )
                 }
+            }
+
+            for result in executionResults {
+                let call = result.call
+                let execution = result.execution
                 messages.append([
                     "role": "tool",
                     "tool_call_id": call.id,
@@ -1730,6 +1748,7 @@ final class ChatService {
         config: ChatConfig,
         initialMessages: [[String: Any]],
         toolRuntime: MinimalAgentToolRuntime,
+        toolOrchestrator: AgentToolOrchestrator,
         onEvent: @escaping @Sendable (StreamChunk) -> Void,
         progress: AgentToolLoopProgress
     ) async throws -> AgentToolLoopOutcome {
@@ -1741,10 +1760,11 @@ final class ChatService {
         var forcedRepairCount = 0
 
         for turn in 0..<8 {
+            let toolSpecs = await toolRuntime.availableToolSpecs(config: config)
             let request = try makeResponsesAgentToolRequest(
                 config: config,
                 input: input,
-                toolSpecs: toolRuntime.toolSpecs,
+                toolSpecs: toolSpecs,
                 previousResponseID: previousResponseID
             )
             let (data, response) = try await withRetry { [self] in
@@ -1794,10 +1814,13 @@ final class ChatService {
             var outputs: [[String: Any]] = []
             outputs.reserveCapacity(parsed.toolCalls.count)
 
-            for call in parsed.toolCalls {
-                let execution = await toolRuntime.execute(call: call, config: config)
+            let executionResults = await toolOrchestrator.execute(
+                calls: parsed.toolCalls,
+                runtime: toolRuntime,
+                config: config
+            ) { result in
                 progress.didExecuteTool = true
-                if let renderedLog = deduplicatedAgentLog(execution.renderedLog, existing: renderedLogs) {
+                if let renderedLog = deduplicatedAgentLog(result.execution.renderedLog, existing: renderedLogs) {
                     renderedLogs.append(renderedLog)
                     onEvent(
                         StreamChunk(
@@ -1808,6 +1831,11 @@ final class ChatService {
                         )
                     )
                 }
+            }
+
+            for result in executionResults {
+                let call = result.call
+                let execution = result.execution
                 outputs.append([
                     "type": "function_call_output",
                     "call_id": call.id,
@@ -3421,7 +3449,7 @@ final class ChatService {
     }
 
     private func directImageAttachment(from data: Data, response: URLResponse) -> ChatImageAttachment? {
-        let mimeType = normalizeMIMEType(
+        let mimeType = ChatImageAttachment.normalizeMIMEType(
             (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type") ?? ""
         )
 
@@ -3434,17 +3462,15 @@ final class ChatService {
             )
         }
 
-        if let image = UIImage(data: data) {
-            if let pngData = image.pngData() {
-                return ChatImageAttachment.fromImageData(pngData, mimeType: "image/png")
-            }
-            return ChatImageAttachment.fromImageData(data, mimeType: mimeType.isEmpty ? "image/png" : mimeType)
-        }
-
-        let sniffed = sniffImageMIMEType(data: data)
-        if let resolvedMIME = sniffed ?? (!mimeType.isEmpty ? mimeType : nil),
+        let nativeDecodeSucceeded = UIImage(data: data) != nil
+        let sniffed = ChatImageAttachment.sniffImageMIMEType(data: data)
+        if let resolvedMIME = sniffed ?? (mimeType.hasPrefix("image/") ? mimeType : nil),
            resolvedMIME.hasPrefix("image/") {
             return ChatImageAttachment.fromImageData(data, mimeType: resolvedMIME)
+        }
+        if nativeDecodeSucceeded {
+            let fallbackMime = mimeType.hasPrefix("image/") ? mimeType : "image/*"
+            return ChatImageAttachment.fromImageData(data, mimeType: fallbackMime)
         }
 
         return nil

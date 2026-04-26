@@ -277,7 +277,7 @@ final class RemoteImageLoader: ObservableObject {
     }
 
     private static func makeWebDataURL(data: Data, mimeType: String) -> String? {
-        if data.isEmpty || data.count > 24 * 1024 * 1024 { return nil }
+        if data.isEmpty { return nil }
 
         let normalizedMime = normalizeMIMEType(mimeType)
         let resolvedMime = normalizedMime.hasPrefix("image/")

@@ -1454,31 +1454,8 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func normalizedDraftImageAttachment(from data: Data, mimeType: String) -> ChatImageAttachment {
-        let loweredMime = mimeType.lowercased()
-        guard let image = UIImage(data: data) else {
-            return ChatImageAttachment.fromImageData(data, mimeType: mimeType)
-        }
-
-        let maxDimension: CGFloat = 1536
-        let shouldTranscode = loweredMime.contains("heic")
-            || loweredMime.contains("heif")
-            || data.count > 1_400_000
-            || max(image.size.width, image.size.height) > maxDimension
-
-        guard shouldTranscode else {
-            return ChatImageAttachment.fromImageData(data, mimeType: mimeType)
-        }
-
-        let prepared = resizedImageIfNeeded(image, maxDimension: maxDimension)
-        if loweredMime.contains("png"),
-           let pngData = prepared.pngData(),
-           pngData.count <= 2_500_000 {
-            return ChatImageAttachment.fromImageData(pngData, mimeType: "image/png")
-        }
-        if let jpegData = prepared.jpegData(compressionQuality: 0.86) {
-            return ChatImageAttachment.fromImageData(jpegData, mimeType: "image/jpeg")
-        }
-        return ChatImageAttachment.fromImageData(data, mimeType: mimeType)
+        let resolvedMime = ChatImageAttachment.preferredImageMIMEType(data: data, fallback: mimeType)
+        return ChatImageAttachment.fromImageData(data, mimeType: resolvedMime)
     }
 
     private func resizedImageIfNeeded(_ image: UIImage, maxDimension: CGFloat) -> UIImage {

@@ -55,7 +55,7 @@ struct StreamingMarkdownTextView: UIViewRepresentable {
         let view = NoCaretTextView()
         view.isEditable = false
         view.isScrollEnabled = false
-        view.isSelectable = true
+        view.isSelectable = false
         view.tintColor = .clear
         view.backgroundColor = .clear
         view.textContainerInset = .zero
@@ -523,6 +523,7 @@ struct SelectableLinkTextView: UIViewRepresentable {
             .foregroundColor: textColor,
             .paragraphStyle: paragraph
         ]
+        uiView.isSelectable = !streamingAnimated
 
         if renderMarkdown {
             coordinator.stopStreamingAnimation(clearPending: true)
@@ -736,7 +737,6 @@ struct SelectableLinkTextView: UIViewRepresentable {
         private var streamAnimationEnabled = false
         private var streamPrimaryColor: UIColor = .label
         private var lastStreamingTailRange: NSRange?
-        private var lastStreamingCursorRange: NSRange?
         private var streamCharacterBudget: Double = 0
         private var streamPauseRemaining: CFTimeInterval = 0
         private var lastMeasuredWidth: CGFloat = 0
@@ -866,7 +866,6 @@ struct SelectableLinkTextView: UIViewRepresentable {
 
             autoreleasepool {
                 let storage = textView.textStorage
-                removeStreamingCursorIfNeeded(in: storage)
                 let appended = NSMutableAttributedString(string: chunk, attributes: streamAttributes)
                 storage.beginEditing()
                 storage.append(appended)
@@ -1037,10 +1036,8 @@ struct SelectableLinkTextView: UIViewRepresentable {
         private func normalizeStreamingTailAppearance() {
             guard let textView = activeTextView else {
                 lastStreamingTailRange = nil
-                lastStreamingCursorRange = nil
                 return
             }
-            removeStreamingCursorIfNeeded(in: textView.textStorage)
             guard let tailRange = lastStreamingTailRange,
                   tailRange.location != NSNotFound,
                   NSMaxRange(tailRange) <= textView.textStorage.length else {
@@ -1052,17 +1049,6 @@ struct SelectableLinkTextView: UIViewRepresentable {
             textView.textStorage.addAttribute(.foregroundColor, value: streamPrimaryColor, range: tailRange)
             textView.textStorage.endEditing()
             lastStreamingTailRange = nil
-        }
-
-        private func removeStreamingCursorIfNeeded(in storage: NSTextStorage) {
-            guard let cursorRange = lastStreamingCursorRange,
-                  cursorRange.location != NSNotFound,
-                  NSMaxRange(cursorRange) <= storage.length else {
-                lastStreamingCursorRange = nil
-                return
-            }
-            storage.deleteCharacters(in: cursorRange)
-            lastStreamingCursorRange = nil
         }
 
         func cachedSizeIfAvailable(forWidth width: CGFloat, textCount: Int, lineBreakCount: Int) -> CGSize? {

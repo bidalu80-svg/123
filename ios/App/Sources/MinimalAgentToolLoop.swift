@@ -4,6 +4,27 @@ struct MinimalAgentToolSpec {
     let name: String
     let description: String
     let parameters: [String: Any]
+    let executionMode: AgentToolExecutionMode
+    let isDestructive: Bool
+
+    init(
+        name: String,
+        description: String,
+        parameters: [String: Any],
+        executionMode: AgentToolExecutionMode = .exclusive,
+        isDestructive: Bool = false
+    ) {
+        self.name = name
+        self.description = description
+        self.parameters = parameters
+        self.executionMode = executionMode
+        self.isDestructive = isDestructive
+    }
+}
+
+enum AgentToolExecutionMode: Equatable {
+    case concurrentReadOnly
+    case exclusive
 }
 
 struct MinimalAgentToolCall {
@@ -22,6 +43,156 @@ struct MinimalAgentToolTurnResponse {
 struct MinimalAgentToolExecution {
     let renderedLog: String
     let output: String
+    let didFail: Bool
+
+    init(renderedLog: String, output: String, didFail: Bool? = nil) {
+        self.renderedLog = renderedLog
+        self.output = output
+        self.didFail = didFail ?? MinimalAgentToolExecution.inferFailure(from: output)
+    }
+
+    private static func inferFailure(from output: String) -> Bool {
+        let lowered = output.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return lowered.contains("traceback")
+            || lowered.contains("indentationerror")
+            || lowered.contains("syntaxerror")
+            || lowered.contains("taberror")
+            || lowered.contains("[exit code ")
+            || lowered.contains("错误：")
+            || lowered.hasPrefix("错误:")
+            || lowered.contains("<tool_use_error>")
+            || lowered.contains("mcp bridge http")
+    }
+}
+
+struct AgentToolExecutionResult {
+    let call: MinimalAgentToolCall
+    let execution: MinimalAgentToolExecution
+}
+
+struct MCPBridgeToolCapability {
+    let name: String
+    let description: String
+    let parameters: [String: Any]
+
+    var toolSpec: MinimalAgentToolSpec {
+        MinimalAgentToolSpec(
+            name: name,
+            description: description.isEmpty ? "通过 MCP bridge 执行远程工具。" : description,
+            parameters: parameters,
+            executionMode: .exclusive
+        )
+    }
+}
+
+struct MCPBridgeSnapshot {
+    let endpointURLString: String
+    let tools: [MCPBridgeToolCapability]
+    let lastErrorMessage: String?
+    let updatedAt: Date
+
+    var isConnected: Bool {
+        lastErrorMessage == nil
+    }
+
+    func containsTool(named name: String) -> Bool {
+        tools.contains { $0.name == name }
+    }
+}
+
+private actor MCPConnectionManager {
+    static let shared = MCPConnectionManager()
+
+    private struct CacheEntry {
+        var snapshot: MCPBridgeSnapshot
+        var nextRefreshAllowedAt: Date
+    }
+
+    private let client: RemoteMCPBridgeClient
+    private var cache: [String: CacheEntry] = [:]
+
+    init(client: RemoteMCPBridgeClient = .shared) {
+        self.client = client
+    }
+
+    func snapshot(
+        endpointURLString: String,
+        apiKey: String,
+        timeout: Double,
+        forceRefresh: Bool = false
+    ) async -> MCPBridgeSnapshot? {
+        let endpoint = endpointURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !endpoint.isEmpty else { return nil }
+
+        let key = cacheKey(endpointURLString: endpoint, apiKey: apiKey)
+        let now = Date()
+        if let entry = cache[key],
+           !forceRefresh,
+           now < entry.nextRefreshAllowedAt {
+            return entry.snapshot
+        }
+
+        do {
+            let tools = try await client.fetchCapabilities(
+                endpointURLString: endpoint,
+                apiKey: apiKey,
+                timeout: min(max(timeout, 2), 5)
+            )
+            let snapshot = MCPBridgeSnapshot(
+                endpointURLString: endpoint,
+                tools: tools,
+                lastErrorMessage: nil,
+                updatedAt: now
+            )
+            cache[key] = CacheEntry(
+                snapshot: snapshot,
+                nextRefreshAllowedAt: now.addingTimeInterval(30)
+            )
+            return snapshot
+        } catch {
+            let previousTools = cache[key]?.snapshot.tools ?? []
+            let snapshot = MCPBridgeSnapshot(
+                endpointURLString: endpoint,
+                tools: previousTools,
+                lastErrorMessage: error.localizedDescription,
+                updatedAt: now
+            )
+            cache[key] = CacheEntry(
+                snapshot: snapshot,
+                nextRefreshAllowedAt: now.addingTimeInterval(15)
+            )
+            return previousTools.isEmpty ? nil : snapshot
+        }
+    }
+
+    func markSuccessfulCall(endpointURLString: String, apiKey: String) {
+        let key = cacheKey(endpointURLString: endpointURLString, apiKey: apiKey)
+        guard var entry = cache[key] else { return }
+        entry.snapshot = MCPBridgeSnapshot(
+            endpointURLString: entry.snapshot.endpointURLString,
+            tools: entry.snapshot.tools,
+            lastErrorMessage: nil,
+            updatedAt: Date()
+        )
+        cache[key] = entry
+    }
+
+    func markFailedCall(endpointURLString: String, apiKey: String, error: Error) {
+        let key = cacheKey(endpointURLString: endpointURLString, apiKey: apiKey)
+        guard var entry = cache[key] else { return }
+        entry.snapshot = MCPBridgeSnapshot(
+            endpointURLString: entry.snapshot.endpointURLString,
+            tools: entry.snapshot.tools,
+            lastErrorMessage: error.localizedDescription,
+            updatedAt: Date()
+        )
+        entry.nextRefreshAllowedAt = Date().addingTimeInterval(8)
+        cache[key] = entry
+    }
+
+    private func cacheKey(endpointURLString: String, apiKey: String) -> String {
+        "\(endpointURLString)|auth:\(!apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)"
+    }
 }
 
 enum LocalMCPActionMemory {
@@ -176,6 +347,7 @@ final class MinimalAgentToolRuntime {
     你现在具备 8 个正式工具：`list_dir`、`read_file`、`write_file`、`edit_file`、`grep_files`、`delete_path`、`clear_workspace`、`run_python_file`。
     执行规则：
     - 你要像一个内置的 MCP 风格执行智能体一样工作：优先理解用户真实目标，再决定该调用哪个工具，不要机械按关键词反应。
+    - 工具执行由 App 内部调度器负责：只读工具可以并行，写入、删除、清空、运行类工具会独占串行执行；你只需要发出正确工具调用。
     - 用户说“这个 / 那个 / 刚才那个项目 / 接着改 / 顺手修一下 / 把它删了”时，要结合 latest 工作区状态、最近读过的文件和最近报错去补足指代。
     - 对模糊删除请求优先缩小范围：能删单个文件就不要清空整个项目；如果范围不清晰，先查看目录或读取相关文件再动手。
     - 需要查看当前 latest 工作区时，优先调用工具，不要猜目录和文件内容。
@@ -190,6 +362,7 @@ final class MinimalAgentToolRuntime {
 
     private let fileManager = FileManager.default
     private let remoteBridgeClient = RemoteMCPBridgeClient.shared
+    private let mcpConnectionManager = MCPConnectionManager.shared
 
     init() {}
 
@@ -210,7 +383,8 @@ final class MinimalAgentToolRuntime {
                             "description": "最多返回多少项，默认 120。"
                         ]
                     ]
-                ]
+                ],
+                executionMode: .concurrentReadOnly
             ),
             MinimalAgentToolSpec(
                 name: "read_file",
@@ -236,7 +410,8 @@ final class MinimalAgentToolRuntime {
                         ]
                     ],
                     "required": ["path"]
-                ]
+                ],
+                executionMode: .concurrentReadOnly
             ),
             MinimalAgentToolSpec(
                 name: "write_file",
@@ -254,7 +429,8 @@ final class MinimalAgentToolRuntime {
                         ]
                     ],
                     "required": ["path", "content"]
-                ]
+                ],
+                executionMode: .exclusive
             ),
             MinimalAgentToolSpec(
                 name: "edit_file",
@@ -276,7 +452,8 @@ final class MinimalAgentToolRuntime {
                         ]
                     ],
                     "required": ["path", "oldText", "newText"]
-                ]
+                ],
+                executionMode: .exclusive
             ),
             MinimalAgentToolSpec(
                 name: "grep_files",
@@ -298,7 +475,8 @@ final class MinimalAgentToolRuntime {
                         ]
                     ],
                     "required": ["query"]
-                ]
+                ],
+                executionMode: .concurrentReadOnly
             ),
             MinimalAgentToolSpec(
                 name: "delete_path",
@@ -312,7 +490,9 @@ final class MinimalAgentToolRuntime {
                         ]
                     ],
                     "required": ["path"]
-                ]
+                ],
+                executionMode: .exclusive,
+                isDestructive: true
             ),
             MinimalAgentToolSpec(
                 name: "clear_workspace",
@@ -320,7 +500,9 @@ final class MinimalAgentToolRuntime {
                 parameters: [
                     "type": "object",
                     "properties": [:]
-                ]
+                ],
+                executionMode: .exclusive,
+                isDestructive: true
             ),
             MinimalAgentToolSpec(
                 name: "run_python_file",
@@ -338,9 +520,38 @@ final class MinimalAgentToolRuntime {
                         ]
                     ],
                     "required": ["path"]
-                ]
+                ],
+                executionMode: .exclusive
             )
         ]
+    }
+
+    func availableToolSpecs(config: ChatConfig) async -> [MinimalAgentToolSpec] {
+        var specsByName = Dictionary(uniqueKeysWithValues: toolSpecs.map { ($0.name, $0) })
+        guard shouldProbeMCPBridge(config: config) else {
+            return toolSpecs
+        }
+
+        let endpoint = config.shellExecutionURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let snapshot = await mcpConnectionManager.snapshot(
+            endpointURLString: endpoint,
+            apiKey: config.resolvedShellExecutionAPIKey,
+            timeout: config.shellExecutionTimeout
+        ) else {
+            return toolSpecs
+        }
+
+        for tool in snapshot.tools {
+            if specsByName[tool.name] == nil {
+                specsByName[tool.name] = tool.toolSpec
+            }
+        }
+
+        return specsByName.values.sorted { $0.name < $1.name }
+    }
+
+    func executionMode(for call: MinimalAgentToolCall) -> AgentToolExecutionMode {
+        toolSpecs.first { $0.name == call.name }?.executionMode ?? .exclusive
     }
 
     func execute(call: MinimalAgentToolCall, config: ChatConfig) async -> MinimalAgentToolExecution {
@@ -379,9 +590,19 @@ final class MinimalAgentToolRuntime {
     ) async -> MinimalAgentToolExecution? {
         let endpoint = config.shellExecutionURLString.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !endpoint.isEmpty else { return nil }
+        guard shouldProbeMCPBridge(config: config) else { return nil }
+
+        guard let snapshot = await mcpConnectionManager.snapshot(
+            endpointURLString: endpoint,
+            apiKey: config.resolvedShellExecutionAPIKey,
+            timeout: config.shellExecutionTimeout
+        ),
+        snapshot.containsTool(named: call.name) else {
+            return nil
+        }
 
         do {
-            return try await remoteBridgeClient.callTool(
+            let execution = try await remoteBridgeClient.callTool(
                 endpointURLString: endpoint,
                 apiKey: config.resolvedShellExecutionAPIKey,
                 timeout: config.shellExecutionTimeout,
@@ -389,9 +610,33 @@ final class MinimalAgentToolRuntime {
                 toolName: call.name,
                 arguments: call.arguments
             )
+            await mcpConnectionManager.markSuccessfulCall(
+                endpointURLString: endpoint,
+                apiKey: config.resolvedShellExecutionAPIKey
+            )
+            return execution
         } catch {
+            await mcpConnectionManager.markFailedCall(
+                endpointURLString: endpoint,
+                apiKey: config.resolvedShellExecutionAPIKey,
+                error: error
+            )
             return nil
         }
+    }
+
+    private func shouldProbeMCPBridge(config: ChatConfig) -> Bool {
+        let shellPath = config.shellExecutionPath.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if shellPath.hasPrefix("http://") || shellPath.hasPrefix("https://") {
+            return true
+        }
+        if shellPath != ChatConfig.defaultShellExecutionPath.lowercased() {
+            return true
+        }
+        guard let url = URL(string: config.shellExecutionURLString) else {
+            return false
+        }
+        return url.port == 8790
     }
 
     private func executeListDir(arguments: [String: Any]) -> MinimalAgentToolExecution {
@@ -775,6 +1020,101 @@ final class MinimalAgentToolRuntime {
     }
 }
 
+final class AgentToolOrchestrator {
+    init() {}
+
+    func execute(
+        calls: [MinimalAgentToolCall],
+        runtime: MinimalAgentToolRuntime,
+        config: ChatConfig,
+        onResult: (AgentToolExecutionResult) -> Void
+    ) async -> [AgentToolExecutionResult] {
+        var allResults: [AgentToolExecutionResult] = []
+        for batch in partition(calls: calls, runtime: runtime) {
+            let batchResults: [AgentToolExecutionResult]
+            if batch.isConcurrentReadOnly, batch.calls.count > 1 {
+                batchResults = await executeConcurrentReadOnlyBatch(
+                    batch.calls,
+                    runtime: runtime,
+                    config: config
+                )
+            } else {
+                batchResults = await executeSerialBatch(
+                    batch.calls,
+                    runtime: runtime,
+                    config: config
+                )
+            }
+
+            for result in batchResults {
+                allResults.append(result)
+                onResult(result)
+            }
+        }
+        return allResults
+    }
+
+    private struct Batch {
+        let isConcurrentReadOnly: Bool
+        var calls: [MinimalAgentToolCall]
+    }
+
+    private func partition(
+        calls: [MinimalAgentToolCall],
+        runtime: MinimalAgentToolRuntime
+    ) -> [Batch] {
+        calls.reduce(into: []) { batches, call in
+            let isConcurrentReadOnly = runtime.executionMode(for: call) == .concurrentReadOnly
+            if isConcurrentReadOnly,
+               batches.last?.isConcurrentReadOnly == true {
+                batches[batches.count - 1].calls.append(call)
+            } else {
+                batches.append(Batch(isConcurrentReadOnly: isConcurrentReadOnly, calls: [call]))
+            }
+        }
+    }
+
+    private func executeSerialBatch(
+        _ calls: [MinimalAgentToolCall],
+        runtime: MinimalAgentToolRuntime,
+        config: ChatConfig
+    ) async -> [AgentToolExecutionResult] {
+        var results: [AgentToolExecutionResult] = []
+        results.reserveCapacity(calls.count)
+        for call in calls {
+            let execution = await runtime.execute(call: call, config: config)
+            results.append(AgentToolExecutionResult(call: call, execution: execution))
+        }
+        return results
+    }
+
+    private func executeConcurrentReadOnlyBatch(
+        _ calls: [MinimalAgentToolCall],
+        runtime: MinimalAgentToolRuntime,
+        config: ChatConfig
+    ) async -> [AgentToolExecutionResult] {
+        var indexedResults: [(Int, AgentToolExecutionResult)] = []
+        indexedResults.reserveCapacity(calls.count)
+
+        await withTaskGroup(of: (Int, AgentToolExecutionResult).self) { group in
+            for (index, call) in calls.enumerated() {
+                group.addTask {
+                    let execution = await runtime.execute(call: call, config: config)
+                    return (index, AgentToolExecutionResult(call: call, execution: execution))
+                }
+            }
+
+            while let result = await group.next() {
+                indexedResults.append(result)
+            }
+        }
+
+        return indexedResults
+            .sorted { $0.0 < $1.0 }
+            .map { $0.1 }
+    }
+}
+
 private final class RemoteMCPBridgeClient {
     static let shared = RemoteMCPBridgeClient()
 
@@ -782,6 +1122,56 @@ private final class RemoteMCPBridgeClient {
 
     private init(session: URLSession = .shared) {
         self.session = session
+    }
+
+    func fetchCapabilities(
+        endpointURLString: String,
+        apiKey: String,
+        timeout: Double
+    ) async throws -> [MCPBridgeToolCapability] {
+        guard let url = capabilitiesURL(from: endpointURLString) else {
+            throw NSError(domain: "RemoteMCPBridgeClient", code: 4, userInfo: [NSLocalizedDescriptionKey: "MCP capabilities URL 无效"])
+        }
+
+        var request = URLRequest(url: url, timeoutInterval: max(2, min(timeout, 5)))
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        let token = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw NSError(domain: "RemoteMCPBridgeClient", code: 2, userInfo: [NSLocalizedDescriptionKey: "MCP capabilities 响应无效"])
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw NSError(domain: "RemoteMCPBridgeClient", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "MCP capabilities HTTP \(httpResponse.statusCode)"])
+        }
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw NSError(domain: "RemoteMCPBridgeClient", code: 3, userInfo: [NSLocalizedDescriptionKey: "MCP capabilities 返回 JSON 无效"])
+        }
+
+        let rawTools = object["tools"] as? [[String: Any]] ?? []
+        return rawTools.compactMap { raw in
+            guard let name = (raw["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !name.isEmpty else {
+                return nil
+            }
+            let description = (raw["description"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let parameters = raw["inputSchema"] as? [String: Any]
+                ?? raw["parameters"] as? [String: Any]
+                ?? [
+                    "type": "object",
+                    "properties": [:]
+                ]
+            return MCPBridgeToolCapability(
+                name: name,
+                description: description,
+                parameters: parameters
+            )
+        }
     }
 
     func callTool(
@@ -834,5 +1224,23 @@ private final class RemoteMCPBridgeClient {
             renderedLog: renderedLog,
             output: output
         )
+    }
+
+    private func capabilitiesURL(from endpointURLString: String) -> URL? {
+        guard var components = URLComponents(string: endpointURLString) else {
+            return nil
+        }
+        let path = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        if path.hasSuffix("mcp/call_tool") {
+            components.path = "/" + String(path.dropLast("call_tool".count)) + "capabilities"
+        } else if path.hasSuffix("mcp/list_tools") {
+            components.path = "/" + String(path.dropLast("list_tools".count)) + "capabilities"
+        } else if path.hasSuffix("mcp/capabilities") {
+            components.path = "/" + path
+        } else {
+            components.path = "/v1/mcp/capabilities"
+        }
+        components.query = nil
+        return components.url
     }
 }

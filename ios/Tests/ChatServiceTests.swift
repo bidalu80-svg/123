@@ -205,6 +205,17 @@ final class ChatServiceTests: XCTestCase {
         XCTAssertEqual(attachment.decodedImageData, original)
     }
 
+    func testChatImageAttachmentFromImageDataPreservesSVGDataURLAndMime() {
+        let svg = #"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><rect width="8" height="8" fill="#f40"/></svg>"#
+        let data = Data(svg.utf8)
+
+        let attachment = ChatImageAttachment.fromImageData(data, mimeType: "application/octet-stream")
+
+        XCTAssertEqual(attachment.mimeType, "image/svg+xml")
+        XCTAssertTrue(attachment.dataURL.hasPrefix("data:image/svg+xml;base64,"))
+        XCTAssertEqual(attachment.decodedImageData, data)
+    }
+
     func testBuildRequestIncludesRealtimeSystemContext() throws {
         let config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
         let requestMessage = ChatMessage(role: .user, content: "现在几点")
@@ -382,6 +393,7 @@ final class ChatServiceTests: XCTestCase {
         XCTAssertEqual(json["model"] as? String, "gpt-image")
         XCTAssertEqual(json["prompt"] as? String, "a cat")
         XCTAssertEqual(json["size"] as? String, "1024x1024")
+        XCTAssertEqual(json["response_format"] as? String, "b64_json")
         XCTAssertEqual(request.timeoutInterval, 180)
     }
 
@@ -953,9 +965,96 @@ final class ChatServiceTests: XCTestCase {
         )
 
         XCTAssertEqual(requestBodies.count, 2)
-        XCTAssertTrue(streamedText.contains("列出 `.`"))
-        XCTAssertTrue(reply.text.contains("列出 `.`"))
+        XCTAssertTrue(streamedText.contains("检查 latest 工作区状态"))
+        XCTAssertTrue(reply.text.contains("检查 latest 工作区状态"))
         XCTAssertTrue(reply.text.contains("目录已检查完毕。"))
+    }
+
+    func testAgentToolLoopFeedsMultipleToolResultsBackInOriginalOrder() async throws {
+        try? FrontendProjectBuilder.clearLatestProject()
+        defer { try? FrontendProjectBuilder.clearLatestProject() }
+
+        let latest = try XCTUnwrap(FrontendProjectBuilder.latestProjectURL())
+        try "hello".write(to: latest.appendingPathComponent("README.md"), atomically: true, encoding: .utf8)
+
+        var requestBodies: [[String: Any]] = []
+        URLProtocolStub.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/chat/completions")
+            let body = try XCTUnwrap(request.httpBody)
+            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            requestBodies.append(json)
+
+            let payload: [String: Any]
+            if requestBodies.count == 1 {
+                payload = [
+                    "choices": [[
+                        "message": [
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                [
+                                    "id": "call_list_1",
+                                    "type": "function",
+                                    "function": [
+                                        "name": "list_dir",
+                                        "arguments": #"{"path":".","limit":10}"#
+                                    ]
+                                ],
+                                [
+                                    "id": "call_read_1",
+                                    "type": "function",
+                                    "function": [
+                                        "name": "read_file",
+                                        "arguments": #"{"path":"README.md","maxCharacters":1000}"#
+                                    ]
+                                ]
+                            ]
+                        ]
+                    ]]
+                ]
+            } else {
+                let messages = try XCTUnwrap(json["messages"] as? [[String: Any]])
+                let toolMessages = messages.filter { ($0["role"] as? String) == "tool" }
+                XCTAssertEqual(toolMessages.count, 2)
+                XCTAssertEqual(toolMessages.compactMap { $0["tool_call_id"] as? String }, ["call_list_1", "call_read_1"])
+                XCTAssertTrue((toolMessages[0]["content"] as? String ?? "").contains("README.md"))
+                XCTAssertTrue((toolMessages[1]["content"] as? String ?? "").contains("hello"))
+                payload = [
+                    "choices": [[
+                        "message": [
+                            "role": "assistant",
+                            "content": "两个工具结果都收到了。"
+                        ]
+                    ]]
+                ]
+            }
+
+            let data = try JSONSerialization.data(withJSONObject: payload)
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: nil
+                )
+            )
+            return (response, data)
+        }
+
+        let service = makeStubbedChatService()
+        var config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: false)
+        config.endpointMode = .chatCompletions
+
+        let reply = try await service.sendMessage(
+            config: config,
+            history: [],
+            message: ChatMessage(role: .user, content: "请查看目录，并读取文件 README.md"),
+            onEvent: { _ in }
+        )
+
+        XCTAssertEqual(requestBodies.count, 2)
+        XCTAssertTrue(reply.text.contains("README.md"))
+        XCTAssertTrue(reply.text.contains("两个工具结果都收到了。"))
     }
 
     func testWebsiteCreationDoesNotUseAgentToolLoopForInitialProjectOutput() {

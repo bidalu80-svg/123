@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 
 struct ChatImageAttachment: Identifiable, Codable, Equatable {
     let id: UUID
@@ -19,10 +20,11 @@ struct ChatImageAttachment: Identifiable, Codable, Equatable {
     }
 
     static func fromImageData(_ data: Data, mimeType: String) -> ChatImageAttachment {
+        let resolvedMimeType = preferredImageMIMEType(data: data, fallback: mimeType)
         let encoded = data.base64EncodedString()
         return ChatImageAttachment(
-            dataURL: "data:\(mimeType);base64,\(encoded)",
-            mimeType: mimeType
+            dataURL: "data:\(resolvedMimeType);base64,\(encoded)",
+            mimeType: resolvedMimeType
         )
     }
 
@@ -69,6 +71,133 @@ struct ChatImageAttachment: Identifiable, Codable, Equatable {
             return remoteURL
         }
         return dataURL
+    }
+
+    var byteCount: Int? {
+        decodedImageData?.count
+    }
+
+    var pixelSizeDescription: String? {
+        guard let data = decodedImageData as CFData?,
+              let source = CGImageSourceCreateWithData(data, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? NSNumber,
+              let height = properties[kCGImagePropertyPixelHeight] as? NSNumber else {
+            return nil
+        }
+        return "\(width.intValue)x\(height.intValue)"
+    }
+
+    var imageFormatDescription: String {
+        Self.normalizeMIMEType(mimeType)
+    }
+
+    static func preferredImageMIMEType(data: Data, fallback: String) -> String {
+        let normalizedFallback = normalizeMIMEType(fallback)
+        if let sniffed = sniffImageMIMEType(data: data) {
+            return sniffed
+        }
+        if normalizedFallback.hasPrefix("image/") {
+            return normalizedFallback
+        }
+        return "image/*"
+    }
+
+    static func isSupportedImageMIMEType(_ raw: String) -> Bool {
+        let mime = normalizeMIMEType(raw)
+        guard mime.hasPrefix("image/") else { return false }
+        return true
+    }
+
+    static func normalizeMIMEType(_ raw: String) -> String {
+        let cleaned = raw
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .split(separator: ";", maxSplits: 1)
+            .first
+            .map(String.init) ?? ""
+
+        switch cleaned {
+        case "image/jpg":
+            return "image/jpeg"
+        case "image/x-png":
+            return "image/png"
+        case "image/heif-sequence":
+            return "image/heif"
+        case "image/heic-sequence":
+            return "image/heic"
+        case "image/x-icon", "image/vnd.microsoft.icon":
+            return "image/x-icon"
+        case "image/svg":
+            return "image/svg+xml"
+        default:
+            return cleaned.isEmpty ? "image/*" : cleaned
+        }
+    }
+
+    static func sniffImageMIMEType(data: Data) -> String? {
+        let bytes = [UInt8](data.prefix(32))
+        guard !bytes.isEmpty else { return nil }
+
+        if bytes.count >= 4 {
+            if bytes[0] == 0x89, bytes[1] == 0x50, bytes[2] == 0x4E, bytes[3] == 0x47 {
+                return "image/png"
+            }
+            if bytes[0] == 0xFF, bytes[1] == 0xD8, bytes[2] == 0xFF {
+                return "image/jpeg"
+            }
+            if bytes[0] == 0x47, bytes[1] == 0x49, bytes[2] == 0x46, bytes[3] == 0x38 {
+                return "image/gif"
+            }
+            if bytes[0] == 0x42, bytes[1] == 0x4D {
+                return "image/bmp"
+            }
+            if bytes[0] == 0x00, bytes[1] == 0x00, bytes[2] == 0x01, bytes[3] == 0x00 {
+                return "image/x-icon"
+            }
+            if bytes[0] == 0x49, bytes[1] == 0x49, bytes[2] == 0x2A, bytes[3] == 0x00 {
+                return "image/tiff"
+            }
+            if bytes[0] == 0x4D, bytes[1] == 0x4D, bytes[2] == 0x00, bytes[3] == 0x2A {
+                return "image/tiff"
+            }
+        }
+
+        if bytes.count >= 12,
+           bytes[0] == 0x52, bytes[1] == 0x49, bytes[2] == 0x46, bytes[3] == 0x46,
+           bytes[8] == 0x57, bytes[9] == 0x45, bytes[10] == 0x42, bytes[11] == 0x50 {
+            return "image/webp"
+        }
+
+        if data.count >= 12 {
+            let box = data.subdata(in: 4..<8)
+            let brand = data.subdata(in: 8..<12)
+            if let boxName = String(data: box, encoding: .ascii),
+               boxName == "ftyp",
+               let brandName = String(data: brand, encoding: .ascii)?.lowercased() {
+                if brandName.hasPrefix("avif") || brandName.hasPrefix("avis") {
+                    return "image/avif"
+                }
+                if brandName.hasPrefix("heic")
+                    || brandName.hasPrefix("heix")
+                    || brandName.hasPrefix("hevc")
+                    || brandName.hasPrefix("hevx") {
+                    return "image/heic"
+                }
+                if brandName.hasPrefix("mif1") || brandName.hasPrefix("msf1") {
+                    return "image/heif"
+                }
+            }
+        }
+
+        if let text = String(data: data.prefix(512), encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased(),
+           text.hasPrefix("<svg") || text.contains("<svg") {
+            return "image/svg+xml"
+        }
+
+        return nil
     }
 }
 

@@ -176,6 +176,7 @@ struct ChatScreen: View {
     @State private var autoBuildRunningMessageID: UUID?
     @State private var latestProjectHasPreviewEntry = false
     @State private var latestProjectValidationState: ProjectValidationState?
+    @State private var anchorsLatestSentMessageAtTop = false
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -902,7 +903,26 @@ struct ChatScreen: View {
                     issueTranscriptCommand(.scrollToBottom(animated: false))
                 }
             }
+            .onChange(of: activeStreamingLeadSignature) { _, newSignature in
+                guard anchorsLatestSentMessageAtTop else { return }
+                guard newSignature != nil else {
+                    if !viewModel.isSending {
+                        anchorsLatestSentMessageAtTop = false
+                    }
+                    return
+                }
+                issueTranscriptCommand(.scrollLeadUserToTop(animated: false))
+            }
+            .onChange(of: viewModel.isSending) { _, isSending in
+                if !isSending {
+                    anchorsLatestSentMessageAtTop = false
+                }
+            }
             .onChange(of: viewModel.streamScrollTrigger) { _, _ in
+                if anchorsLatestSentMessageAtTop, activeStreamingLeadSignature != nil {
+                    issueTranscriptCommand(.scrollLeadUserToTop(animated: false))
+                    return
+                }
                 if isPinnedToBottom && !shouldUseCodeViewportTailFollow {
                     issueTranscriptCommand(.scrollToBottom(animated: false))
                 }
@@ -4411,26 +4431,46 @@ struct ChatScreen: View {
 
     @ViewBuilder
     private func draftImagePreview(_ attachment: ChatImageAttachment) -> some View {
-        if let data = attachment.decodedImageData, let uiImage = UIImage(data: data) {
-            ZStack(alignment: .topTrailing) {
-                Image(uiImage: uiImage)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: 72, height: 72)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        let previewURL = attachment.requestURLString
 
-                Button {
-                    viewModel.removeDraftImage(id: attachment.id)
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 22, height: 22)
-                        .background(Circle().fill(Color.black.opacity(0.72)))
+        ZStack(alignment: .topTrailing) {
+            Group {
+                if let data = attachment.decodedImageData, let uiImage = UIImage(data: data) {
+                    Image(uiImage: uiImage)
+                        .resizable()
+                        .scaledToFill()
+                } else if !previewURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    RemoteImageView(
+                        urlString: previewURL,
+                        apiKey: viewModel.config.apiKey,
+                        baseURL: viewModel.config.normalizedBaseURL
+                    )
+                    .padding(6)
+                    .background(MinisTheme.elevatedBackground)
+                } else {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(MinisTheme.elevatedBackground)
+                        .overlay {
+                            Image(systemName: "photo")
+                                .font(.system(size: 20, weight: .medium))
+                                .foregroundStyle(.secondary)
+                        }
                 }
-                .buttonStyle(.plain)
-                .padding(6)
             }
+            .frame(width: 72, height: 72)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+            Button {
+                viewModel.removeDraftImage(id: attachment.id)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 22, height: 22)
+                    .background(Circle().fill(Color.black.opacity(0.72)))
+            }
+            .buttonStyle(.plain)
+            .padding(6)
         }
     }
 
@@ -4520,6 +4560,7 @@ struct ChatScreen: View {
             return
         }
         stagePendingOutgoingEchoIfNeeded()
+        anchorsLatestSentMessageAtTop = true
         isPinnedToBottom = true
         issueTranscriptCommand(.scrollToBottom(animated: false))
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
@@ -4529,11 +4570,6 @@ struct ChatScreen: View {
         Task { @MainActor in
             await viewModel.sendCurrentMessage()
             reconcilePendingOutgoingEcho(with: viewModel.messages, forceClearWhenIdle: true)
-            issueTranscriptCommand(.scrollToBottom(animated: false))
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-                guard isPinnedToBottom else { return }
-                issueTranscriptCommand(.scrollToBottom(animated: false))
-            }
         }
     }
 
@@ -4775,10 +4811,9 @@ struct ChatScreen: View {
     }
 
     private func pickRecentAsset(_ asset: PHAsset) async {
-        if let image = await requestImage(for: asset),
-           let data = image.jpegData(compressionQuality: 0.9) {
+        if let payload = await requestImageData(for: asset) {
             await MainActor.run {
-                viewModel.addDraftImage(data: data, mimeType: "image/jpeg")
+                viewModel.addDraftImage(data: payload.data, mimeType: payload.mimeType)
                 showAttachmentSheet = false
             }
         } else {
@@ -4788,7 +4823,7 @@ struct ChatScreen: View {
         }
     }
 
-    private func requestImage(for asset: PHAsset) async -> UIImage? {
+    private func requestImageData(for asset: PHAsset) async -> (data: Data, mimeType: String)? {
         await withCheckedContinuation { continuation in
             let options = PHImageRequestOptions()
             options.deliveryMode = .highQualityFormat
@@ -4796,12 +4831,22 @@ struct ChatScreen: View {
             options.isNetworkAccessAllowed = true
             options.isSynchronous = false
 
+            let resource = PHAssetResource.assetResources(for: asset).first
+            let fileName = resource?.originalFilename ?? ""
+            let fileExtension = (fileName as NSString).pathExtension
+            let extensionMime = UTType(filenameExtension: fileExtension)?.preferredMIMEType ?? "image/*"
+
             PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { data, _, _, _ in
-                guard let data, let image = UIImage(data: data) else {
+                guard let data else {
                     continuation.resume(returning: nil)
                     return
                 }
-                continuation.resume(returning: image)
+
+                let resolvedMime = ChatImageAttachment.preferredImageMIMEType(
+                    data: data,
+                    fallback: extensionMime
+                )
+                continuation.resume(returning: (data, resolvedMime))
             }
         }
     }
@@ -4846,6 +4891,16 @@ struct ChatScreen: View {
                         data: data
                     )
                     viewModel.statusMessage = "已附加音频：\(url.lastPathComponent)"
+                    return
+                }
+
+                let resolvedImageMime = ChatImageAttachment.preferredImageMIMEType(
+                    data: data,
+                    fallback: mimeType
+                )
+                if ChatImageAttachment.isSupportedImageMIMEType(resolvedImageMime) {
+                    viewModel.addDraftImage(data: data, mimeType: resolvedImageMime)
+                    viewModel.statusMessage = "已附加图片：\(url.lastPathComponent)"
                     return
                 }
 
@@ -5010,6 +5065,7 @@ private struct ChatTranscriptMetrics: Equatable {
 private struct ChatTranscriptCommand: Equatable {
     enum Kind: Equatable {
         case scrollToBottom(animated: Bool)
+        case scrollLeadUserToTop(animated: Bool)
         case pageDown
     }
 
@@ -5592,6 +5648,8 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
                 } else {
                     normalizeShortContentOffsetIfNeeded()
                 }
+            case .scrollLeadUserToTop(let animated):
+                guard scrollStreamingLeadUserToTop(animated: animated) else { return }
             case .pageDown:
                 if canScroll {
                     let pageStep = min(max(scrollView.bounds.height * 0.32, 140), 240)
@@ -5605,6 +5663,25 @@ private struct NativeTranscriptScrollView: UIViewControllerRepresentable {
             lastAppliedCommandID = command.id
             pendingCommand = nil
             reportMetrics()
+        }
+
+        private func scrollStreamingLeadUserToTop(animated: Bool) -> Bool {
+            guard !streamingLeadHostingController.view.isHidden else { return false }
+            guard streamingLeadHostingController.view.superview != nil else { return false }
+
+            let leadFrame = scrollView.convert(
+                streamingLeadHostingController.view.bounds,
+                from: streamingLeadHostingController.view
+            )
+            let targetY = min(
+                max(-scrollView.contentInset.top, leadFrame.minY - 10),
+                bottomOffsetY
+            )
+            scrollView.setContentOffset(
+                CGPoint(x: scrollView.contentOffset.x, y: targetY),
+                animated: animated
+            )
+            return true
         }
 
         private func reportMetrics() {
