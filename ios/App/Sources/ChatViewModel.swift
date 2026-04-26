@@ -158,11 +158,9 @@ final class ChatViewModel: ObservableObject {
     @Published var currentSessionID: UUID?
     @Published var isPrivateMode = false
 
-    @Published var isSending = false {
-    }
+    @Published var isSending = false
     @Published var errorMessage = ""
-    @Published var statusMessage = "准备就绪" {
-    }
+    @Published var statusMessage = "准备就绪"
     @Published var chatState: ChatState = .idle
     @Published var testLogs: [String] = []
 

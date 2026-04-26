@@ -1496,6 +1496,17 @@ struct ChatRequestBuilder {
         return fallback
     }
 
+    private static func firstRegexCapture(in text: String, pattern: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let nsText = text as NSString
+        let range = NSRange(location: 0, length: nsText.length)
+        guard let match = regex.firstMatch(in: text, range: range),
+              match.numberOfRanges > 1 else {
+            return nil
+        }
+        return nsText.substring(with: match.range(at: 1))
+    }
+
     private static func preferredImageGenerationQuality(from prompt: String) -> String? {
         let lowered = prompt.lowercased()
         if lowered.contains("8k")
