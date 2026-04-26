@@ -689,7 +689,7 @@ final class FrontendProjectBuilderTests: XCTestCase {
         XCTAssertEqual(result.validationPlan?.runCommand, "python3 -m pytest || python3 -m unittest discover -v")
     }
 
-    func testPythonNetworkProjectWithoutTestsFallsBackToCompileCheck() throws {
+    func testPythonNetworkProjectWithoutTestsRunsPrimaryScript() throws {
         let message = ChatMessage(
             role: .assistant,
             content: "",
@@ -710,7 +710,7 @@ final class FrontendProjectBuilderTests: XCTestCase {
 
         let result = try FrontendProjectBuilder.buildProject(from: message, mode: .createNewProject)
         XCTAssertEqual(result.validationPlan?.installCommand, "python3 -m pip install -r requirements.txt")
-        XCTAssertEqual(result.validationPlan?.runCommand, "python3 -m compileall .")
+        XCTAssertEqual(result.validationPlan?.runCommand, "python3 crawler.py")
     }
 
     func testBuildProjectSynthesizesRequirementsForThirdPartyPythonImports() throws {

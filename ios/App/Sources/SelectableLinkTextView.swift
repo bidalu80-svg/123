@@ -459,6 +459,7 @@ struct SelectableLinkTextView: UIViewRepresentable {
         view.isEditable = false
         view.isScrollEnabled = false
         view.isSelectable = true
+        view.tintColor = .clear
         view.scrollsToTop = false
         view.delegate = context.coordinator
         view.backgroundColor = .clear
@@ -650,6 +651,7 @@ struct SelectableLinkTextView: UIViewRepresentable {
             .foregroundColor: linkColor,
             .underlineStyle: 0
         ]
+        uiView.selectedTextRange = nil
         uiView.invalidateIntrinsicContentSize()
         uiView.setNeedsLayout()
         coordinator.lastText = text

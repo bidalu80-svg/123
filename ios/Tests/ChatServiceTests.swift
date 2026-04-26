@@ -325,6 +325,22 @@ final class ChatServiceTests: XCTestCase {
         XCTAssertTrue(systemContents.contains(where: { $0.contains("src/main.swift") }))
     }
 
+    func testBuildRequestInjectsPythonRuntimePromptForStatusCodeScriptRequest() throws {
+        let config = ChatConfig(apiURL: "https://example.com", apiKey: "", model: "gpt-test", timeout: 30, streamEnabled: true)
+        let requestMessage = ChatMessage(role: .user, content: "写一个无依赖 Python 脚本抓网页并输出状态码，避免乱码")
+
+        let request = try ChatRequestBuilder.makeRequest(config: config, history: [], message: requestMessage)
+        let payload = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+        let messages = try XCTUnwrap(json["messages"] as? [[String: Any]])
+        let systemContents = messages
+            .filter { ($0["role"] as? String) == "system" }
+            .compactMap { $0["content"] as? String }
+
+        XCTAssertTrue(systemContents.contains(where: { $0.contains("必须显式输出状态码") }))
+        XCTAssertTrue(systemContents.contains(where: { $0.contains("避免中文乱码") }))
+    }
+
     func testBuildImagesGenerationRequestUsesConfiguredEndpoint() throws {
         var config = ChatConfig(apiURL: "https://example.com", apiKey: "token-123", model: "gpt-image", timeout: 30, streamEnabled: false)
         config.imagesGenerationsPath = "/v1/images/generations"

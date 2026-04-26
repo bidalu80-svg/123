@@ -98,6 +98,17 @@ struct ChatRequestBuilder {
     - 如果系统已经给了 latest 工作区上下文或工具能力，就把它们当成真实环境来推理，不要假设用户需要重复描述文件结构。
     - 输出风格保持自然，不要暴露“关键词触发”“规则命中”“路由判断”等内部术语。
     """
+    private static let pythonScriptRuntimeSystemPrompt = """
+    当用户请求 Python 脚本时，遵循以下约束：
+    - 默认输出一个完整、可直接运行的脚本；除非用户明确要求测试工程，否则不要擅自改写成 `unittest`、`test_runner.py` 或多文件测试结构。
+    - 如果用户说“无依赖”，优先只使用 Python 标准库。
+    - 如果脚本涉及网页请求、爬取网页、HTTP 接口或 URL：
+      1) 必须显式输出状态码，例如 `print(f"status_code={...}")`。
+      2) 必须处理编码，优先按响应头或页面声明解码；若不可靠，回退尝试 `utf-8`、`gb18030`，避免中文乱码。
+      3) 输出正文时先做摘要或截断，避免整页内容刷屏。
+      4) 要设置超时，不要无限等待。
+    - 若用户只要单文件脚本，就不要顺手创建 README、requirements 说明或多余文件。
+    """
     private static let strictCodeOnlySystemPrompt = """
     当用户明确提出“只输出代码、不输出解释、保持逻辑不变、自动修复格式”时，必须严格执行：
     1) 仅输出一个 markdown 代码块。
@@ -268,6 +279,14 @@ struct ChatRequestBuilder {
                     "content": recentLocalMCPContext
                 ])
             }
+        }
+
+        if promptProfile == .full,
+           shouldInjectPythonScriptRuntimePrompt(message: message) {
+            prefix.append([
+                "role": "system",
+                "content": pythonScriptRuntimeSystemPrompt
+            ])
         }
 
         if promptProfile == .full,
@@ -844,6 +863,22 @@ struct ChatRequestBuilder {
         }
 
         return false
+    }
+
+    private static func shouldInjectPythonScriptRuntimePrompt(message: ChatMessage) -> Bool {
+        guard message.role == .user else { return false }
+        let raw = message.copyableText
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard !raw.isEmpty else { return false }
+        guard raw.contains("python") || raw.contains("py") || raw.contains("脚本") else { return false }
+
+        let markers = [
+            "无依赖", "状态码", "乱码", "编码", "网页", "网页数据", "爬", "抓取", "请求", "http", "https", "url",
+            "requests", "urllib", "response", "status_code", "no dependency", "no dependencies", "encoding", "charset"
+        ]
+        return markers.contains(where: { raw.contains($0) })
     }
 
     private static func compactHistoryForRequest(_ history: [ChatMessage]) -> [ChatMessage] {

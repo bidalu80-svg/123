@@ -1209,9 +1209,6 @@ enum FrontendProjectBuilder {
                 )
             }
             let installCommand = installCommandBase
-            if looksLikeNetworkPythonProject(files: normalizedFiles) {
-                return ValidationPlan(installCommand: installCommand, runCommand: "python3 -m compileall .")
-            }
             if let main = preferredPythonRunnablePath(from: loweredPaths) {
                 return ValidationPlan(installCommand: installCommand, runCommand: "python3 \(main)")
             }
